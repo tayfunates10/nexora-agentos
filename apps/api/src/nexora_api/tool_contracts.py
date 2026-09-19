@@ -6,6 +6,7 @@ from typing import Any
 MAX_ARGUMENT_BYTES = 32 * 1024
 MAX_RESULT_BYTES = 64 * 1024
 MAX_SCHEMA_BYTES = 32 * 1024
+MAX_CONTRACT_BYTES = 96 * 1024
 
 _INPUT_SCHEMA_KEYS = {
     "$schema",
@@ -62,6 +63,27 @@ def canonical_json(value: Any, max_bytes: int) -> str:
 def hash_arguments(arguments: dict[str, Any]) -> tuple[str, str]:
     canonical = canonical_json(arguments, MAX_ARGUMENT_BYTES)
     return canonical, hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def hash_tool_contract(
+    *,
+    server_key: str,
+    remote_name: str,
+    input_schema: dict[str, Any],
+    output_schema: dict[str, Any] | None,
+    side_effect: str,
+) -> str:
+    canonical = canonical_json(
+        {
+            "server_key": server_key,
+            "remote_name": remote_name,
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+            "side_effect": side_effect,
+        },
+        MAX_CONTRACT_BYTES,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def validate_registration_schema(
