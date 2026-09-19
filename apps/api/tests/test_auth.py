@@ -126,11 +126,7 @@ def test_verified_me_and_claims_do_not_grant_roles(keys, auth_settings):
 
 @pytest.mark.parametrize(
     "role,permission,allowed",
-    [
-        (role, permission, permission in GRANTS[role])
-        for role in Role
-        for permission in Permission
-    ],
+    [(role, permission, permission in GRANTS[role]) for role in Role for permission in Permission],
 )
 def test_role_matrix(role, permission, allowed):
     if allowed:

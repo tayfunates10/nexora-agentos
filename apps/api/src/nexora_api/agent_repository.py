@@ -128,9 +128,7 @@ class AgentRuntimeRepository:
             ).encode()
         ).hexdigest()
         async with self.connection() as connection:
-            await self.workspaces.scoped(
-                connection, principal, workspace_id, Permission.RUN_AGENTS
-            )
+            await self.workspaces.scoped(connection, principal, workspace_id, Permission.RUN_AGENTS)
             agent = await connection.execute(
                 "SELECT id FROM agent_definitions WHERE workspace_id=%s AND id=%s",
                 (workspace_id, body.agent_id),
@@ -204,9 +202,7 @@ class AgentRuntimeRepository:
             )
             return self.run(row), True
 
-    async def get_run(
-        self, principal: Principal, workspace_id: UUID, run_id: UUID
-    ) -> AgentRun:
+    async def get_run(self, principal: Principal, workspace_id: UUID, run_id: UUID) -> AgentRun:
         async with self.connection() as connection:
             await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
             result = await connection.execute(

@@ -96,9 +96,7 @@ def test_agent_definitions_runs_idempotency_and_outbox(keys, auth_settings):
         assert conflict.status_code == 409
         assert client.get(base + "/runs/" + run_id, headers=headers(outsider)).status_code == 404
 
-        events = client.get(
-            base + "/runs/" + run_id + "/events", headers=headers(member)
-        )
+        events = client.get(base + "/runs/" + run_id + "/events", headers=headers(member))
         assert events.status_code == 200, events.text
         assert [event["event_type"] for event in events.json()["items"]] == ["run.queued"]
 
@@ -132,6 +130,7 @@ def test_agent_definitions_runs_idempotency_and_outbox(keys, auth_settings):
                 "UPDATE agent_run_events SET event_type='tampered' WHERE run_id=%s",
                 (run_id,),
             )
+        connection.rollback()
 
     async def publish():
         redis = Redis.from_url(auth_settings.redis_url.get_secret_value())
@@ -202,9 +201,12 @@ def test_run_creation_rolls_back_when_outbox_insert_fails(keys, auth_settings):
         assert response.status_code == 500
 
     with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
-        assert connection.execute(
-            "SELECT count(*) FROM agent_runs WHERE workspace_id=%s", (workspace_id,)
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM agent_runs WHERE workspace_id=%s", (workspace_id,)
+            ).fetchone()[0]
+            == 0
+        )
         connection.execute("DROP TRIGGER reject_test_outbox_insert ON job_outbox")
         connection.execute("DROP FUNCTION reject_test_outbox()")
 

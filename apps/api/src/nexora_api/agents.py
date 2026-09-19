@@ -79,9 +79,7 @@ def repository(request: Request):
 
 
 @router.post("/workspaces/{workspace_id}/agents", response_model=AgentDefinition, status_code=201)
-async def create_agent(
-    workspace_id: UUID, body: AgentInput, principal: Identity, request: Request
-):
+async def create_agent(workspace_id: UUID, body: AgentInput, principal: Identity, request: Request):
     return await repository(request).create_agent(
         principal, workspace_id, body, request.state.request_id
     )
@@ -102,9 +100,7 @@ async def list_agents(
 
 
 @router.get("/workspaces/{workspace_id}/agents/{agent_id}", response_model=AgentDefinition)
-async def get_agent(
-    workspace_id: UUID, agent_id: UUID, principal: Identity, request: Request
-):
+async def get_agent(workspace_id: UUID, agent_id: UUID, principal: Identity, request: Request):
     return await repository(request).get_agent(principal, workspace_id, agent_id)
 
 
@@ -115,9 +111,7 @@ async def create_run(
     principal: Identity,
     request: Request,
     response: Response,
-    idempotency_key: Annotated[
-        str, Header(alias="Idempotency-Key", min_length=8, max_length=128)
-    ],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
 ):
     run, created = await repository(request).create_run(
         principal, workspace_id, body, idempotency_key, request.state.request_id
@@ -143,9 +137,7 @@ async def list_run_events(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[int, Query(ge=0)] = 0,
 ):
-    rows = await repository(request).list_events(
-        principal, workspace_id, run_id, limit + 1, cursor
-    )
+    rows = await repository(request).list_events(principal, workspace_id, run_id, limit + 1, cursor)
     return RunEventPage(
         items=rows[:limit],
         next_cursor=rows[limit - 1].event_no if len(rows) > limit else None,
