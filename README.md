@@ -22,10 +22,13 @@ Redis infrastructure. The API includes verified bearer identities, workspace RBA
 sessions, workspace-scoped agent definitions, durable runs, append-only run events, idempotency
 and a transactional PostgreSQL outbox. The provider-independent worker runtime now adds Redis
 Streams consumer groups, durable job receipts, leases, fencing, bounded retries, cancellation
-and crash recovery. Model execution and MCP tools are **not implemented yet**.
+and crash recovery. A typed MCP-aligned tool gateway, workspace policy engine and durable human
+approval workflow are implemented. Production model execution and external MCP transport/server
+connections are **not implemented yet**.
 See [architecture and roadmap](docs/architecture/0001-foundation.md),
-[agent run architecture](docs/architecture/0004-agent-runs-outbox.md), and
-[worker architecture](docs/architecture/0005-worker-state-machine.md).
+[agent run architecture](docs/architecture/0004-agent-runs-outbox.md),
+[worker architecture](docs/architecture/0005-worker-state-machine.md), and
+[tool/approval architecture](docs/architecture/0006-tool-gateway-approvals.md).
 
 ## Run locally with Docker Compose
 
@@ -136,9 +139,10 @@ the queue. The worker library uses consumer-group delivery, durable job receipts
 heartbeats, fencing, bounded retries with jitter, cancellation and stale-run recovery. A worker
 that has lost its lease cannot finalize a run.
 
-The runtime deliberately stops at the executor boundary. There is no production model executor,
-tool execution or autonomous loop yet, and no worker service is added to Compose until a real
-provider adapter exists.
+The runtime still has no production model executor or autonomous loop. The executor boundary can
+now call a typed tool gateway, but production registration currently exposes only a narrow
+read-only run-status tool. External MCP transports and privileged production mutation tools remain
+disabled until their dedicated integration milestones.
 
 Use `/docs` for the full schema. Core endpoints are:
 
@@ -152,6 +156,34 @@ Use `/docs` for the full schema. Core endpoints are:
 See [ADR 0004](docs/architecture/0004-agent-runs-outbox.md) for persistence/outbox semantics and
 [ADR 0005](docs/architecture/0005-worker-state-machine.md) for worker state transitions,
 at-least-once delivery, leases, retry, cancellation and recovery.
+
+## Tools, workspace policy and human approval
+
+Tool contracts are registered in code with explicit JSON-schema-compatible inputs and outputs,
+side-effect classification, bounded payload sizes and stable error codes. Unknown tools are
+rejected. Read-only tools default to `allow`; write, destructive and external-communication
+tools default to `require_approval`.
+
+Workspace owners can override a registered tool to `allow`, `require_approval` or `deny`.
+Owners and admins can approve pending actions; the requester can cancel their own pending
+approval. Approved arguments are hashed and immutable. A material argument change cannot reuse
+the existing tool approval.
+
+When approval is required, the worker releases its lease, persists the approval request and puts
+the run in `waiting_for_approval`. Approval, rejection, cancellation or expiry resumes the run
+through the transactional outbox. Tool execution revalidates current workspace membership,
+policy, worker lease and job receipt immediately before execution.
+
+Control-plane endpoints include:
+
+- `GET /api/v1/workspaces/{workspace_id}/tools`
+- `PUT /api/v1/workspaces/{workspace_id}/tools/{tool_name}/policy`
+- `GET /api/v1/workspaces/{workspace_id}/approvals`
+- `POST /api/v1/workspaces/{workspace_id}/approvals/{approval_id}`
+
+See [ADR 0006](docs/architecture/0006-tool-gateway-approvals.md) for trust boundaries,
+approval state, replay semantics and the distinction between the gateway core and future external
+MCP transports.
 
 ## Browser sign-in and workspace management
 
