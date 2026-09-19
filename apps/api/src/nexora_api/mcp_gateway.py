@@ -192,9 +192,7 @@ class McpGateway:
                 ):
                     raise ToolGatewayError("tool_idempotency_conflict")
                 if existing["status"] == "succeeded":
-                    return ToolCallOutcome(
-                        tool_call_id, "succeeded", output=existing["result"]
-                    )
+                    return ToolCallOutcome(tool_call_id, "succeeded", output=existing["result"])
                 if existing["status"] in (
                     "failed",
                     "rejected",
@@ -493,20 +491,14 @@ class McpGateway:
             output_model = await self.registry.execute(spec, execution_context, validated)
             output, result_hash = canonical_payload(output_model)
         except ToolExecutionError as exc:
-            return await self._finalize_failure(
-                context, tool_call_id, exc.code, started
-            )
+            return await self._finalize_failure(context, tool_call_id, exc.code, started)
         except Exception:
             return await self._finalize_failure(
                 context, tool_call_id, "tool_execution_error", started
             )
-        return await self._finalize_success(
-            context, tool_call_id, output, result_hash, started
-        )
+        return await self._finalize_success(context, tool_call_id, output, result_hash, started)
 
-    async def _finalize_success(
-        self, context, tool_call_id, output, result_hash, started
-    ):
+    async def _finalize_success(self, context, tool_call_id, output, result_hash, started):
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
         async with self.connection() as connection:
             if not await self._worker_still_owns_run(connection, context):
@@ -533,9 +525,7 @@ class McpGateway:
             )
         return ToolCallOutcome(tool_call_id, "succeeded", output=output)
 
-    async def _finalize_failure(
-        self, context, tool_call_id, error_code, started
-    ):
+    async def _finalize_failure(self, context, tool_call_id, error_code, started):
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
         async with self.connection() as connection:
             if not await self._worker_still_owns_run(connection, context):
