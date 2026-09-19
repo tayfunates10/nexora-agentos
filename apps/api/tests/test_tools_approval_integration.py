@@ -309,6 +309,7 @@ def test_requester_can_cancel_pending_approval_and_run(keys, auth_settings):
 
     # A new pending approval is also cancelled atomically when the whole run is cancelled.
     second_run = create_run(client, headers, workspace_id, agent_id, member, "cancel-whole-run")
+
     async def pause_second():
         redis = Redis.from_url(auth_settings.redis_url.get_secret_value())
         try:
