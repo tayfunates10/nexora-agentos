@@ -1,0 +1,40 @@
+name: Skill Sync Check
+
+on:
+  pull_request:
+    paths:
+      - "skills/**"
+      - ".claude/skills/**"
+      - ".agents/skills/**"
+      - ".opencode/skills/**"
+      - ".copilot/skills/**"
+      - "scripts/sync_skills.py"
+      - ".github/workflows/skills-sync-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "skills/**"
+      - ".claude/skills/**"
+      - ".agents/skills/**"
+      - ".opencode/skills/**"
+      - ".copilot/skills/**"
+      - "scripts/sync_skills.py"
+      - ".github/workflows/skills-sync-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-skill-mirrors:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify generated skill mirrors
+        run: python scripts/sync_skills.py --check
