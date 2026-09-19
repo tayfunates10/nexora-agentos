@@ -268,6 +268,20 @@ class AgentRuntimeRepository:
                     )
                 return self.run(run)
 
+            await connection.execute(
+                """UPDATE tool_approvals
+                   SET status='cancelled',decided_at=now()
+                   WHERE run_id=%s AND status='pending'""",
+                (run_id,),
+            )
+            await connection.execute(
+                """UPDATE tool_calls
+                   SET status='cancelled',error_code='run_cancelled',
+                       finished_at=now(),updated_at=now()
+                   WHERE run_id=%s
+                     AND status IN ('planned','pending_approval','approved')""",
+                (run_id,),
+            )
             updated = await connection.execute(
                 """UPDATE agent_runs
                    SET status='cancelled',cancel_requested_at=COALESCE(cancel_requested_at,now()),
