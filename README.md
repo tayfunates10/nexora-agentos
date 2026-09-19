@@ -19,11 +19,13 @@ CI rejects skill drift so every supported coding agent receives the same project
 
 The platform provides a Next.js control plane, typed FastAPI APIs, PostgreSQL/pgvector and
 Redis infrastructure. The API includes verified bearer identities, workspace RBAC, browser OIDC
-sessions, workspace-scoped agent definitions, durable queued runs, append-only run events,
-idempotency and a transactional PostgreSQL outbox. Outbox jobs can be dispatched to Redis, but
-the worker state machine, model execution and MCP tools are **not implemented yet**.
-See [architecture and roadmap](docs/architecture/0001-foundation.md) and
-[agent run architecture](docs/architecture/0004-agent-runs-outbox.md).
+sessions, workspace-scoped agent definitions, durable runs, append-only run events, idempotency
+and a transactional PostgreSQL outbox. The provider-independent worker runtime now adds Redis
+Streams consumer groups, durable job receipts, leases, fencing, bounded retries, cancellation
+and crash recovery. Model execution and MCP tools are **not implemented yet**.
+See [architecture and roadmap](docs/architecture/0001-foundation.md),
+[agent run architecture](docs/architecture/0004-agent-runs-outbox.md), and
+[worker architecture](docs/architecture/0005-worker-state-machine.md).
 
 ## Run locally with Docker Compose
 
@@ -121,16 +123,22 @@ The web panel includes browser sign-in and workspace management (setup below).
 Rate limiting, automatic key rotation and production database
 role separation remain deployment work before public exposure.
 
-## Agent definitions and durable runs
+## Agent definitions, durable runs and worker orchestration
 
 Owners and admins can create agent definitions. Any current workspace member can start a run.
 Run creation requires an `Idempotency-Key`; replaying the same request returns the existing run
 instead of duplicating work. The initial run, append-only event, security audit and outbox job
 are committed atomically.
 
-The outbox publisher sends identifier-only jobs to Redis. Prompt/input content remains in
-PostgreSQL and is not copied into the queue. The current milestone stops at durable queueing:
-there is no model call, tool execution or autonomous loop yet.
+The outbox publisher sends identifier-only jobs to the Redis Stream
+`nexora:jobs:agent-runs:v1`. Prompt/input content remains in PostgreSQL and is not copied into
+the queue. The worker library uses consumer-group delivery, durable job receipts, bounded leases,
+heartbeats, fencing, bounded retries with jitter, cancellation and stale-run recovery. A worker
+that has lost its lease cannot finalize a run.
+
+The runtime deliberately stops at the executor boundary. There is no production model executor,
+tool execution or autonomous loop yet, and no worker service is added to Compose until a real
+provider adapter exists.
 
 Use `/docs` for the full schema. Core endpoints are:
 
@@ -138,10 +146,12 @@ Use `/docs` for the full schema. Core endpoints are:
 - `GET /api/v1/workspaces/{workspace_id}/agents`
 - `POST /api/v1/workspaces/{workspace_id}/runs`
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}`
+- `POST /api/v1/workspaces/{workspace_id}/runs/{run_id}/cancel`
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}/events`
 
-See [ADR 0004](docs/architecture/0004-agent-runs-outbox.md) for state, idempotency,
-at-least-once delivery and trust-boundary details.
+See [ADR 0004](docs/architecture/0004-agent-runs-outbox.md) for persistence/outbox semantics and
+[ADR 0005](docs/architecture/0005-worker-state-machine.md) for worker state transitions,
+at-least-once delivery, leases, retry, cancellation and recovery.
 
 ## Browser sign-in and workspace management
 

@@ -17,18 +17,17 @@ are rejected without revealing whether the foreign agent exists.
 ## Durable run contract
 
 Each run has stable `workspace_id`, `agent_id`, requester identity, `run_id` and `trace_id`.
-The database constrains the planned lifecycle states:
+The database constrains the lifecycle states:
 
 `queued -> running -> waiting_for_approval -> queued -> succeeded|failed|cancelled`
 
-The worker transition rules are deliberately not implemented in this milestone. Future worker
-code must reject illegal transitions and terminal-run execution rather than relying on callers.
-Run events are append-only and ordered by `event_no`; database triggers reject updates, deletes,
-and truncation.
+ADR 0005 implements the legal transition checks, worker leases, retry, cancellation and
+recovery semantics. Run events are append-only and ordered by `event_no`; database triggers
+reject updates, deletes and truncation.
 
-The initial run request is stored server-side for future workers. It is not included in the
-outbox payload, logs, or the API run response. The outbox carries only identifiers required to
-load authorized durable state.
+The initial run request is stored server-side for workers. It is not included in the outbox
+payload, logs, or the API run response. The outbox carries only identifiers required to load
+durable state.
 
 ## Idempotency and outbox delivery
 
@@ -38,21 +37,21 @@ existing run; reusing the key for different content returns HTTP 409.
 
 Run, initial event, security audit, and `agent.run.queued.v1` outbox job commit atomically.
 `OutboxPublisher` claims pending jobs with `FOR UPDATE SKIP LOCKED` and publishes them to the
-Redis queue `nexora:jobs:agent-runs`. Delivery is **at least once**: a process crash after Redis
-accepts a job but before PostgreSQL records `published_at` can cause a duplicate. Every job has
-a stable `job_id`; the future worker must persist deduplication before side effects.
+Redis Stream `nexora:jobs:agent-runs:v1`. Delivery is **at least once**: a process crash after
+Redis accepts a job but before PostgreSQL records `published_at` can cause a duplicate. Every
+job has a stable `job_id`; ADR 0005 persists worker receipts and deduplicates before execution.
 
-Publishing retries use bounded exponential backoff and move a job to dead-letter state after ten
-failed attempts. Stored failure diagnostics contain only the exception class, not connection
-strings or credentials.
+Publishing retries use bounded exponential backoff with deterministic jitter and move a job to
+dead-letter state after ten failed attempts. Stored failure diagnostics contain only the
+exception class, not connection strings or credentials.
 
 ## Trust boundaries and remaining work
 
 The API authenticates the user and authorizes workspace membership. PostgreSQL is the durable
-source of truth. Redis is only the delivery queue and may be replayed from the outbox.
+source of truth. Redis is ephemeral delivery and can be reconstructed from durable state.
 
-The next milestone implements the worker state machine, legal transition checks, cancellation,
-recovery, and idempotent job consumption. MCP tools, policy evaluation, durable human approvals,
+The worker state machine, legal transition checks, cancellation, recovery and idempotent job
+consumption are implemented in ADR 0005. MCP tools, policy evaluation, durable human approvals,
 model/provider adapters and model execution remain disabled until their dedicated milestones.
 
 ## Skills applied
