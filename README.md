@@ -20,12 +20,15 @@ CI rejects skill drift so every supported coding agent receives the same project
 The platform provides a Next.js control plane, typed FastAPI APIs, PostgreSQL/pgvector and
 Redis infrastructure. The API includes verified bearer identities, workspace RBAC, browser OIDC
 sessions, workspace-scoped agent definitions, durable runs, append-only run events, idempotency
-and a transactional PostgreSQL outbox. The provider-independent worker runtime now adds Redis
+and a transactional PostgreSQL outbox. The provider-independent worker runtime adds Redis
 Streams consumer groups, durable job receipts, leases, fencing, bounded retries, cancellation
-and crash recovery. Model execution and MCP tools are **not implemented yet**.
+and crash recovery. Tool governance now adds a typed MCP tool registry, default-deny policy
+evaluation, idempotent call records and durable human approvals. A production model executor and
+production MCP transport adapter are not enabled yet.
 See [architecture and roadmap](docs/architecture/0001-foundation.md),
-[agent run architecture](docs/architecture/0004-agent-runs-outbox.md), and
-[worker architecture](docs/architecture/0005-worker-state-machine.md).
+[agent run architecture](docs/architecture/0004-agent-runs-outbox.md),
+[worker architecture](docs/architecture/0005-worker-state-machine.md), and
+[MCP tool governance](docs/architecture/0006-mcp-tool-governance.md).
 
 ## Run locally with Docker Compose
 
@@ -136,9 +139,10 @@ the queue. The worker library uses consumer-group delivery, durable job receipts
 heartbeats, fencing, bounded retries with jitter, cancellation and stale-run recovery. A worker
 that has lost its lease cannot finalize a run.
 
-The runtime deliberately stops at the executor boundary. There is no production model executor,
-tool execution or autonomous loop yet, and no worker service is added to Compose until a real
-provider adapter exists.
+The runtime still has no production model executor or autonomous loop. Governed tool execution
+is available behind an MCP adapter boundary, but no arbitrary URL/stdio transport is enabled by
+default and no worker service is added to Compose until production provider and MCP adapters are
+configured.
 
 Use `/docs` for the full schema. Core endpoints are:
 
@@ -152,6 +156,30 @@ Use `/docs` for the full schema. Core endpoints are:
 See [ADR 0004](docs/architecture/0004-agent-runs-outbox.md) for persistence/outbox semantics and
 [ADR 0005](docs/architecture/0005-worker-state-machine.md) for worker state transitions,
 at-least-once delivery, leases, retry, cancellation and recovery.
+
+## Governed MCP tools and approvals
+
+Owners and admins can register workspace tool contracts and set an explicit policy. Missing policy
+means deny. Destructive and external-communication tools require approval even when their stored
+policy says allow. Non-read tool schemas must require an idempotency key.
+
+Core endpoints are:
+
+- `PUT /api/v1/workspaces/{workspace_id}/tools/{tool_name}`
+- `GET /api/v1/workspaces/{workspace_id}/tools`
+- `PUT /api/v1/workspaces/{workspace_id}/tools/{tool_name}/policy`
+- `GET /api/v1/workspaces/{workspace_id}/approvals`
+- `POST /api/v1/workspaces/{workspace_id}/approvals/{approval_id}/decision`
+
+An agent executor calls the internal `McpGateway` with a stable per-run call key. The gateway
+validates arguments, rechecks requester membership and current policy, persists the call and either
+executes through an operator-provided `server_key` adapter or raises a durable approval request.
+The worker releases its lease while waiting. Approval requeues the run through the transactional
+outbox; rejection, expiry or run cancellation closes the workflow without calling the adapter.
+
+Workspace users cannot register raw MCP URLs, stdio commands or credentials. This keeps network
+egress and service credentials outside model-visible configuration. See
+[ADR 0006](docs/architecture/0006-mcp-tool-governance.md).
 
 ## Browser sign-in and workspace management
 
