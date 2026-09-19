@@ -103,7 +103,12 @@ class AgentWorker:
         await self.redis.xack(QUEUE_STREAM, WORKER_GROUP, message_id)
         await self.redis.xdel(QUEUE_STREAM, message_id)
 
-    async def _heartbeat(self, context: ExecutionContext, stop: asyncio.Event):
+    async def _heartbeat(
+        self,
+        context: ExecutionContext,
+        stop: asyncio.Event,
+        lease_lost: asyncio.Event,
+    ):
         interval = max(1.0, self.lease_seconds / 3)
         while not stop.is_set():
             try:
@@ -117,8 +122,10 @@ class AgentWorker:
                         self.lease_seconds,
                     )
                 except Exception:
+                    lease_lost.set()
                     return
                 if not renewed:
+                    lease_lost.set()
                     return
 
     async def process_once(self, block_ms: int = 100) -> bool:
@@ -147,10 +154,13 @@ class AgentWorker:
 
         context = claim.context
         stop = asyncio.Event()
-        heartbeat = asyncio.create_task(self._heartbeat(context, stop))
+        lease_lost = asyncio.Event()
+        heartbeat = asyncio.create_task(self._heartbeat(context, stop, lease_lost))
         handled = False
 
         async def cancelled():
+            if lease_lost.is_set():
+                return True
             return await self.state.is_cancel_requested(context.run_id)
 
         try:
