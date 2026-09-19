@@ -1,0 +1,1 @@
+{"name":"nexora-agentos","private":true,"workspaces":["apps/web"],"engines":{"node":">=22 <25"},"scripts":{"dev":"npm run dev --workspace @nexora/web","build":"npm run build --workspace @nexora/web","typecheck":"npm run typecheck --workspace @nexora/web","test:web":"npm run test --workspace @nexora/web"}}
