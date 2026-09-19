@@ -42,6 +42,7 @@ CREATE TABLE tool_calls (
     call_key text NOT NULL CHECK (length(call_key) BETWEEN 1 AND 128),
     arguments jsonb NOT NULL CHECK (jsonb_typeof(arguments) = 'object'),
     arguments_hash text NOT NULL CHECK (length(arguments_hash) = 64),
+    contract_hash text NOT NULL CHECK (length(contract_hash) = 64),
     status text NOT NULL CHECK (
         status IN (
             'planned','pending_approval','approved','running','succeeded',
@@ -76,6 +77,7 @@ CREATE TABLE tool_approvals (
     requested_action text NOT NULL CHECK (length(requested_action) BETWEEN 1 AND 128),
     normalized_arguments jsonb NOT NULL CHECK (jsonb_typeof(normalized_arguments) = 'object'),
     arguments_hash text NOT NULL CHECK (length(arguments_hash) = 64),
+    contract_hash text NOT NULL CHECK (length(contract_hash) = 64),
     requester_issuer text NOT NULL,
     requester_subject text NOT NULL,
     approver_issuer text,
@@ -128,6 +130,7 @@ BEGIN
        OR NEW.requested_action IS DISTINCT FROM OLD.requested_action
        OR NEW.normalized_arguments IS DISTINCT FROM OLD.normalized_arguments
        OR NEW.arguments_hash IS DISTINCT FROM OLD.arguments_hash
+       OR NEW.contract_hash IS DISTINCT FROM OLD.contract_hash
        OR NEW.requester_issuer IS DISTINCT FROM OLD.requester_issuer
        OR NEW.requester_subject IS DISTINCT FROM OLD.requester_subject
        OR NEW.policy_reason IS DISTINCT FROM OLD.policy_reason
