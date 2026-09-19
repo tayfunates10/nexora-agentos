@@ -387,9 +387,7 @@ class ToolGovernanceRepository:
                 refreshed = await self._approval_row(connection, approval_id)
                 return self._approval(refreshed)
 
-            effective = self._effective_policy(
-                approval["current_policy"], approval["side_effect"]
-            )
+            effective = self._effective_policy(approval["current_policy"], approval["side_effect"])
             if not approval["enabled"] or effective == "deny":
                 await self._cancel_approval(
                     connection,
@@ -504,9 +502,7 @@ class ToolGovernanceRepository:
                 side_effect=tool_row["side_effect"],
             )
 
-            effective = self._effective_policy(
-                tool_row["policy_decision"], tool_row["side_effect"]
-            )
+            effective = self._effective_policy(tool_row["policy_decision"], tool_row["side_effect"])
             if not tool_row["enabled"]:
                 effective = "deny"
             reason = tool_row["policy_reason"] or "No explicit allow policy is configured."
@@ -573,9 +569,7 @@ class ToolGovernanceRepository:
                     )
                 if effective == "deny":
                     target = (
-                        "cancelled"
-                        if existing["status"] in ("approved", "running")
-                        else "denied"
+                        "cancelled" if existing["status"] in ("approved", "running") else "denied"
                     )
                     await connection.execute(
                         """UPDATE tool_calls
@@ -591,12 +585,9 @@ class ToolGovernanceRepository:
                         "tool.denied",
                         {"tool": tool_name, "call_key": call_key},
                     )
-                    return ToolCallPlan(
-                        "deny", existing["id"], tool, error_code="policy_denied"
-                    )
-                if (
-                    effective == "require_approval"
-                    and not (approval and approval["status"] == "approved")
+                    return ToolCallPlan("deny", existing["id"], tool, error_code="policy_denied")
+                if effective == "require_approval" and not (
+                    approval and approval["status"] == "approved"
                 ):
                     if existing["status"] != "planned":
                         return ToolCallPlan(
@@ -817,9 +808,7 @@ class ToolGovernanceRepository:
             if retryable:
                 approval = await self._approval_for_call(connection, call_id)
                 next_status = (
-                    "approved"
-                    if approval and approval["status"] == "approved"
-                    else "planned"
+                    "approved" if approval and approval["status"] == "approved" else "planned"
                 )
                 await connection.execute(
                     """UPDATE tool_calls
@@ -1015,9 +1004,7 @@ class ToolGovernanceRepository:
             (workspace_id,),
         )
         for approval in await result.fetchall():
-            await self._cancel_approval(
-                connection, approval, "expired", "tool.approval_expired"
-            )
+            await self._cancel_approval(connection, approval, "expired", "tool.approval_expired")
 
     async def _cancel_approval(
         self,
