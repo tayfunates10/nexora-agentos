@@ -13,6 +13,8 @@ from nexora_api.agent_repository import AgentRuntimeRepository
 from nexora_api.agents import router as agent_router
 from nexora_api.config import Settings
 from nexora_api.health import DependencyProbe, HealthResponse, Probe
+from nexora_api.mcp_gateway import McpGateway
+from nexora_api.tooling import router as tool_router
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import router as workspace_router
 
@@ -35,6 +37,8 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         app.state.settings = settings
         app.state.workspaces = WorkspaceRepository(settings)
         app.state.agent_runtime = AgentRuntimeRepository(settings)
+        app.state.mcp_gateway = McpGateway(settings)
+        app.state.tool_governance = app.state.mcp_gateway.repository
         try:
             yield
         finally:
@@ -92,6 +96,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
 
     app.include_router(workspace_router)
     app.include_router(agent_router)
+    app.include_router(tool_router)
     return app
 
 
