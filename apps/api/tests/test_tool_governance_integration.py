@@ -278,9 +278,7 @@ def test_destructive_tool_requires_durable_approval_and_resumes(keys, auth_setti
 
         approvals = client.get(base + "/approvals", headers=auth_headers(keys, admin))
         assert approvals.status_code == 200, approvals.text
-        pending = [
-            item for item in approvals.json()["items"] if item["run_id"] == run_id
-        ]
+        pending = [item for item in approvals.json()["items"] if item["run_id"] == run_id]
         assert len(pending) == 1
         approval = pending[0]
         assert approval["status"] == "pending"
