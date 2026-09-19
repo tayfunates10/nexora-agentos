@@ -67,9 +67,7 @@ def setup_workspace(keys, settings, registry, prefix):
 
     client = TestClient(create_app(settings=settings, tool_registry=registry))
     client.__enter__()
-    workspace = client.post(
-        "/api/v1/workspaces", json={"name": prefix}, headers=headers(owner)
-    )
+    workspace = client.post("/api/v1/workspaces", json={"name": prefix}, headers=headers(owner))
     assert workspace.status_code == 201, workspace.text
     workspace_id = workspace.json()["id"]
     base = "/api/v1/workspaces/" + workspace_id
@@ -132,9 +130,7 @@ def test_worker_pauses_for_approval_then_resumes_once(keys, auth_settings):
     client, headers, workspace_id, agent_id, owner, _admin, member, outsider = setup_workspace(
         keys, auth_settings, registry, "approval-flow"
     )
-    run_id = create_run(
-        client, headers, workspace_id, agent_id, member, "approval-flow"
-    )
+    run_id = create_run(client, headers, workspace_id, agent_id, member, "approval-flow")
     base = f"/api/v1/workspaces/{workspace_id}"
     executor = GatewayExecutor(client.app.state.tool_gateway, counter)
 
@@ -173,8 +169,7 @@ def test_worker_pauses_for_approval_then_resumes_once(keys, auth_settings):
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "approved"
     assert (
-        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"]
-        == "queued"
+        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"] == "queued"
     )
 
     async def second_worker():
@@ -309,8 +304,7 @@ def test_requester_can_cancel_pending_approval_and_run(keys, auth_settings):
     assert cancelled.status_code == 200, cancelled.text
     assert cancelled.json()["status"] == "cancelled"
     assert (
-        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"]
-        == "queued"
+        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"] == "queued"
     )
 
     # A new pending approval is also cancelled atomically when the whole run is cancelled.
@@ -336,9 +330,7 @@ def test_requester_can_cancel_pending_approval_and_run(keys, auth_settings):
             await redis.aclose()
 
     asyncio.run(pause_second())
-    response = client.post(
-        base + "/runs/" + second_run + "/cancel", headers=headers(member)
-    )
+    response = client.post(base + "/runs/" + second_run + "/cancel", headers=headers(member))
     assert response.status_code == 200
     assert response.json()["status"] == "cancelled"
     with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
@@ -379,8 +371,7 @@ def test_pending_approval_expires_and_run_resumes(keys, auth_settings):
     assert asyncio.run(client.app.state.approvals.expire_pending()) >= 1
     assert client.get(base + "/approvals", headers=headers(owner)).json()["items"] == []
     assert (
-        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"]
-        == "queued"
+        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"] == "queued"
     )
     with psycopg.connect(short_settings.database_url.get_secret_value()) as connection:
         status = connection.execute(
@@ -400,9 +391,7 @@ def test_approved_tool_replay_after_worker_crash_reuses_approval(keys, auth_sett
     client, headers, workspace_id, agent_id, owner, _admin, member, _outsider = setup_workspace(
         keys, auth_settings, registry, "approved-replay"
     )
-    run_id = create_run(
-        client, headers, workspace_id, agent_id, member, "approved-replay"
-    )
+    run_id = create_run(client, headers, workspace_id, agent_id, member, "approved-replay")
 
     with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
         outbox = connection.execute(
