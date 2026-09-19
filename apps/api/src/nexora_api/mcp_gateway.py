@@ -141,6 +141,7 @@ class McpGateway:
                 or run["agent_id"] != context.agent_id
                 or run["trace_id"] != context.trace_id
                 or run["status"] != "running"
+                or run["cancel_requested_at"] is not None
                 or run["lease_owner"] != context.worker_id
                 or run["lease_expires_at"] is None
             ):
@@ -149,6 +150,20 @@ class McpGateway:
             now = (await now_result.fetchone())["now"]
             if run["lease_expires_at"] <= now:
                 raise ToolGatewayError("run_lease_expired")
+            receipt_result = await connection.execute(
+                """SELECT status,worker_id,lease_expires_at FROM worker_job_receipts
+                   WHERE job_id=%s AND run_id=%s FOR UPDATE""",
+                (context.job_id, context.run_id),
+            )
+            receipt = await receipt_result.fetchone()
+            if (
+                not receipt
+                or receipt["status"] != "processing"
+                or receipt["worker_id"] != context.worker_id
+                or receipt["lease_expires_at"] is None
+                or receipt["lease_expires_at"] <= now
+            ):
+                raise ToolGatewayError("run_not_executable")
             actor = Principal(run["requested_by_issuer"], run["requested_by_subject"])
             from nexora_api.workspaces import authorize
 
