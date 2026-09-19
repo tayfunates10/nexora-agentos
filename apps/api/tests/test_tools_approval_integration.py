@@ -170,7 +170,10 @@ def test_worker_pauses_for_approval_then_resumes_once(keys, auth_settings):
     )
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "approved"
-    assert client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"] == "queued"
+    assert (
+        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"]
+        == "queued"
+    )
 
     async def second_worker():
         redis = Redis.from_url(auth_settings.redis_url.get_secret_value())
@@ -265,7 +268,10 @@ def test_only_owner_changes_policy_and_allow_skips_approval(keys, auth_settings)
     asyncio.run(execute())
     assert counter["calls"] == 1
     assert client.get(base + "/approvals", headers=headers(owner)).json()["items"] == []
-    assert client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"] == "succeeded"
+    assert (
+        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"]
+        == "succeeded"
+    )
     client.__exit__(None, None, None)
 
 
@@ -314,7 +320,11 @@ def test_requester_can_cancel_pending_approval_and_run(keys, auth_settings):
                 client.app.state.tool_gateway, counter, value="second-value"
             )
             worker = AgentWorker(
-                auth_settings, redis, second_executor, worker_id="cancel-run-worker", lease_seconds=6
+                auth_settings,
+                redis,
+                second_executor,
+                worker_id="cancel-run-worker",
+                lease_seconds=6,
             )
             assert await worker.process_once(50)
         finally:
