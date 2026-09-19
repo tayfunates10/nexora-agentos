@@ -460,8 +460,10 @@ class ToolGovernanceRepository:
                 (context.run_id, context.workspace_id),
             )
             run = await run_result.fetchone()
-            if not run or run["status"] != "running":
+            if not run:
                 raise ToolContractError("run_not_executable")
+            if not await self._has_active_execution_lease(connection, context, run):
+                raise ToolContractError("run_lease_lost")
 
             membership_result = await connection.execute(
                 """SELECT role FROM workspace_memberships
@@ -667,7 +669,11 @@ class ToolGovernanceRepository:
                 )
             return ToolCallPlan("execute", call_id, tool)
 
-    async def mark_running(self, call_id: UUID) -> ToolExecution:
+    async def mark_running(
+        self,
+        context: ExecutionContext,
+        call_id: UUID,
+    ) -> ToolExecution:
         async with self.connection() as connection:
             result = await connection.execute(
                 """SELECT c.*,t.server_key,t.remote_name,t.input_schema,t.output_schema,
@@ -689,8 +695,10 @@ class ToolGovernanceRepository:
                 (call["run_id"], call["workspace_id"]),
             )
             run = await run_result.fetchone()
-            if not run or run["status"] != "running":
+            if not run:
                 raise ToolContractError("run_not_executable")
+            if not await self._has_active_execution_lease(connection, context, run):
+                raise ToolContractError("run_lease_lost")
 
             membership_result = await connection.execute(
                 """SELECT role FROM workspace_memberships
@@ -759,7 +767,12 @@ class ToolGovernanceRepository:
                 output_schema=call["output_schema"],
             )
 
-    async def complete_success(self, call_id: UUID, result_value: Any) -> bool:
+    async def complete_success(
+        self,
+        context: ExecutionContext,
+        call_id: UUID,
+        result_value: Any,
+    ) -> bool:
         async with self.connection() as connection:
             row_result = await connection.execute(
                 """SELECT c.*,t.output_schema FROM tool_calls c
@@ -770,6 +783,15 @@ class ToolGovernanceRepository:
             )
             row = await row_result.fetchone()
             if not row or row["status"] != "running":
+                return False
+            run_result = await connection.execute(
+                """SELECT * FROM agent_runs
+                   WHERE id=%s AND workspace_id=%s
+                   FOR UPDATE""",
+                (row["run_id"], row["workspace_id"]),
+            )
+            run = await run_result.fetchone()
+            if not run or not await self._has_active_execution_lease(connection, context, run):
                 return False
             validate_result(result_value, row["output_schema"])
             await connection.execute(
@@ -790,6 +812,7 @@ class ToolGovernanceRepository:
 
     async def complete_failure(
         self,
+        context: ExecutionContext,
         call_id: UUID,
         error_code: str,
         *,
@@ -804,6 +827,15 @@ class ToolGovernanceRepository:
             )
             row = await row_result.fetchone()
             if not row or row["status"] != "running":
+                return False
+            run_result = await connection.execute(
+                """SELECT * FROM agent_runs
+                   WHERE id=%s AND workspace_id=%s
+                   FOR UPDATE""",
+                (row["run_id"], row["workspace_id"]),
+            )
+            run = await run_result.fetchone()
+            if not run or not await self._has_active_execution_lease(connection, context, run):
                 return False
             if retryable:
                 approval = await self._approval_for_call(connection, call_id)
@@ -950,6 +982,43 @@ class ToolGovernanceRepository:
             {"tool": tool_name, "call_key": call_key, "reason": error_code},
         )
         return ToolCallPlan("deny", call_id, tool, error_code=error_code)
+
+    async def _has_active_execution_lease(
+        self,
+        connection,
+        context: ExecutionContext,
+        run,
+    ) -> bool:
+        if (
+            run["id"] != context.run_id
+            or run["workspace_id"] != context.workspace_id
+            or run["agent_id"] != context.agent_id
+            or run["trace_id"] != context.trace_id
+            or run["status"] != "running"
+            or run["lease_owner"] != context.worker_id
+            or run["lease_expires_at"] is None
+        ):
+            return False
+
+        now_result = await connection.execute("SELECT now() AS now")
+        now = (await now_result.fetchone())["now"]
+        if run["lease_expires_at"] <= now:
+            return False
+
+        receipt_result = await connection.execute(
+            """SELECT * FROM worker_job_receipts
+               WHERE job_id=%s AND run_id=%s AND workspace_id=%s
+               FOR UPDATE""",
+            (context.job_id, context.run_id, context.workspace_id),
+        )
+        receipt = await receipt_result.fetchone()
+        return bool(
+            receipt
+            and receipt["status"] == "processing"
+            and receipt["worker_id"] == context.worker_id
+            and receipt["lease_expires_at"] is not None
+            and receipt["lease_expires_at"] > now
+        )
 
     async def _approval_for_call(self, connection, call_id: UUID):
         result = await connection.execute(
