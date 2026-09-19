@@ -18,8 +18,9 @@ CI rejects skill drift so every supported coding agent receives the same project
 ## Development status
 
 The first application milestone provides a Next.js service-health panel, typed FastAPI
-health endpoints, PostgreSQL/pgvector and Redis infrastructure. Agent execution,
-authentication, workspace RBAC and MCP integration are **not implemented yet**.
+health endpoints, PostgreSQL/pgvector and Redis infrastructure. The API now includes verified bearer identities, workspace creation/listing/renaming,
+and owner/admin/member authorization. Browser login, provider provisioning, agent
+execution and MCP integration are **not implemented yet**.
 See [architecture and roadmap](docs/architecture/0001-foundation.md).
 
 ## Run locally with Docker Compose
@@ -79,3 +80,41 @@ npm run build
 For real dependency integration, start PostgreSQL/Redis, export the connection variables
 above, then run `NEXORA_INTEGRATION=1 .venv/bin/pytest apps/api/tests -m integration`.
 The CI workflow also runs this test against service containers.
+
+## Identity and workspace API
+
+See [identity architecture](docs/architecture/0002-identity-workspaces.md) for boundaries
+and known limitations. The API validates RS256 access tokens from a configured issuer.
+Set `NEXORA_AUTH_ISSUER`, `NEXORA_AUTH_AUDIENCE`, and `NEXORA_AUTH_PUBLIC_KEY` in the
+API process environment. The public key must contain real PEM newlines; it is the
+verification key from your identity provider, never a private signing key. For Compose,
+these settings are forwarded from the shell or `.env` (which supports quoted multiline
+values). Use a dedicated audience for Nexora user access tokens, distinct from ID tokens
+and machine/service credentials. Without this configuration authenticated endpoints
+fail closed. Health endpoints remain public.
+
+Compose runs a one-shot migration service before the API. For a non-Docker setup:
+
+```bash
+.venv/bin/python -m nexora_api.migrate
+```
+
+Run this before starting the upgraded API. Migration state is checksum-verified and
+repeated runs are safe; no existing volumes need deletion.
+
+With a valid provider-issued access token in `$NEXORA_ACCESS_TOKEN`:
+
+```bash
+curl -H "Authorization: Bearer $NEXORA_ACCESS_TOKEN" http://localhost:8000/api/v1/me
+curl -X POST http://localhost:8000/api/v1/workspaces \
+  -H "Authorization: Bearer $NEXORA_ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"My workspace"}'
+```
+
+Use `/docs` for the full API schema. Owners can assign `admin` or `member` to a provider
+subject with `PUT /api/v1/workspaces/{id}/members`. Admins can rename a workspace;
+members can only read. The initial owner cannot be demoted, and assigning a second
+owner is blocked. This endpoint changes database membership; it does not send invitations.
+The web panel still shows foundation health; browser sign-in and workspace management
+UI are the next milestone. Rate limiting, automatic key rotation and production database
+role separation remain deployment work before public exposure.

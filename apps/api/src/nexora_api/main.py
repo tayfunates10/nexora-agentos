@@ -11,6 +11,8 @@ from starlette.exceptions import HTTPException
 
 from nexora_api.config import Settings
 from nexora_api.health import DependencyProbe, HealthResponse, Probe
+from nexora_api.workspace_repository import WorkspaceRepository
+from nexora_api.workspaces import router as workspace_router
 
 
 def get_probe(request: Request) -> Probe:
@@ -28,6 +30,8 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
             socket_connect_timeout=settings.dependency_timeout_seconds,
         )
         app.state.probe = probe or DependencyProbe(settings, redis)
+        app.state.settings = settings
+        app.state.workspaces = WorkspaceRepository(settings)
         try:
             yield
         finally:
@@ -58,7 +62,10 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):
-        return error(request, exc.status_code, f"http_{exc.status_code}", "Request failed")
+        response = error(request, exc.status_code, f"http_{exc.status_code}", "Request failed")
+        if exc.headers:
+            response.headers.update(exc.headers)
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
@@ -80,6 +87,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         response.status_code = 200 if healthy else 503
         return HealthResponse(status="ok" if healthy else "degraded", dependencies=dependencies)
 
+    app.include_router(workspace_router)
     return app
 
 

@@ -25,6 +25,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "nexora_api.migrate"]
+    environment:
+      NEXORA_DATABASE_URL: postgresql://nexora:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/nexora
+    depends_on:
+      postgres: {condition: service_healthy}
   api:
     build:
       context: .
@@ -32,10 +41,14 @@ services:
     environment:
       NEXORA_DATABASE_URL: postgresql://nexora:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/nexora
       NEXORA_REDIS_URL: redis://redis:6379/0
+      NEXORA_AUTH_ISSUER: ${NEXORA_AUTH_ISSUER:-}
+      NEXORA_AUTH_AUDIENCE: ${NEXORA_AUTH_AUDIENCE:-}
+      NEXORA_AUTH_PUBLIC_KEY: ${NEXORA_AUTH_PUBLIC_KEY:-}
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/ready', timeout=5)"]
       interval: 15s

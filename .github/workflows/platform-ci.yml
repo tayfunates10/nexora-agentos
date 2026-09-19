@@ -20,13 +20,13 @@ jobs:
           POSTGRES_PASSWORD: ci-only-password
         ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U nexora -d nexora'
+          --health-cmd "pg_isready -U nexora -d nexora"
           --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
         image: redis:7.4-alpine
         ports: ['6379:6379']
         options: >-
-          --health-cmd 'redis-cli ping'
+          --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       NEXORA_DATABASE_URL: postgresql://nexora:ci-only-password@localhost:5432/nexora
@@ -51,6 +51,7 @@ jobs:
           with psycopg.connect(os.environ['NEXORA_DATABASE_URL']) as connection:
               connection.execute(Path('infra/postgres/001_extensions.sql').read_text())
           PY
+      - run: python -m nexora_api.migrate
       - run: pytest apps/api/tests
   web:
     runs-on: ubuntu-latest
