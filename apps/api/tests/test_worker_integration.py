@@ -238,3 +238,55 @@ def test_stale_running_lease_is_recovered_to_new_outbox(keys, auth_settings):
     ).json()["items"]
     assert events[-1]["event_type"] == "run.recovered"
     client.__exit__(None, None, None)
+
+
+def test_expired_worker_cannot_renew_or_finalize(keys, auth_settings):
+    migrate(auth_settings)
+    client, headers, workspace_id, run_id = make_runtime(keys, auth_settings, "worker-fencing")
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        row = connection.execute(
+            """SELECT id,workspace_id,run_id,topic,payload
+               FROM job_outbox WHERE run_id=%s ORDER BY created_at LIMIT 1""",
+            (run_id,),
+        ).fetchone()
+        connection.execute(
+            """UPDATE agent_runs
+               SET status='running',attempt_count=1,lease_owner='expired-worker',
+                   lease_expires_at=now()-interval '10 seconds'
+               WHERE id=%s""",
+            (run_id,),
+        )
+        connection.execute(
+            """INSERT INTO worker_job_receipts
+               (job_id,workspace_id,run_id,status,worker_id,lease_expires_at)
+               VALUES (%s,%s,%s,'processing','expired-worker',now()-interval '10 seconds')""",
+            (row[0], workspace_id, run_id),
+        )
+
+    from nexora_api.run_state import WorkerJob
+
+    job = WorkerJob.model_validate(
+        {
+            "job_id": row[0],
+            "workspace_id": row[1],
+            "run_id": row[2],
+            "topic": row[3],
+            "payload": row[4],
+        }
+    )
+
+    async def exercise():
+        state = RunStateStore(auth_settings)
+        renewed = await state.renew_lease(job.job_id, job.run_id, "expired-worker", 6)
+        completed = await state.complete_success(job, "expired-worker")
+        return renewed, completed
+
+    renewed, completed = asyncio.run(exercise())
+    assert renewed is False
+    assert completed is False
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        status = connection.execute(
+            "SELECT status FROM agent_runs WHERE id=%s", (run_id,)
+        ).fetchone()[0]
+    assert status == "running"
+    client.__exit__(None, None, None)
