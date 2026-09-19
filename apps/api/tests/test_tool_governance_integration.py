@@ -320,3 +320,89 @@ def test_destructive_tool_requires_durable_approval_and_resumes(keys, auth_setti
                     (approval["id"],),
                 )
             connection.rollback()
+
+
+
+def test_contract_change_invalidates_pending_approval(keys, auth_settings):
+    migrate(auth_settings)
+    clear_unpublished_outbox(auth_settings)
+    prefix = "tool-contract-change-" + str(uuid4())
+    owner, admin, member = (
+        prefix + suffix for suffix in ("-owner", "-admin", "-member")
+    )
+    adapter = FakeMcpAdapter()
+
+    with TestClient(create_app(settings=auth_settings)) as client:
+        _workspace_id, base, agent_id = create_runtime(
+            client, keys, owner, admin, member, "Contract change workspace"
+        )
+        register_tool(client, keys, base, admin, "dangerous-change", "destructive")
+        run_id = create_run(client, keys, base, member, agent_id, "tool-contract-change")
+
+        async def clear_stream():
+            redis = Redis.from_url(auth_settings.redis_url.get_secret_value())
+            try:
+                await redis.delete(QUEUE_STREAM)
+            finally:
+                await redis.aclose()
+
+        asyncio.run(clear_stream())
+        gateway = McpGateway(auth_settings, {"integration": adapter})
+        arguments = {
+            "query": "change protected record",
+            "idempotency_key": "contract-change-0001",
+        }
+        executor = GatewayExecutor(gateway, "dangerous-change", arguments)
+        assert process_once(auth_settings, executor, "contract-change-worker")
+
+        approvals = client.get(base + "/approvals", headers=auth_headers(keys, admin))
+        pending = [item for item in approvals.json()["items"] if item["run_id"] == run_id]
+        assert len(pending) == 1
+        approval_id = pending[0]["id"]
+
+        changed = client.put(
+            base + "/tools/dangerous-change",
+            json={
+                "server_key": "integration",
+                "remote_name": "different_remote_action",
+                "description": "Changed after approval request.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "minLength": 1, "maxLength": 100},
+                        "idempotency_key": {
+                            "type": "string",
+                            "minLength": 8,
+                            "maxLength": 128,
+                        },
+                    },
+                    "required": ["query", "idempotency_key"],
+                    "additionalProperties": False,
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "ok": {"type": "boolean"},
+                        "remote_name": {"type": "string"},
+                    },
+                    "required": ["ok", "remote_name"],
+                    "additionalProperties": False,
+                },
+                "side_effect": "destructive",
+                "enabled": True,
+            },
+            headers=auth_headers(keys, admin),
+        )
+        assert changed.status_code == 200, changed.text
+
+        decided = client.post(
+            base + f"/approvals/{approval_id}/decision",
+            json={"decision": "approved"},
+            headers=auth_headers(keys, admin),
+        )
+        assert decided.status_code == 200, decided.text
+        assert decided.json()["status"] == "cancelled"
+
+        run = client.get(base + "/runs/" + run_id, headers=auth_headers(keys, member))
+        assert run.json()["status"] == "cancelled"
+        assert adapter.calls == []
