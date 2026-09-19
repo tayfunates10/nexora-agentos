@@ -2,6 +2,7 @@ import pytest
 
 from nexora_api.tool_contracts import (
     ToolContractError,
+    hash_tool_contract,
     validate_arguments,
     validate_registration_schema,
     validate_result,
@@ -72,3 +73,30 @@ def test_output_contract_is_enforced():
     with pytest.raises(ToolContractError) as exc:
         validate_result({"count": -1}, schema)
     assert exc.value.code == "schema_number_too_small"
+
+
+def test_tool_contract_hash_binds_execution_target_and_schema():
+    schema = strict_schema()
+    first = hash_tool_contract(
+        server_key="primary",
+        remote_name="lookup",
+        input_schema=schema,
+        output_schema=None,
+        side_effect="read",
+    )
+    same = hash_tool_contract(
+        server_key="primary",
+        remote_name="lookup",
+        input_schema=schema,
+        output_schema=None,
+        side_effect="read",
+    )
+    changed_target = hash_tool_contract(
+        server_key="primary",
+        remote_name="delete",
+        input_schema=schema,
+        output_schema=None,
+        side_effect="read",
+    )
+    assert first == same
+    assert first != changed_target
