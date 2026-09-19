@@ -25,6 +25,14 @@ pytestmark = [
 ]
 
 
+def clear_unpublished_outbox(settings):
+    with psycopg.connect(settings.database_url.get_secret_value()) as connection:
+        connection.execute(
+            """UPDATE job_outbox SET published_at=now()
+               WHERE published_at IS NULL AND dead_lettered_at IS NULL"""
+        )
+
+
 class WriteInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     value: str = Field(min_length=1, max_length=100)
@@ -57,6 +65,7 @@ def registry_with_counter(counter):
 
 
 def setup_workspace(keys, settings, registry, prefix):
+    clear_unpublished_outbox(settings)
     owner = prefix + "-owner-" + str(uuid4())
     admin = prefix + "-admin-" + str(uuid4())
     member = prefix + "-member-" + str(uuid4())
@@ -308,6 +317,7 @@ def test_requester_can_cancel_pending_approval_and_run(keys, auth_settings):
     )
 
     # A new pending approval is also cancelled atomically when the whole run is cancelled.
+    clear_unpublished_outbox(auth_settings)
     second_run = create_run(client, headers, workspace_id, agent_id, member, "cancel-whole-run")
 
     async def pause_second():
