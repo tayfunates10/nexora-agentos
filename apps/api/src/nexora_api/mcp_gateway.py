@@ -304,7 +304,8 @@ class McpGateway:
                     await connection.execute(
                         """INSERT INTO tool_approvals
                            (id,workspace_id,run_id,tool_call_id,arguments_hash,
-                            requested_by_issuer,requested_by_subject,status,policy_reason,expires_at)
+                            requested_by_issuer,requested_by_subject,status,policy_reason,
+                            expires_at)
                            VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,
                                    now()+(%s * interval '1 second'))""",
                         (
@@ -409,7 +410,8 @@ class McpGateway:
                     await connection.execute(
                         """INSERT INTO tool_approvals
                            (id,workspace_id,run_id,tool_call_id,arguments_hash,
-                            requested_by_issuer,requested_by_subject,status,policy_reason,expires_at)
+                            requested_by_issuer,requested_by_subject,status,policy_reason,
+                            expires_at)
                            VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,
                                    now()+(%s * interval '1 second'))""",
                         (
