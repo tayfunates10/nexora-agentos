@@ -121,6 +121,7 @@ class McpGateway:
         normalized, arguments_hash = canonical_payload(validated)
         tool_call_id: UUID | None = None
         approval_id: UUID | None = None
+        approved_before = False
         actor: Principal | None = None
 
         async with self.connection() as connection:
@@ -216,7 +217,22 @@ class McpGateway:
                     if not approval:
                         raise ToolGatewayError("approval_state_invalid")
                     approval_id = approval["id"]
-                elif existing["status"] not in ("approved", "executing"):
+                elif existing["status"] in ("approved", "executing"):
+                    approval_result = await connection.execute(
+                        """SELECT status,arguments_hash FROM tool_approvals
+                           WHERE tool_call_id=%s
+                           ORDER BY requested_at DESC LIMIT 1""",
+                        (tool_call_id,),
+                    )
+                    prior_approval = await approval_result.fetchone()
+                    approved_before = bool(
+                        prior_approval
+                        and prior_approval["status"] == "approved"
+                        and prior_approval["arguments_hash"] == arguments_hash
+                    )
+                    if existing["status"] == "approved" and not approved_before:
+                        raise ToolGatewayError("approval_state_invalid")
+                else:
                     raise ToolGatewayError("tool_state_invalid")
 
             policy = await evaluate_policy(connection, context.workspace_id, spec)
@@ -380,6 +396,7 @@ class McpGateway:
                 if (
                     policy.decision == PolicyDecision.REQUIRE_APPROVAL
                     and existing["status"] == "executing"
+                    and not approved_before
                 ):
                     approval_id = uuid4()
                     await connection.execute(
