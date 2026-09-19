@@ -100,3 +100,27 @@ def test_tool_contract_hash_binds_execution_target_and_schema():
     )
     assert first == same
     assert first != changed_target
+
+
+
+def test_registration_rejects_invalid_constraint_types():
+    schema = strict_schema()
+    schema["properties"]["query"]["maxLength"] = "100"
+    with pytest.raises(ToolContractError) as exc:
+        validate_registration_schema(schema, side_effect="read")
+    assert exc.value.code == "invalid_schema_size_bound"
+
+
+def test_registration_rejects_excessive_schema_depth():
+    leaf = {"type": "string"}
+    for _ in range(18):
+        leaf = {"type": "array", "items": leaf}
+    schema = {
+        "type": "object",
+        "properties": {"nested": leaf},
+        "required": ["nested"],
+        "additionalProperties": False,
+    }
+    with pytest.raises(ToolContractError) as exc:
+        validate_registration_schema(schema, side_effect="read")
+    assert exc.value.code == "schema_too_deep"
