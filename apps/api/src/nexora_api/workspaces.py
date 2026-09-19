@@ -18,12 +18,16 @@ class Permission(StrEnum):
     READ = "workspace:read"
     UPDATE = "workspace:update"
     MANAGE_MEMBERS = "workspace:members:manage"
+    MANAGE_AGENTS = "agent:manage"
+    RUN_AGENTS = "agent:run"
 
 
 GRANTS = {
     Role.OWNER: frozenset(Permission),
-    Role.ADMIN: frozenset({Permission.READ, Permission.UPDATE}),
-    Role.MEMBER: frozenset({Permission.READ}),
+    Role.ADMIN: frozenset(
+        {Permission.READ, Permission.UPDATE, Permission.MANAGE_AGENTS, Permission.RUN_AGENTS}
+    ),
+    Role.MEMBER: frozenset({Permission.READ, Permission.RUN_AGENTS}),
 }
 
 

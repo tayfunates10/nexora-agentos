@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from starlette.exceptions import HTTPException
 
+from nexora_api.agent_repository import AgentRuntimeRepository
+from nexora_api.agents import router as agent_router
 from nexora_api.config import Settings
 from nexora_api.health import DependencyProbe, HealthResponse, Probe
 from nexora_api.workspace_repository import WorkspaceRepository
@@ -32,6 +34,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         app.state.probe = probe or DependencyProbe(settings, redis)
         app.state.settings = settings
         app.state.workspaces = WorkspaceRepository(settings)
+        app.state.agent_runtime = AgentRuntimeRepository(settings)
         try:
             yield
         finally:
@@ -88,6 +91,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         return HealthResponse(status="ok" if healthy else "degraded", dependencies=dependencies)
 
     app.include_router(workspace_router)
+    app.include_router(agent_router)
     return app
 
 
