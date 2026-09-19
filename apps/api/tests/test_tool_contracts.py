@@ -102,7 +102,6 @@ def test_tool_contract_hash_binds_execution_target_and_schema():
     assert first != changed_target
 
 
-
 def test_registration_rejects_invalid_constraint_types():
     schema = strict_schema()
     schema["properties"]["query"]["maxLength"] = "100"
