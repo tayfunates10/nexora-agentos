@@ -19,8 +19,8 @@ CI rejects skill drift so every supported coding agent receives the same project
 
 The first application milestone provides a Next.js service-health panel, typed FastAPI
 health endpoints, PostgreSQL/pgvector and Redis infrastructure. The API now includes verified bearer identities, workspace creation/listing/renaming,
-and owner/admin/member authorization. Browser login, provider provisioning, agent
-execution and MCP integration are **not implemented yet**.
+and owner/admin/member authorization. Browser login and workspace management UI are implemented but require identity-provider
+configuration. Agent execution and MCP integration are **not implemented yet**.
 See [architecture and roadmap](docs/architecture/0001-foundation.md).
 
 ## Run locally with Docker Compose
@@ -115,6 +115,44 @@ Use `/docs` for the full API schema. Owners can assign `admin` or `member` to a 
 subject with `PUT /api/v1/workspaces/{id}/members`. Admins can rename a workspace;
 members can only read. The initial owner cannot be demoted, and assigning a second
 owner is blocked. This endpoint changes database membership; it does not send invitations.
-The web panel still shows foundation health; browser sign-in and workspace management
-UI are the next milestone. Rate limiting, automatic key rotation and production database
+The web panel includes browser sign-in and workspace management (setup below).
+Rate limiting, automatic key rotation and production database
 role separation remain deployment work before public exposure.
+
+## Browser sign-in and workspace management
+
+The web now includes `/login`, `/workspaces`, workspace settings and team access forms.
+Provider registration is still required; without configuration `/login` explains that
+sign-in is unavailable and protected pages redirect there.
+
+1. Register a **confidential web client** at your OIDC provider. Enable authorization code
+   flow with S256 PKCE and `client_secret_post` authentication.
+2. Register exactly `http://localhost:3000/auth/callback` for local Compose (or your HTTPS
+   origin plus `/auth/callback` for deployment). Use that same host in the browser.
+3. Configure the provider to issue RS256 user access tokens for the dedicated Nexora API
+   audience and ID tokens for the web client ID. The authorization request includes the
+   `audience` parameter; providers that use audience mappers must configure them accordingly.
+4. Set `NEXORA_WEB_ORIGIN`, `NEXORA_AUTH_ISSUER`, `NEXORA_AUTH_AUDIENCE`,
+   `NEXORA_OIDC_CLIENT_ID`, and `NEXORA_OIDC_CLIENT_SECRET` privately in your environment.
+   Configure the API's `NEXORA_AUTH_PUBLIC_KEY` with the provider's verification PEM as
+   described above. Do not paste secrets into source files or commit `.env`.
+5. Compose forwards these settings and supplies the web session Redis URL. Outside Compose,
+   set `NEXORA_SESSION_REDIS_URL=redis://127.0.0.1:6379/1` for the web process as well.
+6. Restart services and visit `/login`. Create a workspace, rename it, or assign admin/member
+   access using an organization account ID. Actual authorization is always checked by API.
+
+Tokens remain server-side in Redis; browser cookies contain opaque IDs only. Sessions
+expire after at most one hour or earlier with the access token. Sign-out revokes the
+Nexora session immediately; it does not close the provider's own session. See
+[browser-session architecture](docs/architecture/0003-browser-sessions.md).
+
+Browser test (requires a local Redis and installed Chromium; no real provider credentials):
+
+```bash
+npm run build
+npx playwright install chromium
+npm run test:e2e --workspace @nexora/web
+```
+
+The browser test starts its own test-only issuer/API and a production web server on port
+3100; Redis defaults to database 15. Test issuer/API code is never exposed in the app.

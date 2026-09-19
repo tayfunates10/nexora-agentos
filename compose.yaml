@@ -60,6 +60,12 @@ services:
       dockerfile: apps/web/Dockerfile
     environment:
       NEXORA_API_URL: http://api:8000
+      NEXORA_SESSION_REDIS_URL: redis://redis:6379/1
+      NEXORA_WEB_ORIGIN: ${NEXORA_WEB_ORIGIN:-http://localhost:3000}
+      NEXORA_AUTH_ISSUER: ${NEXORA_AUTH_ISSUER:-}
+      NEXORA_AUTH_AUDIENCE: ${NEXORA_AUTH_AUDIENCE:-}
+      NEXORA_OIDC_CLIENT_ID: ${NEXORA_OIDC_CLIENT_ID:-}
+      NEXORA_OIDC_CLIENT_SECRET: ${NEXORA_OIDC_CLIENT_SECRET:-}
     ports: ["127.0.0.1:3000:3000"]
     depends_on:
       api: {condition: service_started}
