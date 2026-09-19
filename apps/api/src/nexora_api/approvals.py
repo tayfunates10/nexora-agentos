@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
@@ -38,10 +39,10 @@ class ApprovalRecord(BaseModel):
     requested_by_subject: str
     status: str
     policy_reason: str
-    requested_at: object
-    expires_at: object
+    requested_at: datetime
+    expires_at: datetime
     decided_by_subject: str | None = None
-    decided_at: object | None = None
+    decided_at: datetime | None = None
     decision_reason: str | None = None
 
 

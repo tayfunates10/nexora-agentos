@@ -21,6 +21,8 @@ class Permission(StrEnum):
     MANAGE_AGENTS = "agent:manage"
     RUN_AGENTS = "agent:run"
     CANCEL_ANY_RUN = "agent:run:cancel:any"
+    MANAGE_TOOL_POLICY = "tool:policy:manage"
+    APPROVE_TOOLS = "tool:approve"
 
 
 GRANTS = {
@@ -32,6 +34,7 @@ GRANTS = {
             Permission.MANAGE_AGENTS,
             Permission.RUN_AGENTS,
             Permission.CANCEL_ANY_RUN,
+            Permission.APPROVE_TOOLS,
         }
     ),
     Role.MEMBER: frozenset({Permission.READ, Permission.RUN_AGENTS}),

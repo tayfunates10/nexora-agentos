@@ -11,8 +11,13 @@ from starlette.exceptions import HTTPException
 
 from nexora_api.agent_repository import AgentRuntimeRepository
 from nexora_api.agents import router as agent_router
+from nexora_api.approvals import ApprovalService
+from nexora_api.builtin_tools import build_tool_registry
 from nexora_api.config import Settings
 from nexora_api.health import DependencyProbe, HealthResponse, Probe
+from nexora_api.mcp_gateway import McpGateway
+from nexora_api.tool_api import router as tool_router
+from nexora_api.tool_registry import ToolGatewayError, ToolRegistry
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import router as workspace_router
 
@@ -21,7 +26,11 @@ def get_probe(request: Request) -> Probe:
     return request.app.state.probe
 
 
-def create_app(settings: Settings | None = None, probe: Probe | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    probe: Probe | None = None,
+    tool_registry: ToolRegistry | None = None,
+) -> FastAPI:
     settings = settings or Settings()
 
     @asynccontextmanager
@@ -31,10 +40,14 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
             socket_timeout=settings.dependency_timeout_seconds,
             socket_connect_timeout=settings.dependency_timeout_seconds,
         )
+        registry = tool_registry or build_tool_registry(settings)
         app.state.probe = probe or DependencyProbe(settings, redis)
         app.state.settings = settings
         app.state.workspaces = WorkspaceRepository(settings)
         app.state.agent_runtime = AgentRuntimeRepository(settings)
+        app.state.tool_registry = registry
+        app.state.tool_gateway = McpGateway(settings, registry)
+        app.state.approvals = ApprovalService(settings, registry)
         try:
             yield
         finally:
@@ -70,6 +83,20 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
             response.headers.update(exc.headers)
         return response
 
+    @app.exception_handler(ToolGatewayError)
+    async def tool_error(request: Request, exc: ToolGatewayError):
+        status = {
+            "unknown_tool": 404,
+            "invalid_tool_arguments": 422,
+            "tool_arguments_too_large": 413,
+            "tool_idempotency_conflict": 409,
+            "approved_arguments_changed": 409,
+            "run_not_executable": 409,
+            "run_lease_expired": 409,
+            "run_lease_lost": 409,
+        }.get(exc.code, 400)
+        return error(request, status, exc.code, "Tool request failed")
+
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
         return error(request, 422, "validation_error", "Request validation failed")
@@ -92,6 +119,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
 
     app.include_router(workspace_router)
     app.include_router(agent_router)
+    app.include_router(tool_router)
     return app
 
 

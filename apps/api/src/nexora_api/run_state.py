@@ -278,6 +278,29 @@ class RunStateStore:
             row = await result.fetchone()
             return not row or row["status"] == "cancelled" or row["cancel_requested_at"] is not None
 
+    async def ack_waiting_for_approval(self, job: WorkerJob, worker_id: str) -> bool:
+        async with self.connection() as connection:
+            run_result = await connection.execute(
+                """SELECT status FROM agent_runs
+                   WHERE id=%s AND workspace_id=%s FOR UPDATE""",
+                (job.run_id, job.workspace_id),
+            )
+            run = await run_result.fetchone()
+            receipt_result = await connection.execute(
+                """SELECT status,worker_id,last_error_code FROM worker_job_receipts
+                   WHERE job_id=%s FOR UPDATE""",
+                (job.job_id,),
+            )
+            receipt = await receipt_result.fetchone()
+            return bool(
+                run
+                and receipt
+                and run["status"] == "waiting_for_approval"
+                and receipt["status"] == "superseded"
+                and receipt["worker_id"] == worker_id
+                and receipt["last_error_code"] == "waiting_for_approval"
+            )
+
     async def complete_success(self, job: WorkerJob, worker_id: str) -> bool:
         async with self.connection() as connection:
             run, receipt = await self._owned_processing(connection, job, worker_id)

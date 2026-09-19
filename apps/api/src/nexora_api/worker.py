@@ -10,6 +10,7 @@ from redis.exceptions import ResponseError
 from nexora_api.config import Settings
 from nexora_api.outbox import QUEUE_STREAM, OutboxPublisher
 from nexora_api.run_state import ExecutionContext, RunStateStore, WorkerJob
+from nexora_api.tool_registry import ToolApprovalRequired
 
 WORKER_GROUP = "nexora-agent-workers-v1"
 
@@ -153,6 +154,8 @@ class AgentWorker:
             await self.executor.execute(context, cancelled)
         except asyncio.CancelledError:
             raise
+        except ToolApprovalRequired:
+            handled = await self.state.ack_waiting_for_approval(job, self.worker_id)
         except RetryableExecutionError as exc:
             handled = await self.state.complete_failure(
                 job, self.worker_id, exc.code, retryable=True
