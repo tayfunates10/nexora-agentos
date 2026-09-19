@@ -99,7 +99,7 @@ BEGIN
     IF NEW.status = OLD.status THEN
         RETURN NEW;
     END IF;
-    IF OLD.status = 'planned' AND NEW.status IN ('running','denied','cancelled') THEN
+    IF OLD.status = 'planned' AND NEW.status IN ('pending_approval','running','denied','cancelled') THEN
         RETURN NEW;
     END IF;
     IF OLD.status = 'pending_approval'
