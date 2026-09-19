@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
     const session = await currentSession();
     if (!session) return NextResponse.redirect(new URL("/login", config.origin), 303);
     const form = await readForm(request);
-    if (!validMutation(request.headers.get("origin"), config, form.get("csrf") ?? "", session.csrf)) return new NextResponse("Forbidden", { status: 403 });
+    if (!validMutation(request.headers.get("origin"), config, form.get("csrf") ?? "", session.csrf, request.headers.get("referer"))) return new NextResponse("Forbidden", { status: 403 });
     const operation = form.get("operation");
     if (operation === "create") {
       const body = workspaceInput.parse({ name: form.get("name") });
