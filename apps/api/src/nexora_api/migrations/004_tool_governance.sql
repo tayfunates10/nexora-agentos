@@ -148,3 +148,12 @@ $$;
 CREATE TRIGGER tool_approval_protected
     BEFORE UPDATE ON tool_approvals
     FOR EACH ROW EXECUTE FUNCTION protect_tool_approval();
+
+CREATE FUNCTION reject_tool_approval_deletion() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'tool approval records are durable';
+END;
+$$;
+CREATE TRIGGER tool_approval_no_delete
+    BEFORE DELETE OR TRUNCATE ON tool_approvals
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_tool_approval_deletion();
