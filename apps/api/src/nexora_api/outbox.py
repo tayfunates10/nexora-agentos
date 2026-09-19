@@ -1,3 +1,4 @@
+import hashlib
 import json
 from contextlib import asynccontextmanager
 
@@ -7,8 +8,16 @@ from redis.asyncio import Redis
 
 from nexora_api.config import Settings
 
-QUEUE_KEY = "nexora:jobs:agent-runs"
+QUEUE_STREAM = "nexora:jobs:agent-runs:v1"
+QUEUE_KEY = QUEUE_STREAM
 MAX_ATTEMPTS = 10
+
+
+def publish_retry_delay(job_id, attempts):
+    base = min(300.0, float(2 ** min(attempts, 8)))
+    digest = hashlib.sha256(f"{job_id}:{attempts}".encode()).digest()
+    jitter = int.from_bytes(digest[:2], "big") / 65535
+    return round(base * (1 + 0.25 * jitter), 3)
 
 
 class OutboxPublisher:
@@ -53,7 +62,7 @@ class OutboxPublisher:
                     sort_keys=True,
                 )
                 try:
-                    await redis.rpush(QUEUE_KEY, message)
+                    await redis.xadd(QUEUE_STREAM, {"job": message})
                 except Exception as exc:
                     attempts = row["attempts"] + 1
                     if attempts >= MAX_ATTEMPTS:
@@ -64,7 +73,7 @@ class OutboxPublisher:
                             (attempts, type(exc).__name__[:100], row["id"]),
                         )
                     else:
-                        delay = min(300, 2 ** min(attempts, 8))
+                        delay = publish_retry_delay(row["id"], attempts)
                         await connection.execute(
                             """UPDATE job_outbox
                                SET attempts=%s,available_at=now()+(%s * interval '1 second'),
