@@ -99,9 +99,7 @@ class McpGateway:
                 timeout=self.timeout_seconds,
             )
         except TimeoutError as exc:
-            await self.repository.complete_failure(
-                execution.call_id, "mcp_timeout", retryable=True
-            )
+            await self.repository.complete_failure(execution.call_id, "mcp_timeout", retryable=True)
             raise McpGatewayError("mcp_timeout", retryable=True) from exc
         except asyncio.CancelledError:
             await self.repository.complete_failure(
