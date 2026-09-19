@@ -615,8 +615,9 @@ class ToolGovernanceRepository:
                 await connection.execute(
                     """INSERT INTO tool_calls
                        (id,workspace_id,run_id,tool_id,call_key,arguments,arguments_hash,
-                        status,policy_decision,error_code,finished_at)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,'denied','deny','policy_denied',now())""",
+                        contract_hash,status,policy_decision,error_code,finished_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
+                               'denied','deny','policy_denied',now())""",
                     (
                         call_id,
                         context.workspace_id,
@@ -871,8 +872,9 @@ class ToolGovernanceRepository:
         await connection.execute(
             """INSERT INTO tool_approvals
                (id,workspace_id,run_id,tool_call_id,requested_action,normalized_arguments,
-                arguments_hash,requester_issuer,requester_subject,status,policy_reason,expires_at)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,
+                arguments_hash,contract_hash,requester_issuer,requester_subject,status,
+                policy_reason,expires_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,
                        now()+interval '15 minutes')""",
             (
                 approval_id,
@@ -981,6 +983,28 @@ class ToolGovernanceRepository:
         if side_effect in _FORCE_APPROVAL:
             return "require_approval"
         return decision
+
+    async def expire_due(self, limit: int = 100) -> int:
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        async with self.connection() as connection:
+            result = await connection.execute(
+                """SELECT * FROM tool_approvals
+                   WHERE status='pending' AND expires_at <= now()
+                   ORDER BY expires_at,id
+                   FOR UPDATE SKIP LOCKED
+                   LIMIT %s""",
+                (limit,),
+            )
+            approvals = await result.fetchall()
+            for approval in approvals:
+                await self._cancel_approval(
+                    connection,
+                    approval,
+                    "expired",
+                    "tool.approval_expired",
+                )
+            return len(approvals)
 
     async def _expire_due(self, connection, workspace_id: UUID) -> None:
         result = await connection.execute(
