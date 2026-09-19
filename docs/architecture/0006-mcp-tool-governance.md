@@ -67,10 +67,12 @@ A request persists the run, tool call, normalized arguments, arguments hash, req
 reason and expiry time before the worker releases its lease. The original queue delivery is then
 acknowledged.
 
-Approval records preserve requested content immutably. Material argument changes require a new
-call key and approval. Approving revalidates requester membership, current tool configuration,
-schema and policy before a new outbox job is committed. Rejecting or expiring an approval cancels
-the run. Cancelling a waiting run cancels its pending approval.
+Approval records preserve requested content immutably. Each request is also bound to a SHA-256
+hash of the execution-critical tool contract: server key, remote tool name, input/output schemas
+and side-effect class. Material argument or contract changes invalidate the old approval.
+Approving revalidates requester membership, current tool configuration, schema, contract hash and
+policy before a new outbox job is committed. Rejecting or expiring an approval cancels the run.
+Cancelling a waiting or in-flight run cancels any still-pending approval.
 
 On resume, the gateway sees the same stable call key. An approved call is revalidated immediately
 before execution. A succeeded call returns its stored result on replay instead of performing the
@@ -99,8 +101,8 @@ Credentials are not stored in tool definitions, tool calls, approvals or model-v
 
 - No arbitrary workspace-configured MCP URL or stdio command is supported.
 - No production MCP transport adapter is enabled by default.
-- Approval expiry is processed when approval state is accessed; a periodic sweeper can be added
-  with the worker-service deployment.
+- Approval expiry is swept by the worker loop and is also checked synchronously when approval
+  state is accessed or decided.
 - Tool discovery/synchronization from MCP servers is not automatic yet.
 - Production egress controls and short-lived server credentials belong to deployment hardening.
 
