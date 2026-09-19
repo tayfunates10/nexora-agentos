@@ -15,6 +15,7 @@ from nexora_api.run_state import ExecutionContext
 from nexora_api.runtime_events import append_run_event
 from nexora_api.tool_contracts import (
     ToolContractError,
+    hash_tool_contract,
     validate_arguments,
     validate_registration_schema,
     validate_result,
@@ -277,8 +278,9 @@ class ToolGovernanceRepository:
                 connection, principal, workspace_id, Permission.APPROVE_TOOLS
             )
             result = await connection.execute(
-                """SELECT a.*,c.tool_id,c.arguments,t.input_schema,t.enabled,
-                          t.side_effect,p.decision AS current_policy
+                """SELECT a.*,c.tool_id,c.arguments,c.contract_hash AS call_contract_hash,
+                          t.server_key,t.remote_name,t.input_schema,t.output_schema,
+                          t.enabled,t.side_effect,p.decision AS current_policy
                    FROM tool_approvals a
                    JOIN tool_calls c ON c.id=a.tool_call_id
                    JOIN tool_definitions t ON t.id=c.tool_id AND t.workspace_id=c.workspace_id
@@ -338,6 +340,26 @@ class ToolGovernanceRepository:
                     "tool.approval_rejected",
                     request_id,
                     str(approval["tool_call_id"]),
+                )
+                refreshed = await self._approval_row(connection, approval_id)
+                return self._approval(refreshed)
+
+            current_contract_hash = hash_tool_contract(
+                server_key=approval["server_key"],
+                remote_name=approval["remote_name"],
+                input_schema=approval["input_schema"],
+                output_schema=approval["output_schema"],
+                side_effect=approval["side_effect"],
+            )
+            if (
+                approval["contract_hash"] != approval["call_contract_hash"]
+                or approval["contract_hash"] != current_contract_hash
+            ):
+                await self._cancel_approval(
+                    connection,
+                    approval,
+                    "cancelled",
+                    "tool.approval_invalidated",
                 )
                 refreshed = await self._approval_row(connection, approval_id)
                 return self._approval(refreshed)
@@ -474,6 +496,13 @@ class ToolGovernanceRepository:
                 raise ToolContractError("unknown_tool")
             tool = self._tool(tool_row)
             _, arguments_hash = validate_arguments(arguments, tool_row["input_schema"])
+            contract_hash = hash_tool_contract(
+                server_key=tool_row["server_key"],
+                remote_name=tool_row["remote_name"],
+                input_schema=tool_row["input_schema"],
+                output_schema=tool_row["output_schema"],
+                side_effect=tool_row["side_effect"],
+            )
 
             effective = self._effective_policy(
                 tool_row["policy_decision"], tool_row["side_effect"]
@@ -492,6 +521,41 @@ class ToolGovernanceRepository:
                     raise ToolContractError("call_key_conflict")
                 if existing["status"] == "succeeded":
                     return ToolCallPlan("replay", existing["id"], tool, result=existing["result"])
+                if existing["contract_hash"] != contract_hash:
+                    approval = await self._approval_for_call(connection, existing["id"])
+                    if approval and approval["status"] == "pending":
+                        await connection.execute(
+                            """UPDATE tool_approvals
+                               SET status='cancelled',decided_at=now()
+                               WHERE id=%s""",
+                            (approval["id"],),
+                        )
+                    if existing["status"] in (
+                        "planned",
+                        "pending_approval",
+                        "approved",
+                        "running",
+                    ):
+                        await connection.execute(
+                            """UPDATE tool_calls
+                               SET status='cancelled',error_code='tool_contract_changed',
+                                   finished_at=now(),updated_at=now()
+                               WHERE id=%s""",
+                            (existing["id"],),
+                        )
+                    await append_run_event(
+                        connection,
+                        context.workspace_id,
+                        context.run_id,
+                        "tool.contract_changed",
+                        {"tool": tool_name, "call_key": call_key},
+                    )
+                    return ToolCallPlan(
+                        "deny",
+                        existing["id"],
+                        tool,
+                        error_code="tool_contract_changed",
+                    )
                 if existing["status"] in ("failed", "denied", "cancelled"):
                     return ToolCallPlan(
                         "deny",
@@ -561,6 +625,7 @@ class ToolGovernanceRepository:
                         call_key,
                         Jsonb(arguments),
                         arguments_hash,
+                        contract_hash,
                     ),
                 )
                 await append_run_event(
@@ -577,8 +642,8 @@ class ToolGovernanceRepository:
             await connection.execute(
                 """INSERT INTO tool_calls
                    (id,workspace_id,run_id,tool_id,call_key,arguments,arguments_hash,
-                    status,policy_decision)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    contract_hash,status,policy_decision)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (
                     call_id,
                     context.workspace_id,
@@ -587,6 +652,7 @@ class ToolGovernanceRepository:
                     call_key,
                     Jsonb(arguments),
                     arguments_hash,
+                    contract_hash,
                     initial_status,
                     effective,
                 ),
@@ -651,6 +717,15 @@ class ToolGovernanceRepository:
 
             if not call["enabled"]:
                 raise ToolContractError("tool_disabled")
+            current_contract_hash = hash_tool_contract(
+                server_key=call["server_key"],
+                remote_name=call["remote_name"],
+                input_schema=call["input_schema"],
+                output_schema=call["output_schema"],
+                side_effect=call["side_effect"],
+            )
+            if call["contract_hash"] != current_contract_hash:
+                raise ToolContractError("tool_contract_changed")
             effective = self._effective_policy(call["current_policy"], call["side_effect"])
             if effective == "deny":
                 raise ToolContractError("policy_denied")
@@ -662,6 +737,7 @@ class ToolGovernanceRepository:
                     not approval
                     or approval["status"] != "approved"
                     or approval["arguments_hash"] != call["arguments_hash"]
+                    or approval["contract_hash"] != call["contract_hash"]
                     or approval["normalized_arguments"] != call["arguments"]
                 ):
                     raise ToolContractError("approval_missing_or_stale")
@@ -779,6 +855,13 @@ class ToolGovernanceRepository:
         reason: str,
     ) -> ToolCallPlan:
         approval_id = uuid4()
+        call_result = await connection.execute(
+            "SELECT contract_hash FROM tool_calls WHERE id=%s",
+            (call_id,),
+        )
+        call = await call_result.fetchone()
+        if not call:
+            raise ToolContractError("unknown_tool_call")
         await connection.execute(
             """UPDATE tool_calls
                SET status='pending_approval',policy_decision='require_approval',updated_at=now()
@@ -799,6 +882,7 @@ class ToolGovernanceRepository:
                 tool.name,
                 Jsonb(arguments),
                 arguments_hash,
+                call["contract_hash"],
                 run["requested_by_issuer"],
                 run["requested_by_subject"],
                 reason,
@@ -835,6 +919,13 @@ class ToolGovernanceRepository:
             raise ToolContractError("unknown_tool")
         tool = self._tool(tool_row)
         _, digest = validate_arguments(arguments, tool_row["input_schema"])
+        contract_hash = hash_tool_contract(
+            server_key=tool_row["server_key"],
+            remote_name=tool_row["remote_name"],
+            input_schema=tool_row["input_schema"],
+            output_schema=tool_row["output_schema"],
+            side_effect=tool_row["side_effect"],
+        )
         existing_result = await connection.execute(
             "SELECT * FROM tool_calls WHERE run_id=%s AND call_key=%s FOR UPDATE",
             (run["id"], call_key),
@@ -846,8 +937,8 @@ class ToolGovernanceRepository:
         await connection.execute(
             """INSERT INTO tool_calls
                (id,workspace_id,run_id,tool_id,call_key,arguments,arguments_hash,
-                status,policy_decision,error_code,finished_at)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,'denied','deny',%s,now())""",
+                contract_hash,status,policy_decision,error_code,finished_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'denied','deny',%s,now())""",
             (
                 call_id,
                 run["workspace_id"],
@@ -856,6 +947,7 @@ class ToolGovernanceRepository:
                 call_key,
                 Jsonb(arguments),
                 digest,
+                contract_hash,
                 error_code,
             ),
         )
