@@ -306,7 +306,10 @@ def test_requester_can_cancel_pending_approval_and_run(keys, auth_settings):
     )
     assert cancelled.status_code == 200, cancelled.text
     assert cancelled.json()["status"] == "cancelled"
-    assert client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"] == "queued"
+    assert (
+        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"]
+        == "queued"
+    )
 
     # A new pending approval is also cancelled atomically when the whole run is cancelled.
     second_run = create_run(
@@ -373,7 +376,10 @@ def test_pending_approval_expires_and_run_resumes(keys, auth_settings):
     asyncio.run(asyncio.sleep(1.1))
     assert asyncio.run(client.app.state.approvals.expire_pending()) >= 1
     assert client.get(base + "/approvals", headers=headers(owner)).json()["items"] == []
-    assert client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"] == "queued"
+    assert (
+        client.get(base + "/runs/" + run_id, headers=headers(member)).json()["status"]
+        == "queued"
+    )
     with psycopg.connect(short_settings.database_url.get_secret_value()) as connection:
         status = connection.execute(
             """SELECT c.status,a.status FROM tool_calls c
