@@ -322,14 +322,11 @@ def test_destructive_tool_requires_durable_approval_and_resumes(keys, auth_setti
             connection.rollback()
 
 
-
 def test_contract_change_invalidates_pending_approval(keys, auth_settings):
     migrate(auth_settings)
     clear_unpublished_outbox(auth_settings)
     prefix = "tool-contract-change-" + str(uuid4())
-    owner, admin, member = (
-        prefix + suffix for suffix in ("-owner", "-admin", "-member")
-    )
+    owner, admin, member = (prefix + suffix for suffix in ("-owner", "-admin", "-member"))
     adapter = FakeMcpAdapter()
 
     with TestClient(create_app(settings=auth_settings)) as client:
