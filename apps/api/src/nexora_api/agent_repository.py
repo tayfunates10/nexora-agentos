@@ -11,8 +11,9 @@ from psycopg.types.json import Jsonb
 from nexora_api.agents import AgentDefinition, AgentInput, AgentRun, RunEvent, RunInput
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
+from nexora_api.runtime_events import append_run_event
 from nexora_api.workspace_repository import WorkspaceRepository
-from nexora_api.workspaces import Permission
+from nexora_api.workspaces import Permission, authorize
 
 
 class AgentRuntimeRepository:
@@ -49,6 +50,10 @@ class AgentRuntimeRepository:
             agent_id=row["agent_id"],
             trace_id=row["trace_id"],
             status=row["status"],
+            attempt_count=row["attempt_count"],
+            cancel_requested_at=row["cancel_requested_at"],
+            finished_at=row["finished_at"],
+            failure_code=row["failure_code"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -137,7 +142,8 @@ class AgentRuntimeRepository:
                 raise HTTPException(404)
 
             existing_result = await connection.execute(
-                """SELECT id,workspace_id,agent_id,trace_id,status,created_at,updated_at,
+                """SELECT id,workspace_id,agent_id,trace_id,status,attempt_count,
+                          cancel_requested_at,finished_at,failure_code,created_at,updated_at,
                           request_hash
                    FROM agent_runs
                    WHERE workspace_id=%s AND requested_by_issuer=%s
@@ -158,7 +164,8 @@ class AgentRuntimeRepository:
                    (id,workspace_id,agent_id,requested_by_issuer,requested_by_subject,
                     input_text,request_hash,idempotency_key,trace_id,status)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'queued')
-                   RETURNING id,workspace_id,agent_id,trace_id,status,created_at,updated_at""",
+                   RETURNING id,workspace_id,agent_id,trace_id,status,attempt_count,
+                             cancel_requested_at,finished_at,failure_code,created_at,updated_at""",
                 (
                     run_id,
                     workspace_id,
@@ -172,19 +179,17 @@ class AgentRuntimeRepository:
                 ),
             )
             row = await result.fetchone()
-            event_id = uuid4()
             await connection.execute(
                 """INSERT INTO agent_run_events
                    (id,workspace_id,run_id,event_no,event_type,payload)
                    VALUES (%s,%s,%s,1,'run.queued',%s)""",
-                (event_id, workspace_id, run_id, Jsonb({"request_id": request_id})),
+                (uuid4(), workspace_id, run_id, Jsonb({"request_id": request_id})),
             )
-            job_id = uuid4()
             await connection.execute(
                 """INSERT INTO job_outbox (id,workspace_id,run_id,topic,payload)
                    VALUES (%s,%s,%s,'agent.run.queued.v1',%s)""",
                 (
-                    job_id,
+                    uuid4(),
                     workspace_id,
                     run_id,
                     Jsonb(
@@ -206,7 +211,8 @@ class AgentRuntimeRepository:
         async with self.connection() as connection:
             await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
             result = await connection.execute(
-                """SELECT id,workspace_id,agent_id,trace_id,status,created_at,updated_at
+                """SELECT id,workspace_id,agent_id,trace_id,status,attempt_count,
+                          cancel_requested_at,finished_at,failure_code,created_at,updated_at
                    FROM agent_runs WHERE workspace_id=%s AND id=%s""",
                 (workspace_id, run_id),
             )
@@ -214,6 +220,73 @@ class AgentRuntimeRepository:
             if not row:
                 raise HTTPException(404)
             return self.run(row)
+
+    async def cancel_run(self, principal, workspace_id, run_id, request_id):
+        async with self.connection() as connection:
+            membership = await self.workspaces.scoped(
+                connection, principal, workspace_id, Permission.READ
+            )
+            result = await connection.execute(
+                "SELECT * FROM agent_runs WHERE workspace_id=%s AND id=%s FOR UPDATE",
+                (workspace_id, run_id),
+            )
+            run = await result.fetchone()
+            if not run:
+                raise HTTPException(404)
+            is_requester = (
+                run["requested_by_issuer"] == principal.issuer
+                and run["requested_by_subject"] == principal.subject
+            )
+            if not is_requester:
+                authorize(membership["role"], Permission.CANCEL_ANY_RUN)
+
+            if run["status"] in ("succeeded", "failed", "cancelled"):
+                return self.run(run)
+
+            if run["status"] == "running":
+                if run["cancel_requested_at"] is None:
+                    updated = await connection.execute(
+                        """UPDATE agent_runs
+                           SET cancel_requested_at=now(),updated_at=now()
+                           WHERE id=%s RETURNING *""",
+                        (run_id,),
+                    )
+                    run = await updated.fetchone()
+                    await append_run_event(
+                        connection,
+                        workspace_id,
+                        run_id,
+                        "run.cancel_requested",
+                        {"request_id": request_id},
+                    )
+                    await self.workspaces.audit(
+                        connection,
+                        principal,
+                        workspace_id,
+                        "agent_run.cancel_requested",
+                        request_id,
+                    )
+                return self.run(run)
+
+            updated = await connection.execute(
+                """UPDATE agent_runs
+                   SET status='cancelled',cancel_requested_at=COALESCE(cancel_requested_at,now()),
+                       finished_at=now(),lease_owner=NULL,lease_expires_at=NULL,updated_at=now()
+                   WHERE id=%s RETURNING *""",
+                (run_id,),
+            )
+            run = await updated.fetchone()
+            await append_run_event(
+                connection,
+                workspace_id,
+                run_id,
+                "run.cancelled",
+                {"request_id": request_id, "reason": "requested"},
+            )
+            await self.workspaces.audit(
+                connection, principal, workspace_id, "agent_run.cancelled", request_id
+            )
+            return self.run(run)
 
     async def list_events(
         self,

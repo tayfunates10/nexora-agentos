@@ -20,12 +20,19 @@ class Permission(StrEnum):
     MANAGE_MEMBERS = "workspace:members:manage"
     MANAGE_AGENTS = "agent:manage"
     RUN_AGENTS = "agent:run"
+    CANCEL_ANY_RUN = "agent:run:cancel:any"
 
 
 GRANTS = {
     Role.OWNER: frozenset(Permission),
     Role.ADMIN: frozenset(
-        {Permission.READ, Permission.UPDATE, Permission.MANAGE_AGENTS, Permission.RUN_AGENTS}
+        {
+            Permission.READ,
+            Permission.UPDATE,
+            Permission.MANAGE_AGENTS,
+            Permission.RUN_AGENTS,
+            Permission.CANCEL_ANY_RUN,
+        }
     ),
     Role.MEMBER: frozenset({Permission.READ, Permission.RUN_AGENTS}),
 }
@@ -33,7 +40,6 @@ GRANTS = {
 
 def authorize(role: str | None, permission: Permission):
     if role is None:
-        # Conceal whether another tenant's workspace exists.
         raise HTTPException(404)
     if permission not in GRANTS.get(role, frozenset()):
         raise HTTPException(403)
@@ -58,7 +64,6 @@ class WorkspacePage(BaseModel):
 class MemberInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     subject: str = Field(min_length=1, max_length=255)
-    # Owner transfer is intentionally a separate future operation.
     role: Role
 
 

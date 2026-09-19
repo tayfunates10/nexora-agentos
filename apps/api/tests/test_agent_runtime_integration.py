@@ -11,7 +11,7 @@ from test_auth import token
 
 from nexora_api.main import create_app
 from nexora_api.migrate import migrate
-from nexora_api.outbox import QUEUE_KEY, OutboxPublisher
+from nexora_api.outbox import QUEUE_STREAM, OutboxPublisher
 
 pytestmark = [
     pytest.mark.integration,
@@ -135,9 +135,10 @@ def test_agent_definitions_runs_idempotency_and_outbox(keys, auth_settings):
     async def publish():
         redis = Redis.from_url(auth_settings.redis_url.get_secret_value())
         try:
-            await redis.delete(QUEUE_KEY)
+            await redis.delete(QUEUE_STREAM)
             count = await OutboxPublisher(auth_settings).publish_batch(redis)
-            raw = await redis.lpop(QUEUE_KEY)
+            entries = await redis.xrange(QUEUE_STREAM, count=1)
+            raw = entries[0][1].get(b"job") if entries else None
             return count, json.loads(raw) if raw else None
         finally:
             await redis.aclose()
@@ -246,7 +247,7 @@ def test_outbox_failures_dead_letter_after_bounded_attempts(keys, auth_settings)
         )
 
     class FailingRedis:
-        async def rpush(self, *_args):
+        async def xadd(self, *_args):
             raise TimeoutError("simulated")
 
     published = asyncio.run(

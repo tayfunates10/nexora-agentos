@@ -53,6 +53,10 @@ class AgentRun(BaseModel):
     agent_id: UUID
     trace_id: UUID
     status: RunStatus
+    attempt_count: int
+    cancel_requested_at: datetime | None = None
+    finished_at: datetime | None = None
+    failure_code: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -123,6 +127,13 @@ async def create_run(
 @router.get("/workspaces/{workspace_id}/runs/{run_id}", response_model=AgentRun)
 async def get_run(workspace_id: UUID, run_id: UUID, principal: Identity, request: Request):
     return await repository(request).get_run(principal, workspace_id, run_id)
+
+
+@router.post("/workspaces/{workspace_id}/runs/{run_id}/cancel", response_model=AgentRun)
+async def cancel_run(workspace_id: UUID, run_id: UUID, principal: Identity, request: Request):
+    return await repository(request).cancel_run(
+        principal, workspace_id, run_id, request.state.request_id
+    )
 
 
 @router.get(
