@@ -273,7 +273,7 @@ def test_requester_can_cancel_pending_approval_and_run(keys, auth_settings):
     migrate(auth_settings)
     counter = {"calls": 0}
     registry = registry_with_counter(counter)
-    client, headers, workspace_id, agent_id, owner, _admin, member, _outsider = setup_workspace(
+    client, headers, workspace_id, agent_id, _owner, _admin, member, _outsider = setup_workspace(
         keys, auth_settings, registry, "cancel-flow"
     )
     run_id = create_run(client, headers, workspace_id, agent_id, member, "cancel-flow")
