@@ -93,9 +93,7 @@ class RunStateStore:
             return None
         return durable_payload
 
-    async def claim(
-        self, job: WorkerJob, worker_id: str, lease_seconds: int = 30
-    ) -> ClaimResult:
+    async def claim(self, job: WorkerJob, worker_id: str, lease_seconds: int = 30) -> ClaimResult:
         if not 3 <= lease_seconds <= 300:
             raise ValueError("lease_seconds must be between 3 and 300")
         async with self.connection() as connection:
@@ -278,11 +276,7 @@ class RunStateStore:
                 (run_id,),
             )
             row = await result.fetchone()
-            return (
-                not row
-                or row["status"] == "cancelled"
-                or row["cancel_requested_at"] is not None
-            )
+            return not row or row["status"] == "cancelled" or row["cancel_requested_at"] is not None
 
     async def complete_success(self, job: WorkerJob, worker_id: str) -> bool:
         async with self.connection() as connection:
