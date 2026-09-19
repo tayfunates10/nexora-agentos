@@ -8,8 +8,10 @@ from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from nexora_api.config import Settings
+from nexora_api.mcp_gateway import ApprovalRequired, McpGatewayError
 from nexora_api.outbox import QUEUE_STREAM, OutboxPublisher
 from nexora_api.run_state import ExecutionContext, RunStateStore, WorkerJob
+from nexora_api.tool_repository import ToolGovernanceRepository
 
 WORKER_GROUP = "nexora-agent-workers-v1"
 
@@ -50,6 +52,7 @@ class AgentWorker:
         self.worker_id = worker_id or "worker-" + uuid4().hex
         self.lease_seconds = lease_seconds
         self.state = RunStateStore(settings)
+        self.tool_governance = ToolGovernanceRepository(settings)
         self.publisher = OutboxPublisher(settings)
 
     async def ensure_group(self):
@@ -122,6 +125,7 @@ class AgentWorker:
         if not 1 <= block_ms <= 5000:
             raise ValueError("block_ms must be between 1 and 5000")
         await self.ensure_group()
+        await self.tool_governance.expire_due()
         await self.state.recover_stale()
         await self.publisher.publish_batch(self.redis)
 
@@ -153,6 +157,17 @@ class AgentWorker:
             await self.executor.execute(context, cancelled)
         except asyncio.CancelledError:
             raise
+        except ApprovalRequired as exc:
+            handled = await self.state.wait_for_approval(
+                job,
+                self.worker_id,
+                exc.tool_call_id,
+                exc.approval_id,
+            )
+        except McpGatewayError as exc:
+            handled = await self.state.complete_failure(
+                job, self.worker_id, exc.code, retryable=exc.retryable
+            )
         except RetryableExecutionError as exc:
             handled = await self.state.complete_failure(
                 job, self.worker_id, exc.code, retryable=True

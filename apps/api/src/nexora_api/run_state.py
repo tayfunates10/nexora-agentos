@@ -278,6 +278,57 @@ class RunStateStore:
             row = await result.fetchone()
             return not row or row["status"] == "cancelled" or row["cancel_requested_at"] is not None
 
+    async def wait_for_approval(
+        self,
+        job: WorkerJob,
+        worker_id: str,
+        tool_call_id: UUID,
+        approval_id: UUID,
+    ) -> bool:
+        async with self.connection() as connection:
+            run, receipt = await self._owned_processing(connection, job, worker_id)
+            if not run or not receipt:
+                return False
+            if run["cancel_requested_at"] is not None:
+                await self._cancel_locked(connection, run, job, worker_id)
+                return True
+
+            approval_result = await connection.execute(
+                """SELECT id FROM tool_approvals
+                   WHERE id=%s AND tool_call_id=%s AND run_id=%s
+                     AND workspace_id=%s AND status='pending' AND expires_at > now()
+                   FOR UPDATE""",
+                (approval_id, tool_call_id, job.run_id, job.workspace_id),
+            )
+            if not await approval_result.fetchone():
+                return False
+
+            await connection.execute(
+                """UPDATE agent_runs
+                   SET status='waiting_for_approval',lease_owner=NULL,
+                       lease_expires_at=NULL,updated_at=now()
+                   WHERE id=%s""",
+                (run["id"],),
+            )
+            await connection.execute(
+                """UPDATE worker_job_receipts
+                   SET status='superseded',lease_expires_at=NULL,
+                       last_error_code='waiting_for_approval',updated_at=now()
+                   WHERE job_id=%s""",
+                (job.job_id,),
+            )
+            await append_run_event(
+                connection,
+                run["workspace_id"],
+                run["id"],
+                "run.waiting_for_approval",
+                {
+                    "tool_call_id": str(tool_call_id),
+                    "approval_id": str(approval_id),
+                },
+            )
+            return True
+
     async def complete_success(self, job: WorkerJob, worker_id: str) -> bool:
         async with self.connection() as connection:
             run, receipt = await self._owned_processing(connection, job, worker_id)
