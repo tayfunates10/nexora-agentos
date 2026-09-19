@@ -40,8 +40,13 @@ export function cookieNames(config: AuthConfig) {
 export function cookieOptions(config: AuthConfig, maxAge: number) {
   return { httpOnly: true, secure: config.origin.startsWith("https:"), sameSite: "lax" as const, path: "/", maxAge };
 }
-export function validMutation(origin: string | null, config: AuthConfig, supplied: string, expected: string) {
-  if (origin !== config.origin || !supplied || supplied.length !== expected.length) return false;
+export function validRequestSource(origin: string | null, referer: string | null, config: AuthConfig) {
+  if (origin) return origin === config.origin;
+  if (!referer) return false;
+  try { return new URL(referer).origin === config.origin; } catch { return false; }
+}
+export function validMutation(origin: string | null, config: AuthConfig, supplied: string, expected: string, referer: string | null = null) {
+  if (!validRequestSource(origin, referer, config) || !supplied || supplied.length !== expected.length) return false;
   const a = Buffer.from(supplied); const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
 }
