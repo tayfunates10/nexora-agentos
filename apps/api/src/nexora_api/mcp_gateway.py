@@ -441,7 +441,7 @@ class McpGateway:
     ):
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
         async with self.connection() as connection:
-            if not await self._worker_still_owns_run(connection, context, worker_id):
+            if not await self._worker_still_owns_run(connection, context):
                 raise ToolGatewayError("run_lease_lost")
             call_result = await connection.execute(
                 "SELECT status FROM tool_calls WHERE id=%s FOR UPDATE", (tool_call_id,)
