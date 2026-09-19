@@ -165,9 +165,7 @@ async def list_approvals(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: UUID | None = None,
 ):
-    rows = await repository(request).list_approvals(
-        principal, workspace_id, limit + 1, cursor
-    )
+    rows = await repository(request).list_approvals(principal, workspace_id, limit + 1, cursor)
     return ApprovalPage(
         items=rows[:limit],
         next_cursor=rows[limit - 1].id if len(rows) > limit else None,
