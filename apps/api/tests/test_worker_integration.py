@@ -23,7 +23,16 @@ pytestmark = [
 ]
 
 
+def clear_unpublished_outbox(settings):
+    with psycopg.connect(settings.database_url.get_secret_value()) as connection:
+        connection.execute(
+            """UPDATE job_outbox SET published_at=now()
+               WHERE published_at IS NULL AND dead_lettered_at IS NULL"""
+        )
+
+
 def make_runtime(keys, auth_settings, suffix):
+    clear_unpublished_outbox(auth_settings)
     subject = suffix + "-" + str(uuid4())
 
     def headers(idempotency_key=None):
