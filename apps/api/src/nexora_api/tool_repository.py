@@ -320,7 +320,9 @@ class ToolGovernanceRepository:
                     (principal.issuer, principal.subject, approval_id),
                 )
                 await connection.execute(
-                    "UPDATE tool_calls SET status='denied',updated_at=now(),finished_at=now() WHERE id=%s",
+                    """UPDATE tool_calls
+                       SET status='denied',updated_at=now(),finished_at=now()
+                       WHERE id=%s""",
                     (approval["tool_call_id"],),
                 )
                 await self._cancel_run(
@@ -506,10 +508,15 @@ class ToolGovernanceRepository:
                         approval_id=approval["id"],
                     )
                 if effective == "deny":
-                    target = "cancelled" if existing["status"] in ("approved", "running") else "denied"
+                    target = (
+                        "cancelled"
+                        if existing["status"] in ("approved", "running")
+                        else "denied"
+                    )
                     await connection.execute(
                         """UPDATE tool_calls
-                           SET status=%s,error_code='policy_denied',updated_at=now(),finished_at=now()
+                           SET status=%s,error_code='policy_denied',
+                               updated_at=now(),finished_at=now()
                            WHERE id=%s""",
                         (target, existing["id"]),
                     )
@@ -663,7 +670,8 @@ class ToolGovernanceRepository:
                 raise ToolContractError("tool_call_not_executable")
             await connection.execute(
                 """UPDATE tool_calls
-                   SET status='running',attempt_count=attempt_count+1,started_at=COALESCE(started_at,now()),
+                   SET status='running',attempt_count=attempt_count+1,
+                       started_at=COALESCE(started_at,now()),
                        updated_at=now(),error_code=NULL
                    WHERE id=%s""",
                 (call_id,),
@@ -698,7 +706,8 @@ class ToolGovernanceRepository:
             validate_result(result_value, row["output_schema"])
             await connection.execute(
                 """UPDATE tool_calls
-                   SET status='succeeded',result=%s,error_code=NULL,finished_at=now(),updated_at=now()
+                   SET status='succeeded',result=%s,error_code=NULL,
+                       finished_at=now(),updated_at=now()
                    WHERE id=%s""",
                 (Jsonb(result_value), call_id),
             )
@@ -730,7 +739,11 @@ class ToolGovernanceRepository:
                 return False
             if retryable:
                 approval = await self._approval_for_call(connection, call_id)
-                next_status = "approved" if approval and approval["status"] == "approved" else "planned"
+                next_status = (
+                    "approved"
+                    if approval and approval["status"] == "approved"
+                    else "planned"
+                )
                 await connection.execute(
                     """UPDATE tool_calls
                        SET status=%s,error_code=%s,updated_at=now()
