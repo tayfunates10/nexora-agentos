@@ -103,7 +103,8 @@ BEGIN
     IF OLD.status = 'approved' AND NEW.status IN ('executing','denied','cancelled') THEN
         RETURN NEW;
     END IF;
-    IF OLD.status = 'executing' AND NEW.status IN ('succeeded','failed','cancelled') THEN
+    IF OLD.status = 'executing'
+       AND NEW.status IN ('succeeded','failed','cancelled','denied','waiting_approval') THEN
         RETURN NEW;
     END IF;
     RAISE EXCEPTION 'illegal tool call transition: % -> %', OLD.status, NEW.status;

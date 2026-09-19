@@ -272,7 +272,7 @@ class McpGateway:
                            (id,workspace_id,run_id,tool_call_id,arguments_hash,
                             requested_by_issuer,requested_by_subject,status,policy_reason,expires_at)
                            VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,
-                                   now()+interval '24 hours')""",
+                                   now()+(%s * interval '1 second'))""",
                         (
                             approval_id,
                             context.workspace_id,
@@ -282,6 +282,7 @@ class McpGateway:
                             actor.issuer,
                             actor.subject,
                             policy.reason,
+                            self.settings.tool_approval_ttl_seconds,
                         ),
                     )
                     await connection.execute(
@@ -358,14 +359,73 @@ class McpGateway:
                         },
                     )
                     return ToolCallOutcome(tool_call_id, "denied", error_code="policy_denied")
-                await connection.execute(
-                    """UPDATE tool_calls
-                       SET status='executing',policy_decision=%s,policy_reason=%s,
-                           started_at=COALESCE(started_at,now()),updated_at=now(),
-                           error_code=NULL
-                       WHERE id=%s""",
-                    (policy.decision, policy.reason, tool_call_id),
-                )
+                if (
+                    policy.decision == PolicyDecision.REQUIRE_APPROVAL
+                    and existing["status"] == "executing"
+                ):
+                    approval_id = uuid4()
+                    await connection.execute(
+                        """UPDATE tool_calls
+                           SET status='waiting_approval',policy_decision=%s,
+                               policy_reason=%s,updated_at=now()
+                           WHERE id=%s""",
+                        (policy.decision, policy.reason, tool_call_id),
+                    )
+                    await connection.execute(
+                        """INSERT INTO tool_approvals
+                           (id,workspace_id,run_id,tool_call_id,arguments_hash,
+                            requested_by_issuer,requested_by_subject,status,policy_reason,expires_at)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,
+                                   now()+(%s * interval '1 second'))""",
+                        (
+                            approval_id,
+                            context.workspace_id,
+                            context.run_id,
+                            tool_call_id,
+                            arguments_hash,
+                            actor.issuer,
+                            actor.subject,
+                            policy.reason,
+                            self.settings.tool_approval_ttl_seconds,
+                        ),
+                    )
+                    await connection.execute(
+                        """UPDATE agent_runs
+                           SET status='waiting_for_approval',lease_owner=NULL,
+                               lease_expires_at=NULL,updated_at=now()
+                           WHERE id=%s""",
+                        (context.run_id,),
+                    )
+                    await connection.execute(
+                        """UPDATE worker_job_receipts
+                           SET status='superseded',lease_expires_at=NULL,
+                               last_error_code='waiting_for_approval',updated_at=now()
+                           WHERE job_id=%s AND run_id=%s AND worker_id=%s
+                             AND status='processing'""",
+                        (context.job_id, context.run_id, context.worker_id),
+                    )
+                    await append_run_event(
+                        connection,
+                        context.workspace_id,
+                        context.run_id,
+                        "tool.approval_requested",
+                        {
+                            "tool_call_id": str(tool_call_id),
+                            "approval_id": str(approval_id),
+                            "tool_name": spec.name,
+                            "arguments_hash": arguments_hash,
+                            "reason": policy.reason,
+                        },
+                    )
+                else:
+                    await connection.execute(
+                        """UPDATE tool_calls
+                           SET status='executing',policy_decision=%s,policy_reason=%s,
+                               started_at=COALESCE(started_at,now()),updated_at=now(),
+                               error_code=NULL
+                           WHERE id=%s""",
+                        (policy.decision, policy.reason, tool_call_id),
+                    )
 
             if approval_id is None:
                 await append_run_event(
