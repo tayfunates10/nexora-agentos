@@ -1,0 +1,74 @@
+name: nexora
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: nexora
+      POSTGRES_USER: nexora
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/001_extensions.sql:/docker-entrypoint-initdb.d/001_extensions.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexora -d nexora"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "nexora_api.migrate"]
+    environment:
+      NEXORA_DATABASE_URL: postgresql://nexora:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/nexora
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NEXORA_DATABASE_URL: postgresql://nexora:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/nexora
+      NEXORA_REDIS_URL: redis://redis:6379/0
+      NEXORA_AUTH_ISSUER: ${NEXORA_AUTH_ISSUER:-}
+      NEXORA_AUTH_AUDIENCE: ${NEXORA_AUTH_AUDIENCE:-}
+      NEXORA_AUTH_PUBLIC_KEY: ${NEXORA_AUTH_PUBLIC_KEY:-}
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      NEXORA_API_URL: http://api:8000
+      NEXORA_SESSION_REDIS_URL: redis://redis:6379/1
+      NEXORA_WEB_ORIGIN: ${NEXORA_WEB_ORIGIN:-http://localhost:3000}
+      NEXORA_AUTH_ISSUER: ${NEXORA_AUTH_ISSUER:-}
+      NEXORA_AUTH_AUDIENCE: ${NEXORA_AUTH_AUDIENCE:-}
+      NEXORA_OIDC_CLIENT_ID: ${NEXORA_OIDC_CLIENT_ID:-}
+      NEXORA_OIDC_CLIENT_SECRET: ${NEXORA_OIDC_CLIENT_SECRET:-}
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      api: {condition: service_started}
+volumes:
+  postgres-data:
+  redis-data:

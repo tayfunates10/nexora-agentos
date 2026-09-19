@@ -14,3 +14,145 @@ python scripts/sync_skills.py --check
 ```
 
 CI rejects skill drift so every supported coding agent receives the same project rules.
+
+## Development status
+
+The first application milestone provides a Next.js service-health panel, typed FastAPI
+health endpoints, PostgreSQL/pgvector and Redis infrastructure. The API now includes verified bearer identities, workspace creation/listing/renaming,
+and owner/admin/member authorization. Browser login and workspace management UI are implemented but require identity-provider
+configuration. Agent execution and MCP integration are **not implemented yet**.
+See [architecture and roadmap](docs/architecture/0001-foundation.md).
+
+## Run locally with Docker Compose
+
+Requires Docker Compose v2. Copy `.env.example` to `.env` and replace the password
+with a URL-safe random value (letters and digits work without URL escaping).
+
+```bash
+cp .env.example .env
+# Edit .env before starting.
+docker compose up --build -d
+docker compose ps
+```
+
+- Web: http://localhost:3000
+- API documentation: http://localhost:8000/docs
+- Liveness: http://localhost:8000/api/v1/health/live
+- Readiness: http://localhost:8000/api/v1/health/ready
+
+Readiness returns 503 if PostgreSQL, pgvector or Redis is unavailable. Liveness
+remains independent of those services. Refresh the panel to re-check current health.
+`docker compose down` stops services and preserves data volumes.
+The init SQL enables pgvector only on a new database volume.
+
+## Run application code without Docker
+
+Requires Node.js 22 or 24, Python 3.12+, and running PostgreSQL/Redis for healthy readiness.
+
+```bash
+npm ci
+python -m venv .venv
+. .venv/bin/activate
+pip install -r apps/api/requirements-dev.lock
+pip install --no-deps -e apps/api
+export NEXORA_DATABASE_URL='postgresql://nexora:YOUR_PASSWORD@localhost:5432/nexora'
+export NEXORA_REDIS_URL='redis://localhost:6379/0'
+uvicorn nexora_api.main:app --reload
+```
+
+In another terminal, run `npm run dev`. The server-side web client defaults to
+`http://127.0.0.1:8000`; override with `NEXORA_API_URL` when required. The API reads
+process environment variables; it does not automatically load the root Compose `.env`.
+The panel still starts with an unavailable state if the API is offline.
+
+## Quality checks
+
+```bash
+python scripts/sync_skills.py --check
+.venv/bin/ruff check apps/api
+.venv/bin/ruff format --check apps/api
+.venv/bin/pytest apps/api/tests -m 'not integration'
+npm run typecheck
+npm run test:web
+npm run build
+```
+
+For real dependency integration, start PostgreSQL/Redis, export the connection variables
+above, then run `NEXORA_INTEGRATION=1 .venv/bin/pytest apps/api/tests -m integration`.
+The CI workflow also runs this test against service containers.
+
+## Identity and workspace API
+
+See [identity architecture](docs/architecture/0002-identity-workspaces.md) for boundaries
+and known limitations. The API validates RS256 access tokens from a configured issuer.
+Set `NEXORA_AUTH_ISSUER`, `NEXORA_AUTH_AUDIENCE`, and `NEXORA_AUTH_PUBLIC_KEY` in the
+API process environment. The public key must contain real PEM newlines; it is the
+verification key from your identity provider, never a private signing key. For Compose,
+these settings are forwarded from the shell or `.env` (which supports quoted multiline
+values). Use a dedicated audience for Nexora user access tokens, distinct from ID tokens
+and machine/service credentials. Without this configuration authenticated endpoints
+fail closed. Health endpoints remain public.
+
+Compose runs a one-shot migration service before the API. For a non-Docker setup:
+
+```bash
+.venv/bin/python -m nexora_api.migrate
+```
+
+Run this before starting the upgraded API. Migration state is checksum-verified and
+repeated runs are safe; no existing volumes need deletion.
+
+With a valid provider-issued access token in `$NEXORA_ACCESS_TOKEN`:
+
+```bash
+curl -H "Authorization: Bearer $NEXORA_ACCESS_TOKEN" http://localhost:8000/api/v1/me
+curl -X POST http://localhost:8000/api/v1/workspaces \
+  -H "Authorization: Bearer $NEXORA_ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"My workspace"}'
+```
+
+Use `/docs` for the full API schema. Owners can assign `admin` or `member` to a provider
+subject with `PUT /api/v1/workspaces/{id}/members`. Admins can rename a workspace;
+members can only read. The initial owner cannot be demoted, and assigning a second
+owner is blocked. This endpoint changes database membership; it does not send invitations.
+The web panel includes browser sign-in and workspace management (setup below).
+Rate limiting, automatic key rotation and production database
+role separation remain deployment work before public exposure.
+
+## Browser sign-in and workspace management
+
+The web now includes `/login`, `/workspaces`, workspace settings and team access forms.
+Provider registration is still required; without configuration `/login` explains that
+sign-in is unavailable and protected pages redirect there.
+
+1. Register a **confidential web client** at your OIDC provider. Enable authorization code
+   flow with S256 PKCE and `client_secret_post` authentication.
+2. Register exactly `http://localhost:3000/auth/callback` for local Compose (or your HTTPS
+   origin plus `/auth/callback` for deployment). Use that same host in the browser.
+3. Configure the provider to issue RS256 user access tokens for the dedicated Nexora API
+   audience and ID tokens for the web client ID. The authorization request includes the
+   `audience` parameter; providers that use audience mappers must configure them accordingly.
+4. Set `NEXORA_WEB_ORIGIN`, `NEXORA_AUTH_ISSUER`, `NEXORA_AUTH_AUDIENCE`,
+   `NEXORA_OIDC_CLIENT_ID`, and `NEXORA_OIDC_CLIENT_SECRET` privately in your environment.
+   Configure the API's `NEXORA_AUTH_PUBLIC_KEY` with the provider's verification PEM as
+   described above. Do not paste secrets into source files or commit `.env`.
+5. Compose forwards these settings and supplies the web session Redis URL. Outside Compose,
+   set `NEXORA_SESSION_REDIS_URL=redis://127.0.0.1:6379/1` for the web process as well.
+6. Restart services and visit `/login`. Create a workspace, rename it, or assign admin/member
+   access using an organization account ID. Actual authorization is always checked by API.
+
+Tokens remain server-side in Redis; browser cookies contain opaque IDs only. Sessions
+expire after at most one hour or earlier with the access token. Sign-out revokes the
+Nexora session immediately; it does not close the provider's own session. See
+[browser-session architecture](docs/architecture/0003-browser-sessions.md).
+
+Browser test (requires a local Redis and installed Chromium; no real provider credentials):
+
+```bash
+npm run build
+npx playwright install chromium
+npm run test:e2e --workspace @nexora/web
+```
+
+The browser test starts its own test-only issuer/API and a production web server on port
+3100; Redis defaults to database 15. Test issuer/API code is never exposed in the app.
