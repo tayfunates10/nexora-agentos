@@ -35,6 +35,7 @@ class WorkerJob(BaseModel):
 @dataclass(frozen=True)
 class ExecutionContext:
     job_id: UUID
+    worker_id: str
     workspace_id: UUID
     run_id: UUID
     agent_id: UUID
@@ -206,6 +207,7 @@ class RunStateStore:
             )
             context = ExecutionContext(
                 job_id=job.job_id,
+                worker_id=worker_id,
                 workspace_id=run["workspace_id"],
                 run_id=run["id"],
                 agent_id=run["agent_id"],
