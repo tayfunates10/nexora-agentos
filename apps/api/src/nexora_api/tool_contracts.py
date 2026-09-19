@@ -7,6 +7,7 @@ MAX_ARGUMENT_BYTES = 32 * 1024
 MAX_RESULT_BYTES = 64 * 1024
 MAX_SCHEMA_BYTES = 32 * 1024
 MAX_CONTRACT_BYTES = 96 * 1024
+MAX_SCHEMA_DEPTH = 16
 
 _INPUT_SCHEMA_KEYS = {
     "$schema",
@@ -53,7 +54,7 @@ def canonical_json(value: Any, max_bytes: int) -> str:
             ensure_ascii=False,
             allow_nan=False,
         )
-    except (TypeError, ValueError) as exc:
+    except (RecursionError, TypeError, ValueError) as exc:
         raise ToolContractError("invalid_json") from exc
     if len(encoded.encode("utf-8")) > max_bytes:
         raise ToolContractError("payload_too_large")
@@ -116,7 +117,14 @@ def validate_registration_schema(
             raise ToolContractError("mutation_requires_idempotency_key")
 
 
-def _validate_schema_node(schema: dict[str, Any], *, root: bool = False) -> None:
+def _validate_schema_node(
+    schema: dict[str, Any],
+    *,
+    root: bool = False,
+    depth: int = 0,
+) -> None:
+    if depth > MAX_SCHEMA_DEPTH:
+        raise ToolContractError("schema_too_deep")
     if not isinstance(schema, dict):
         raise ToolContractError("invalid_schema")
     allowed = _INPUT_SCHEMA_KEYS if root else _VALUE_SCHEMA_KEYS
@@ -127,9 +135,27 @@ def _validate_schema_node(schema: dict[str, Any], *, root: bool = False) -> None
     if value_type not in _JSON_TYPES:
         raise ToolContractError("unsupported_schema_type")
 
+    for metadata in ("title", "description"):
+        if metadata in schema and not isinstance(schema[metadata], str):
+            raise ToolContractError("invalid_schema_metadata")
+
     enum = schema.get("enum")
     if enum is not None and (not isinstance(enum, list) or not enum):
         raise ToolContractError("invalid_schema_enum")
+
+    object_keys = {"properties", "required", "additionalProperties"}
+    array_keys = {"items", "minItems", "maxItems"}
+    string_keys = {"minLength", "maxLength"}
+    number_keys = {"minimum", "maximum"}
+
+    if value_type != "object" and set(schema) & object_keys:
+        raise ToolContractError("schema_constraint_type_mismatch")
+    if value_type != "array" and set(schema) & array_keys:
+        raise ToolContractError("schema_constraint_type_mismatch")
+    if value_type != "string" and set(schema) & string_keys:
+        raise ToolContractError("schema_constraint_type_mismatch")
+    if value_type not in ("integer", "number") and set(schema) & number_keys:
+        raise ToolContractError("schema_constraint_type_mismatch")
 
     if value_type == "object":
         properties = schema.get("properties", {})
@@ -143,13 +169,47 @@ def _validate_schema_node(schema: dict[str, Any], *, root: bool = False) -> None
         additional = schema.get("additionalProperties", False)
         if not isinstance(additional, bool):
             raise ToolContractError("unsupported_additional_properties")
-        for child in properties.values():
-            _validate_schema_node(child)
+        for name, child in properties.items():
+            if not isinstance(name, str) or not name:
+                raise ToolContractError("invalid_schema_property_name")
+            _validate_schema_node(child, depth=depth + 1)
     elif value_type == "array":
+        _validate_non_negative_bounds(schema, "minItems", "maxItems")
         items = schema.get("items")
         if not isinstance(items, dict):
             raise ToolContractError("array_items_required")
-        _validate_schema_node(items)
+        _validate_schema_node(items, depth=depth + 1)
+    elif value_type == "string":
+        _validate_non_negative_bounds(schema, "minLength", "maxLength")
+    elif value_type in ("integer", "number"):
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if minimum is not None and (
+            isinstance(minimum, bool) or not isinstance(minimum, (int, float))
+        ):
+            raise ToolContractError("invalid_schema_number_bound")
+        if maximum is not None and (
+            isinstance(maximum, bool) or not isinstance(maximum, (int, float))
+        ):
+            raise ToolContractError("invalid_schema_number_bound")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise ToolContractError("invalid_schema_bounds")
+
+
+def _validate_non_negative_bounds(
+    schema: dict[str, Any],
+    minimum_key: str,
+    maximum_key: str,
+) -> None:
+    minimum = schema.get(minimum_key)
+    maximum = schema.get(maximum_key)
+    for value in (minimum, maximum):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise ToolContractError("invalid_schema_size_bound")
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise ToolContractError("invalid_schema_bounds")
 
 
 def validate_value(value: Any, schema: dict[str, Any]) -> None:
