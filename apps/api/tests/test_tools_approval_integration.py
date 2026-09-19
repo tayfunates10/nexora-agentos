@@ -10,8 +10,10 @@ from redis.asyncio import Redis
 from test_auth import token
 
 from nexora_api.main import create_app
+from nexora_api.mcp_gateway import canonical_payload
 from nexora_api.migrate import migrate
 from nexora_api.outbox import QUEUE_STREAM
+from nexora_api.run_state import RunStateStore, WorkerJob
 from nexora_api.tool_registry import SideEffect, ToolRegistry, ToolSpec
 from nexora_api.worker import AgentWorker
 
@@ -388,4 +390,102 @@ def test_pending_approval_expires_and_run_resumes(keys, auth_settings):
         ).fetchone()
     assert status == ("expired", "expired")
     assert counter["calls"] == 0
+    client.__exit__(None, None, None)
+
+
+def test_approved_tool_replay_after_worker_crash_reuses_approval(keys, auth_settings):
+    migrate(auth_settings)
+    counter = {"calls": 0}
+    registry = registry_with_counter(counter)
+    client, headers, workspace_id, agent_id, owner, _admin, member, _outsider = setup_workspace(
+        keys, auth_settings, registry, "approved-replay"
+    )
+    run_id = create_run(
+        client, headers, workspace_id, agent_id, member, "approved-replay"
+    )
+
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        outbox = connection.execute(
+            """SELECT id,workspace_id,run_id,topic,payload
+               FROM job_outbox WHERE run_id=%s ORDER BY created_at LIMIT 1""",
+            (run_id,),
+        ).fetchone()
+
+    job = WorkerJob.model_validate(
+        {
+            "job_id": outbox[0],
+            "workspace_id": outbox[1],
+            "run_id": outbox[2],
+            "topic": outbox[3],
+            "payload": outbox[4],
+        }
+    )
+    state = RunStateStore(auth_settings)
+    claim = asyncio.run(state.claim(job, "crash-replay-worker", lease_seconds=30))
+    assert claim.action == "execute"
+    assert claim.context is not None
+    context = claim.context
+
+    arguments, arguments_hash = canonical_payload(WriteInput(value="crash-value"))
+    tool_call_id = uuid4()
+    approval_id = uuid4()
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        connection.execute(
+            """INSERT INTO tool_calls
+               (id,workspace_id,run_id,tool_name,schema_version,side_effect,
+                arguments,arguments_hash,idempotency_key,requested_by_issuer,
+                requested_by_subject,policy_decision,policy_reason,status,started_at)
+               VALUES (%s,%s,%s,'test.write',1,'write',%s,%s,'tool-call-key-0001',
+                       %s,%s,'require_approval','default_mutation_approval',
+                       'executing',now())""",
+            (
+                tool_call_id,
+                workspace_id,
+                run_id,
+                psycopg.types.json.Jsonb(arguments),
+                arguments_hash,
+                auth_settings.auth_issuer,
+                member,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO tool_approvals
+               (id,workspace_id,run_id,tool_call_id,arguments_hash,
+                requested_by_issuer,requested_by_subject,status,policy_reason,
+                expires_at,decided_by_issuer,decided_by_subject,decided_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,'approved',
+                       'default_mutation_approval',now()+interval '1 day',
+                       %s,%s,now())""",
+            (
+                approval_id,
+                workspace_id,
+                run_id,
+                tool_call_id,
+                arguments_hash,
+                auth_settings.auth_issuer,
+                member,
+                auth_settings.auth_issuer,
+                owner,
+            ),
+        )
+
+    outcome = asyncio.run(
+        client.app.state.tool_gateway.call_tool(
+            context,
+            "test.write",
+            {"value": "crash-value"},
+            "tool-call-key-0001",
+        )
+    )
+    assert outcome.status == "succeeded"
+    assert outcome.tool_call_id == tool_call_id
+    assert counter["calls"] == 1
+
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        count = connection.execute(
+            "SELECT count(*) FROM tool_approvals WHERE tool_call_id=%s",
+            (tool_call_id,),
+        ).fetchone()[0]
+    assert count == 1
+    assert asyncio.run(state.complete_success(job, "crash-replay-worker"))
     client.__exit__(None, None, None)
