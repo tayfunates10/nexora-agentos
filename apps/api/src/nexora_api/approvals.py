@@ -123,9 +123,7 @@ class ApprovalService:
                 and row["requested_by_subject"] == principal.subject
             )
             if body.decision == ApprovalDecision.CANCEL and is_requester:
-                await self.workspaces.scoped(
-                    connection, principal, workspace_id, Permission.READ
-                )
+                await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
             else:
                 await self.workspaces.scoped(
                     connection, principal, workspace_id, Permission.APPROVE_TOOLS
@@ -178,9 +176,7 @@ class ApprovalService:
         if arguments_hash != row["arguments_hash"] or arguments_hash != row["call_arguments_hash"]:
             raise ToolGatewayError("approved_arguments_changed")
 
-    async def _finish(
-        self, connection, row, status, principal, reason, request_id
-    ):
+    async def _finish(self, connection, row, status, principal, reason, request_id):
         if row["run_status"] == "cancelled":
             status = "cancelled"
         await connection.execute(
