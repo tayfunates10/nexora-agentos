@@ -397,22 +397,22 @@ class McpGateway:
             output, result_hash = canonical_payload(output_model)
         except ToolExecutionError as exc:
             return await self._finalize_failure(
-                context, context.worker_id, tool_call_id, exc.code, started
+                context, tool_call_id, exc.code, started
             )
         except Exception:
             return await self._finalize_failure(
-                context, context.worker_id, tool_call_id, "tool_execution_error", started
+                context, tool_call_id, "tool_execution_error", started
             )
         return await self._finalize_success(
-            context, context.worker_id, tool_call_id, output, result_hash, started
+            context, tool_call_id, output, result_hash, started
         )
 
     async def _finalize_success(
-        self, context, context.worker_id, tool_call_id, output, result_hash, started
+        self, context, tool_call_id, output, result_hash, started
     ):
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
         async with self.connection() as connection:
-            if not await self._worker_still_owns_run(connection, context, worker_id):
+            if not await self._worker_still_owns_run(connection, context):
                 raise ToolGatewayError("run_lease_lost")
             call_result = await connection.execute(
                 "SELECT status FROM tool_calls WHERE id=%s FOR UPDATE", (tool_call_id,)
@@ -437,7 +437,7 @@ class McpGateway:
         return ToolCallOutcome(tool_call_id, "succeeded", output=output)
 
     async def _finalize_failure(
-        self, context, context.worker_id, tool_call_id, error_code, started
+        self, context, tool_call_id, error_code, started
     ):
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
         async with self.connection() as connection:
@@ -465,11 +465,11 @@ class McpGateway:
             )
         return ToolCallOutcome(tool_call_id, "failed", error_code=error_code[:100])
 
-    async def _worker_still_owns_run(self, connection, context, worker_id):
+    async def _worker_still_owns_run(self, connection, context):
         result = await connection.execute(
             """SELECT 1 FROM agent_runs
                WHERE id=%s AND workspace_id=%s AND status='running'
                  AND lease_owner=%s AND lease_expires_at > now()""",
-            (context.run_id, context.workspace_id, worker_id),
+            (context.run_id, context.workspace_id, context.worker_id),
         )
         return await result.fetchone() is not None
