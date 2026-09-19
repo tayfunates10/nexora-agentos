@@ -258,13 +258,15 @@ class RunStateStore:
             receipt = await connection.execute(
                 """UPDATE worker_job_receipts
                    SET lease_expires_at=now()+(%s * interval '1 second'),updated_at=now()
-                   WHERE job_id=%s AND run_id=%s AND status='processing' AND worker_id=%s""",
+                   WHERE job_id=%s AND run_id=%s AND status='processing' AND worker_id=%s
+                     AND lease_expires_at > now()""",
                 (lease_seconds, job_id, run_id, worker_id),
             )
             run = await connection.execute(
                 """UPDATE agent_runs
                    SET lease_expires_at=now()+(%s * interval '1 second'),updated_at=now()
-                   WHERE id=%s AND status='running' AND lease_owner=%s""",
+                   WHERE id=%s AND status='running' AND lease_owner=%s
+                     AND lease_expires_at > now()""",
                 (lease_seconds, run_id, worker_id),
             )
             return receipt.rowcount == 1 and run.rowcount == 1
@@ -412,6 +414,15 @@ class RunStateStore:
             or run["lease_owner"] != worker_id
             or receipt["status"] != "processing"
             or receipt["worker_id"] != worker_id
+        ):
+            return None, None
+        now_result = await connection.execute("SELECT now() AS now")
+        now = (await now_result.fetchone())["now"]
+        if (
+            run["lease_expires_at"] is None
+            or receipt["lease_expires_at"] is None
+            or run["lease_expires_at"] <= now
+            or receipt["lease_expires_at"] <= now
         ):
             return None, None
         return run, receipt
