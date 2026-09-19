@@ -8,6 +8,7 @@ from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from nexora_api.config import Settings
+from nexora_api.mcp_gateway import ApprovalRequired
 from nexora_api.outbox import QUEUE_STREAM, OutboxPublisher
 from nexora_api.run_state import ExecutionContext, RunStateStore, WorkerJob
 
@@ -153,6 +154,13 @@ class AgentWorker:
             await self.executor.execute(context, cancelled)
         except asyncio.CancelledError:
             raise
+        except ApprovalRequired as exc:
+            handled = await self.state.wait_for_approval(
+                job,
+                self.worker_id,
+                exc.tool_call_id,
+                exc.approval_id,
+            )
         except RetryableExecutionError as exc:
             handled = await self.state.complete_failure(
                 job, self.worker_id, exc.code, retryable=True
