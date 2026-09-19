@@ -110,7 +110,6 @@ class McpGateway:
     async def call_tool(
         self,
         context: ExecutionContext,
-        worker_id: str,
         tool_name: str,
         arguments: dict,
         idempotency_key: str,
@@ -142,7 +141,7 @@ class McpGateway:
                 or run["agent_id"] != context.agent_id
                 or run["trace_id"] != context.trace_id
                 or run["status"] != "running"
-                or run["lease_owner"] != worker_id
+                or run["lease_owner"] != context.worker_id
                 or run["lease_expires_at"] is None
             ):
                 raise ToolGatewayError("run_not_executable")
@@ -298,7 +297,7 @@ class McpGateway:
                                last_error_code='waiting_for_approval',updated_at=now()
                            WHERE job_id=%s AND run_id=%s AND worker_id=%s
                              AND status='processing'""",
-                        (context.job_id, context.run_id, worker_id),
+                        (context.job_id, context.run_id, context.worker_id),
                     )
                     await append_run_event(
                         connection,
@@ -398,18 +397,18 @@ class McpGateway:
             output, result_hash = canonical_payload(output_model)
         except ToolExecutionError as exc:
             return await self._finalize_failure(
-                context, worker_id, tool_call_id, exc.code, started
+                context, context.worker_id, tool_call_id, exc.code, started
             )
         except Exception:
             return await self._finalize_failure(
-                context, worker_id, tool_call_id, "tool_execution_error", started
+                context, context.worker_id, tool_call_id, "tool_execution_error", started
             )
         return await self._finalize_success(
-            context, worker_id, tool_call_id, output, result_hash, started
+            context, context.worker_id, tool_call_id, output, result_hash, started
         )
 
     async def _finalize_success(
-        self, context, worker_id, tool_call_id, output, result_hash, started
+        self, context, context.worker_id, tool_call_id, output, result_hash, started
     ):
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
         async with self.connection() as connection:
@@ -438,7 +437,7 @@ class McpGateway:
         return ToolCallOutcome(tool_call_id, "succeeded", output=output)
 
     async def _finalize_failure(
-        self, context, worker_id, tool_call_id, error_code, started
+        self, context, context.worker_id, tool_call_id, error_code, started
     ):
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
         async with self.connection() as connection:
