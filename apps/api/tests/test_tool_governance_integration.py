@@ -173,7 +173,7 @@ def test_allowed_read_tool_executes_through_gateway(keys, auth_settings):
     adapter = FakeMcpAdapter()
 
     with TestClient(create_app(settings=auth_settings)) as client:
-        workspace_id, base, agent_id = create_runtime(
+        _workspace_id, base, agent_id = create_runtime(
             client, keys, owner, admin, member, "Read tool workspace"
         )
         denied = client.put(
@@ -245,7 +245,7 @@ def test_destructive_tool_requires_durable_approval_and_resumes(keys, auth_setti
     adapter = FakeMcpAdapter()
 
     with TestClient(create_app(settings=auth_settings)) as client:
-        workspace_id, base, agent_id = create_runtime(
+        _workspace_id, base, agent_id = create_runtime(
             client, keys, owner, admin, member, "Approval workspace"
         )
         register_tool(client, keys, base, admin, "dangerous-delete", "destructive")
