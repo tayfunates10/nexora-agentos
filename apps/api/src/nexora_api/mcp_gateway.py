@@ -185,7 +185,10 @@ class McpGateway:
             existing = await existing_result.fetchone()
             if existing:
                 tool_call_id = existing["id"]
-                if existing["tool_name"] != spec.name or existing["arguments_hash"] != arguments_hash:
+                if (
+                    existing["tool_name"] != spec.name
+                    or existing["arguments_hash"] != arguments_hash
+                ):
                     raise ToolGatewayError("tool_idempotency_conflict")
                 if existing["status"] == "succeeded":
                     return ToolCallOutcome(
