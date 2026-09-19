@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from nexora_api.auth import Principal, verify_token
 from nexora_api.config import Settings
 from nexora_api.main import create_app
-from nexora_api.workspaces import Permission, Role, authorize
+from nexora_api.workspaces import GRANTS, Permission, Role, authorize
 
 
 @pytest.fixture(scope="session")
@@ -127,13 +127,7 @@ def test_verified_me_and_claims_do_not_grant_roles(keys, auth_settings):
 @pytest.mark.parametrize(
     "role,permission,allowed",
     [
-        (
-            role,
-            permission,
-            role == Role.OWNER
-            or permission == Permission.READ
-            or (role == Role.ADMIN and permission == Permission.UPDATE),
-        )
+        (role, permission, permission in GRANTS[role])
         for role in Role
         for permission in Permission
     ],

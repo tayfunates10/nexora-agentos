@@ -17,11 +17,13 @@ CI rejects skill drift so every supported coding agent receives the same project
 
 ## Development status
 
-The first application milestone provides a Next.js service-health panel, typed FastAPI
-health endpoints, PostgreSQL/pgvector and Redis infrastructure. The API now includes verified bearer identities, workspace creation/listing/renaming,
-and owner/admin/member authorization. Browser login and workspace management UI are implemented but require identity-provider
-configuration. Agent execution and MCP integration are **not implemented yet**.
-See [architecture and roadmap](docs/architecture/0001-foundation.md).
+The platform provides a Next.js control plane, typed FastAPI APIs, PostgreSQL/pgvector and
+Redis infrastructure. The API includes verified bearer identities, workspace RBAC, browser OIDC
+sessions, workspace-scoped agent definitions, durable queued runs, append-only run events,
+idempotency and a transactional PostgreSQL outbox. Outbox jobs can be dispatched to Redis, but
+the worker state machine, model execution and MCP tools are **not implemented yet**.
+See [architecture and roadmap](docs/architecture/0001-foundation.md) and
+[agent run architecture](docs/architecture/0004-agent-runs-outbox.md).
 
 ## Run locally with Docker Compose
 
@@ -118,6 +120,28 @@ owner is blocked. This endpoint changes database membership; it does not send in
 The web panel includes browser sign-in and workspace management (setup below).
 Rate limiting, automatic key rotation and production database
 role separation remain deployment work before public exposure.
+
+## Agent definitions and durable runs
+
+Owners and admins can create agent definitions. Any current workspace member can start a run.
+Run creation requires an `Idempotency-Key`; replaying the same request returns the existing run
+instead of duplicating work. The initial run, append-only event, security audit and outbox job
+are committed atomically.
+
+The outbox publisher sends identifier-only jobs to Redis. Prompt/input content remains in
+PostgreSQL and is not copied into the queue. The current milestone stops at durable queueing:
+there is no model call, tool execution or autonomous loop yet.
+
+Use `/docs` for the full schema. Core endpoints are:
+
+- `POST /api/v1/workspaces/{workspace_id}/agents`
+- `GET /api/v1/workspaces/{workspace_id}/agents`
+- `POST /api/v1/workspaces/{workspace_id}/runs`
+- `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}`
+- `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}/events`
+
+See [ADR 0004](docs/architecture/0004-agent-runs-outbox.md) for state, idempotency,
+at-least-once delivery and trust-boundary details.
 
 ## Browser sign-in and workspace management
 
