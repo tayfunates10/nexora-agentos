@@ -8,7 +8,7 @@ from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from nexora_api.config import Settings
-from nexora_api.mcp_gateway import ApprovalRequired
+from nexora_api.mcp_gateway import ApprovalRequired, McpGatewayError
 from nexora_api.outbox import QUEUE_STREAM, OutboxPublisher
 from nexora_api.run_state import ExecutionContext, RunStateStore, WorkerJob
 
@@ -160,6 +160,10 @@ class AgentWorker:
                 self.worker_id,
                 exc.tool_call_id,
                 exc.approval_id,
+            )
+        except McpGatewayError as exc:
+            handled = await self.state.complete_failure(
+                job, self.worker_id, exc.code, retryable=exc.retryable
             )
         except RetryableExecutionError as exc:
             handled = await self.state.complete_failure(
