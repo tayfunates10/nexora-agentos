@@ -177,12 +177,15 @@ def test_evaluation_judge_unknown_labels_collapse():
         "Bad Provider", "unexpected-target", "unexpected-outcome", 0.1
     )
 
-    assert sample(
-        "nexora_evaluation_judge_calls_total",
-        provider="other",
-        target="other",
-        outcome="other",
-    ) == before + 1
+    assert (
+        sample(
+            "nexora_evaluation_judge_calls_total",
+            provider="other",
+            target="other",
+            outcome="other",
+        )
+        == before + 1
+    )
 
 def test_approval_wait_is_only_observed_for_real_waits():
     before = sample("nexora_approval_wait_seconds_count", decision="approved")
