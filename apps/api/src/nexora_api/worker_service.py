@@ -17,9 +17,9 @@ from redis.asyncio import Redis
 
 from nexora_api.config import Settings
 from nexora_api.embeddings import OpenAIEmbeddingsAdapter
+from nexora_api.evaluation_judge_worker import EvaluationJudgeWorker
 from nexora_api.executor import DurableAgentExecutor
 from nexora_api.executor_store import ExecutorStore
-from nexora_api.evaluation_judge_worker import EvaluationJudgeWorker
 from nexora_api.knowledge_worker import KnowledgeIngestionWorker
 from nexora_api.logs import context as log_context
 from nexora_api.logs import logger
