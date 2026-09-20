@@ -46,6 +46,11 @@ class StubRepository:
         if self.reject:
             raise PermissionError("denied")
 
+    async def authorize_ann_index(self, embedding_model, dimensions):
+        self.events.append("authorize_ann_index")
+        if self.reject:
+            raise RuntimeError("missing ann index")
+
     async def retrieve(self, principal, workspace_id, **kwargs):
         self.events.append("retrieve")
         self.retrieve_kwargs = kwargs
@@ -135,6 +140,31 @@ def test_hybrid_pipeline_passes_query_text_and_vector_mode_does_not():
         )
     )
     assert vector_repository.retrieve_kwargs["query_text"] is None
+
+
+def test_missing_ann_index_fails_before_paid_embedding():
+    events = []
+    adapter = StubAdapter(events)
+    pipeline = RagEmbeddingPipeline(
+        StubRepository(events, reject=True),
+        adapter,
+        embedding_model="embed-test",
+        dimensions=3,
+        ann_enabled=True,
+    )
+
+    with pytest.raises(RuntimeError, match="missing ann index"):
+        asyncio.run(
+            pipeline.retrieve(
+                principal(),
+                uuid4(),
+                query="indexed query",
+                request_id="ann-preflight",
+            )
+        )
+
+    assert events == ["authorize_retrieve", "authorize_ann_index"]
+    assert adapter.calls == 0
 
 
 def test_unauthorized_retrieval_cannot_trigger_paid_embedding():
