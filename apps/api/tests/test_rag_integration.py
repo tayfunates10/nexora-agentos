@@ -5,9 +5,9 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
-from psycopg import sql
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from psycopg import sql
 from test_auth import token
 
 from nexora_api.auth import Principal
