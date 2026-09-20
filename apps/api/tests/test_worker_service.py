@@ -6,7 +6,7 @@ from test_health import StubProbe
 
 from nexora_api.config import Settings
 from nexora_api.worker_main import create_admin_app
-from nexora_api.worker_service import WorkerRuntime
+from nexora_api.worker_service import WorkerRuntime, close_provider_adapters
 
 TOKEN = "worker-scrape-token-long-enough-01"
 
@@ -141,3 +141,35 @@ def test_worker_admin_surface_exposes_no_tenant_api():
     with TestClient(app) as client:
         assert client.get("/api/v1/workspaces").status_code == 404
         assert client.get("/docs").status_code == 404
+
+
+class ClosableAdapter:
+    def __init__(self, name="test", failing=False):
+        self.name = name
+        self.closed = False
+        self.failing = failing
+
+    async def aclose(self):
+        if self.failing:
+            raise RuntimeError("transport already gone")
+        self.closed = True
+
+
+def test_shutdown_releases_adapter_connections():
+    adapters = {"a": ClosableAdapter("a"), "b": ClosableAdapter("b")}
+
+    asyncio.run(close_provider_adapters(adapters))
+
+    assert all(adapter.closed for adapter in adapters.values())
+
+
+def test_a_failing_close_does_not_block_shutdown():
+    adapters = {"broken": ClosableAdapter("broken", failing=True), "ok": ClosableAdapter("ok")}
+
+    asyncio.run(close_provider_adapters(adapters))
+
+    assert adapters["ok"].closed
+
+
+def test_adapters_without_a_close_hook_are_skipped():
+    asyncio.run(close_provider_adapters({"plain": object()}))

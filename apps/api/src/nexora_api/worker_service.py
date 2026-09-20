@@ -82,6 +82,21 @@ def build_worker(
     )
 
 
+async def close_provider_adapters(adapters: dict[str, ProviderAdapter]) -> None:
+    """Release adapter-owned connections on shutdown; a closing failure must not block exit."""
+    for adapter in adapters.values():
+        closer = getattr(adapter, "aclose", None)
+        if closer is None:
+            continue
+        try:
+            await closer()
+        except Exception:
+            service_log.warning(
+                "adapter close failed",
+                extra=log_context(provider=getattr(adapter, "name", None), outcome="ignored"),
+            )
+
+
 class WorkerRuntime:
     """Runs one AgentWorker until stopped, with idle and failure backoff."""
 

@@ -24,7 +24,13 @@ from nexora_api.logs import configure_logging, logger
 from nexora_api.logs import context as log_context
 from nexora_api.runtime_config import RuntimeConfigError
 from nexora_api.telemetry import configure_telemetry
-from nexora_api.worker_service import WorkerRuntime, build_worker, load_worker_config
+from nexora_api.worker_service import (
+    WorkerRuntime,
+    build_provider_adapters,
+    build_worker,
+    close_provider_adapters,
+    load_worker_config,
+)
 
 SERVICE = "nexora-worker"
 main_log = logger("worker.main")
@@ -81,7 +87,8 @@ async def serve(settings: Settings) -> None:
         socket_timeout=settings.dependency_timeout_seconds,
         socket_connect_timeout=settings.dependency_timeout_seconds,
     )
-    worker = build_worker(settings, config, redis)
+    adapters = build_provider_adapters(settings, config)
+    worker = build_worker(settings, config, redis, adapters=adapters)
     runtime = WorkerRuntime(worker, settings)
     admin = create_admin_app(settings, DependencyProbe(settings, redis))
     server = uvicorn.Server(
@@ -110,6 +117,7 @@ async def serve(settings: Settings) -> None:
         server.should_exit = True
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait_for(admin_task, timeout=settings.worker_shutdown_grace_seconds)
+        await close_provider_adapters(adapters)
         await redis.aclose()
 
 
