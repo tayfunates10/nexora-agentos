@@ -1127,6 +1127,51 @@ def test_a_rejected_or_redirected_notification_is_abandoned_without_retrying(key
         client.__exit__(None, None, None)
 
 
+def test_lost_delivery_lease_does_not_emit_false_retry_metric(keys, auth_settings):
+    migrate(auth_settings)
+    client, headers, workspace_id = alert_workspace(keys, auth_settings, "alert-lost-lease")
+    try:
+        retry_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_spend_alert_deliveries_total", {"outcome": "retry"}
+            )
+            or 0.0
+        )
+        worker, transport = notifier(
+            auth_settings,
+            lambda request: httpx.Response(503),
+            worker_id="lease-loser",
+        )
+
+        async def lose_lease():
+            row = await worker._claim()
+            assert row is not None
+            with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+                connection.execute(
+                    """UPDATE workspace_spend_alert_outbox
+                       SET lease_owner='replacement-worker'
+                       WHERE alert_id=%s""",
+                    (row["alert_id"],),
+                )
+            await worker._fail(row, "alert_unavailable", retryable=True)
+            await transport.aclose()
+
+        asyncio.run(lose_lease())
+
+        assert (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_spend_alert_deliveries_total", {"outcome": "retry"}
+            )
+            or 0.0
+        ) == retry_before
+        row = outbox_row(auth_settings, workspace_id)[0]
+        assert row[1] == 0
+        assert row[4] is None
+        assert row[5] == "replacement-worker"
+    finally:
+        client.__exit__(None, None, None)
+
+
 def test_an_unavailable_receiver_is_retried_then_abandoned(keys, auth_settings):
     migrate(auth_settings)
     client, headers, workspace_id = alert_workspace(keys, auth_settings, "alert-retry")
