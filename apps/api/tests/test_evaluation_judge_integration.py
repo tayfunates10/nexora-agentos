@@ -244,22 +244,34 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
             == 404
         )
 
-        judge_calls_before = metrics.REGISTRY.get_sample_value(
-            "nexora_evaluation_judge_calls_total",
-            {"provider": "test", "target": "candidate", "outcome": "success"},
-        ) or 0.0
-        judge_jobs_before = metrics.REGISTRY.get_sample_value(
-            "nexora_evaluation_judge_jobs_total",
-            {"outcome": "succeeded"},
-        ) or 0.0
-        model_calls_before = metrics.REGISTRY.get_sample_value(
-            "nexora_model_calls_total",
-            {"provider": "test", "outcome": "success"},
-        ) or 0.0
-        model_output_before = metrics.REGISTRY.get_sample_value(
-            "nexora_model_tokens_total",
-            {"provider": "test", "kind": "output"},
-        ) or 0.0
+        judge_calls_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_calls_total",
+                {"provider": "test", "target": "candidate", "outcome": "success"},
+            )
+            or 0.0
+        )
+        judge_jobs_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_jobs_total",
+                {"outcome": "succeeded"},
+            )
+            or 0.0
+        )
+        model_calls_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_model_calls_total",
+                {"provider": "test", "outcome": "success"},
+            )
+            or 0.0
+        )
+        model_output_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_model_tokens_total",
+                {"provider": "test", "kind": "output"},
+            )
+            or 0.0
+        )
 
         adapter = StubJudgeAdapter()
         worker = EvaluationJudgeWorker(
@@ -307,22 +319,34 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
         assert len(adapter.calls) == 4
         assert all(call[2]["additionalProperties"] is False for call in adapter.calls)
         assert all(result["quality_delta_milli"] == 750 for result in payload["results"])
-        assert metrics.REGISTRY.get_sample_value(
-            "nexora_evaluation_judge_calls_total",
-            {"provider": "test", "target": "candidate", "outcome": "success"},
-        ) == judge_calls_before + 2
-        assert metrics.REGISTRY.get_sample_value(
-            "nexora_evaluation_judge_jobs_total",
-            {"outcome": "succeeded"},
-        ) == judge_jobs_before + 1
-        assert metrics.REGISTRY.get_sample_value(
-            "nexora_model_calls_total",
-            {"provider": "test", "outcome": "success"},
-        ) == model_calls_before + 4
-        assert metrics.REGISTRY.get_sample_value(
-            "nexora_model_tokens_total",
-            {"provider": "test", "kind": "output"},
-        ) == model_output_before + 20
+        assert (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_calls_total",
+                {"provider": "test", "target": "candidate", "outcome": "success"},
+            )
+            == judge_calls_before + 2
+        )
+        assert (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_jobs_total",
+                {"outcome": "succeeded"},
+            )
+            == judge_jobs_before + 1
+        )
+        assert (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_model_calls_total",
+                {"provider": "test", "outcome": "success"},
+            )
+            == model_calls_before + 4
+        )
+        assert (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_model_tokens_total",
+                {"provider": "test", "kind": "output"},
+            )
+            == model_output_before + 20
+        )
 
         latest_completed = client.get(
             base + f"/eval-runs/{candidate_id}/judge-runs/latest",
@@ -356,17 +380,23 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
                 (expired_id,),
             )
 
-        failed_before = metrics.REGISTRY.get_sample_value(
-            "nexora_evaluation_judge_jobs_total",
-            {"outcome": "failed"},
-        ) or 0.0
+        failed_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_jobs_total",
+                {"outcome": "failed"},
+            )
+            or 0.0
+        )
         calls_before = len(adapter.calls)
         assert asyncio.run(worker.process_once()) is False
         assert len(adapter.calls) == calls_before
-        assert metrics.REGISTRY.get_sample_value(
-            "nexora_evaluation_judge_jobs_total",
-            {"outcome": "failed"},
-        ) == failed_before + 1
+        assert (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_jobs_total",
+                {"outcome": "failed"},
+            )
+            == failed_before + 1
+        )
         with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
             expired_row = connection.execute(
                 "SELECT status,error_code,attempt_count FROM eval_judge_runs WHERE id=%s",
@@ -489,14 +519,20 @@ def test_judge_worker_rechecks_permission_before_provider_call(keys, auth_settin
             == 200
         )
 
-        failed_jobs_before = metrics.REGISTRY.get_sample_value(
-            "nexora_evaluation_judge_jobs_total",
-            {"outcome": "failed"},
-        ) or 0.0
-        judge_calls_before = metrics.REGISTRY.get_sample_value(
-            "nexora_evaluation_judge_calls_total",
-            {"provider": "test", "target": "candidate", "outcome": "success"},
-        ) or 0.0
+        failed_jobs_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_jobs_total",
+                {"outcome": "failed"},
+            )
+            or 0.0
+        )
+        judge_calls_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_calls_total",
+                {"provider": "test", "target": "candidate", "outcome": "success"},
+            )
+            or 0.0
+        )
 
         adapter = StubJudgeAdapter()
         worker = EvaluationJudgeWorker(
@@ -512,10 +548,13 @@ def test_judge_worker_rechecks_permission_before_provider_call(keys, auth_settin
         )
         assert asyncio.run(worker.process_once()) is True
         assert adapter.calls == []
-        assert metrics.REGISTRY.get_sample_value(
-            "nexora_evaluation_judge_jobs_total",
-            {"outcome": "failed"},
-        ) == failed_jobs_before + 1
+        assert (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_jobs_total",
+                {"outcome": "failed"},
+            )
+            == failed_jobs_before + 1
+        )
         assert (
             metrics.REGISTRY.get_sample_value(
                 "nexora_evaluation_judge_calls_total",
