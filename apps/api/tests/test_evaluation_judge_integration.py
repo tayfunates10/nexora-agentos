@@ -305,11 +305,14 @@ def test_judge_worker_rechecks_permission_before_provider_call(keys, auth_settin
             headers=headers(owner),
         ).json()["id"]
         base = f"/api/v1/workspaces/{workspace_id}"
-        assert client.put(
-            base + "/members",
-            json={"subject": admin, "role": "admin"},
-            headers=headers(owner),
-        ).status_code == 200
+        assert (
+            client.put(
+                base + "/members",
+                json={"subject": admin, "role": "admin"},
+                headers=headers(owner),
+            ).status_code
+            == 200
+        )
         suite_id = client.post(
             base + "/eval-suites",
             json={
@@ -380,11 +383,14 @@ def test_judge_worker_rechecks_permission_before_provider_call(keys, auth_settin
         assert judge.status_code == 202
         judge_run_id = judge.json()["id"]
 
-        assert client.put(
-            base + "/members",
-            json={"subject": admin, "role": "member"},
-            headers=headers(owner),
-        ).status_code == 200
+        assert (
+            client.put(
+                base + "/members",
+                json={"subject": admin, "role": "member"},
+                headers=headers(owner),
+            ).status_code
+            == 200
+        )
 
         adapter = StubJudgeAdapter()
         worker = EvaluationJudgeWorker(
