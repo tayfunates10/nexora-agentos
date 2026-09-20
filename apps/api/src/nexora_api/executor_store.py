@@ -52,12 +52,12 @@ class ExecutorStore(RunStateStore):
                 raise ToolContractError("retrieval_snapshot_unavailable")
             expected_query_hash = hashlib.sha256(context.input_text.encode("utf-8")).hexdigest()
             if row["query_hash"] != expected_query_hash:
-                raise RuntimeError("retrieval snapshot query mismatch")
+                raise ToolContractError("retrieval_snapshot_unavailable")
             if (
                 hashlib.sha256(row["context_text"].encode("utf-8")).hexdigest()
                 != row["context_hash"]
             ):
-                raise RuntimeError("retrieval snapshot context hash mismatch")
+                raise ToolContractError("retrieval_snapshot_unavailable")
             if row["chunk_count"]:
                 visible = await connection.execute(
                     """SELECT p.position
