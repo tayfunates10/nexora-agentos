@@ -90,7 +90,7 @@ def test_agent_run_eval_import_is_requester_scoped_and_fail_closed(keys, auth_se
                         UUID(workspace_id),
                         "Evaluation agent",
                         "Answer safely.",
-                        "https://issuer.test",
+                        auth_settings.auth_issuer,
                         admin,
                     ),
                 )
@@ -104,7 +104,7 @@ def test_agent_run_eval_import_is_requester_scoped_and_fail_closed(keys, auth_se
                         run_id,
                         UUID(workspace_id),
                         agent_id,
-                        "https://issuer.test",
+                        auth_settings.auth_issuer,
                         subject,
                         input_text,
                         "a" * 64,
