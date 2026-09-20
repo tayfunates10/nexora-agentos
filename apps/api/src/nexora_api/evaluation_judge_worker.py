@@ -18,12 +18,14 @@ from nexora_api.evaluation_judge import (
     JUDGE_SYSTEM_PROMPT,
     JudgeScores,
 )
+from nexora_api.model_costs import ModelCostError, record_model_usage_cost
 from nexora_api.metrics import (
     observe_evaluation_judge_call,
     observe_evaluation_judge_job,
     observe_model_call,
 )
 from nexora_api.model_routing import (
+    ModelPricing,
     ProviderAdapter,
     ProviderError,
     ProviderMessage,
@@ -59,6 +61,7 @@ class EvaluationJudgeWorker:
         config: EvaluationJudgeConfig,
         *,
         worker_id: str,
+        pricing: ModelPricing | None = None,
         lease_seconds: int = 30,
     ):
         if not 3 <= lease_seconds <= 300:
@@ -68,6 +71,7 @@ class EvaluationJudgeWorker:
         self.settings = settings
         self.adapter = adapter
         self.config = config
+        self.pricing = pricing
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
         self.workspaces = WorkspaceRepository(settings)
@@ -399,6 +403,32 @@ class EvaluationJudgeWorker:
             response.usage.input_tokens,
             response.usage.output_tokens,
         )
+        try:
+            async with self.connection() as connection:
+                await record_model_usage_cost(
+                    connection,
+                    workspace_id=job["workspace_id"],
+                    source_kind=(
+                        "eval_judge_candidate"
+                        if target == "candidate"
+                        else "eval_judge_baseline"
+                    ),
+                    provider_request_id=request.request_id,
+                    attempt_count=job["attempt_count"],
+                    judge_run_id=job["id"],
+                    eval_run_id=job["eval_run_id"],
+                    case_id=case_id,
+                    provider=self.config.provider,
+                    model=self.config.model,
+                    usage=response.usage,
+                    pricing=self.pricing,
+                )
+        except ModelCostError as exc:
+            raise JudgeExecutionError(exc.code, retryable=exc.retryable) from exc
+        except Exception as exc:
+            raise JudgeExecutionError(
+                "cost_accounting_unavailable", retryable=True
+            ) from exc
         if (
             response.finish_reason != "stop"
             or response.tool_calls
