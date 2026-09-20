@@ -21,6 +21,17 @@ function delta(value: number | null): string {
   return (points > 0 ? "+" : "") + points.toFixed(1) + " pts";
 }
 
+function usdFromPicos(value: string | null, complete: boolean): string {
+  if (!complete || value === null) return "Unpriced";
+  const picos = BigInt(value);
+  const whole = picos / 1_000_000_000_000n;
+  const fraction = (picos % 1_000_000_000_000n)
+    .toString()
+    .padStart(12, "0")
+    .replace(/0+$/, "");
+  return "$" + whole + (fraction ? "." + fraction : "");
+}
+
 function JudgeSummary({ judge }: { judge: EvalJudgeRun }) {
   const stateClass = judge.status === "succeeded"
     ? "state up"
@@ -36,6 +47,15 @@ function JudgeSummary({ judge }: { judge: EvalJudgeRun }) {
     {judge.judge_model && <p className="notice">
       Pinned judge: {judge.judge_provider}/{judge.judge_model} · {judge.prompt_version}
     </p>}
+    <p className="notice">
+      Model cost: {usdFromPicos(
+        judge.model_cost_usd_picos,
+        judge.model_cost_pricing_complete,
+      )} · provider responses: {judge.model_cost_call_count}
+      {judge.model_cost_pricing_versions.length > 0
+        ? " · pricing: " + judge.model_cost_pricing_versions.join(", ")
+        : ""}
+    </p>
     {judge.status === "succeeded" && <p className="notice">
       Judge regressions: {judge.regression_count} · improvements: {judge.improvement_count}
       {" · "}tokens: {judge.input_tokens + judge.output_tokens}
