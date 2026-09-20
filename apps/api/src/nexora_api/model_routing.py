@@ -29,12 +29,28 @@ class ProviderError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class ModelPricing:
+    version: str
+    input_usd_micros_per_million_tokens: int
+    output_usd_micros_per_million_tokens: int
+
+    def cost_usd_picos(self, input_tokens: int, output_tokens: int) -> int:
+        if input_tokens < 0 or output_tokens < 0:
+            raise ValueError("token usage cannot be negative")
+        return (
+            input_tokens * self.input_usd_micros_per_million_tokens
+            + output_tokens * self.output_usd_micros_per_million_tokens
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ModelCandidate:
     provider: str
     model: str
     capabilities: frozenset[ModelCapability]
     quality_tier: int = 1
     estimated_cost_per_million_tokens: int = 0
+    pricing: ModelPricing | None = None
 
 
 @dataclass(frozen=True, slots=True)
