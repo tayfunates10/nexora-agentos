@@ -1,23 +1,25 @@
 import asyncio
 import os
 from dataclasses import replace
-from uuid import UUID
+from uuid import UUID, uuid4
 
+import psycopg
 import pytest
-from redis.asyncio import Redis
-from test_executor import Adapter, response
-from test_tool_governance_integration import clear_unpublished_outbox
-from test_worker_integration import make_runtime
-
 from nexora_api.execution_fence import executable_run
 from nexora_api.executor import DurableAgentExecutor, ExecutionProfile
 from nexora_api.executor_store import ExecutorStore
 from nexora_api.mcp_gateway import McpGateway
-from nexora_api.migrate import migrate
 from nexora_api.model_routing import ModelCandidate, ModelCapability, ModelRouter
 from nexora_api.outbox import QUEUE_STREAM
 from nexora_api.tool_contracts import ToolContractError
 from nexora_api.worker import AgentWorker
+from redis.asyncio import Redis
+from test_auth import token
+from test_executor import Adapter, response
+from test_tool_governance_integration import clear_unpublished_outbox
+from test_worker_integration import make_runtime
+
+from nexora_api.migrate import migrate
 
 pytestmark = [
     pytest.mark.integration,
@@ -31,6 +33,9 @@ def test_durable_executor_worker_and_attempt_fence(keys, auth_settings):
     migrate(auth_settings)
     clear_unpublished_outbox(auth_settings)
     client, headers, workspace_id, run_id = make_runtime(keys, auth_settings, "durable-executor")
+    base = f"/api/v1/workspaces/{workspace_id}"
+    result_path = base + f"/runs/{run_id}/result"
+    assert client.get(result_path, headers=headers()).status_code == 409
     provider = Adapter([response("Persisted answer")])
     store = ExecutorStore(auth_settings)
     executor = DurableAgentExecutor(
@@ -77,5 +82,55 @@ def test_durable_executor_worker_and_attempt_fence(keys, auth_settings):
         result = client.get(f"/api/v1/workspaces/{workspace_id}/runs/{run_id}", headers=headers())
         assert result.json()["status"] == "succeeded", result.text
         assert len(provider.requests) == 1
+        saved = client.get(result_path, headers=headers())
+        assert saved.status_code == 200, saved.text
+        assert saved.headers["cache-control"] == "no-store"
+        assert saved.json()["output_text"] == "Persisted answer"
+        assert saved.json()["finish_reason"] == "stop"
+        assert saved.json()["recorded_input_tokens"] == 10
+        assert saved.json()["recorded_output_tokens"] == 1
+        assert saved.json()["model_steps"][0]["model"] == "test-model"
+        assert "response" not in saved.json()["model_steps"][0]
+        assert client.get(result_path).status_code == 401
+        assert client.get(base + f"/runs/{uuid4()}/result", headers=headers()).status_code == 404
+        assert (
+            client.get(
+                f"/api/v1/workspaces/{uuid4()}/runs/{run_id}/result", headers=headers()
+            ).status_code
+            == 404
+        )
+
+        admin, member = str(uuid4()), str(uuid4())
+        for subject, role in ((admin, "admin"), (member, "member")):
+            granted = client.put(
+                base + "/members", json={"subject": subject, "role": role}, headers=headers()
+            )
+            assert granted.status_code == 200
+            other_headers = {"Authorization": "Bearer " + token(keys, subject)}
+            assert client.get(result_path, headers=other_headers).status_code == 404
+
+        member_headers = {"Authorization": "Bearer " + token(keys, member)}
+        created = client.post(
+            base + "/runs",
+            json={"agent_id": result.json()["agent_id"], "input": "Cancel before execution."},
+            headers={**member_headers, "Idempotency-Key": str(uuid4())},
+        )
+        assert created.status_code == 201, created.text
+        member_run_id = created.json()["id"]
+        cancelled = client.post(base + f"/runs/{member_run_id}/cancel", headers=member_headers)
+        assert cancelled.status_code == 200
+        member_result_path = base + f"/runs/{member_run_id}/result"
+        member_result = client.get(member_result_path, headers=member_headers)
+        assert member_result.status_code == 200, member_result.text
+        assert member_result.json()["status"] == "cancelled"
+        assert member_result.json()["output_text"] is None
+        assert member_result.json()["model_steps"] == []
+        assert client.get(member_result_path, headers=headers()).status_code == 404
+        with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+            connection.execute(
+                "DELETE FROM workspace_memberships WHERE workspace_id=%s AND subject=%s",
+                (workspace_id, member),
+            )
+        assert client.get(member_result_path, headers=member_headers).status_code == 404
     finally:
         client.__exit__(None, None, None)

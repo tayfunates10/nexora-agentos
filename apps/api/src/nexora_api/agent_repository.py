@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 from nexora_api.agents import AgentDefinition, AgentInput, AgentRun, RunEvent, RunInput
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
+from nexora_api.run_results import summarize_result
 from nexora_api.runtime_events import append_run_event
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission, authorize
@@ -220,6 +221,34 @@ class AgentRuntimeRepository:
             if not row:
                 raise HTTPException(404)
             return self.run(row)
+
+    async def get_result(self, principal: Principal, workspace_id: UUID, run_id: UUID):
+        async with self.connection() as connection:
+            await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
+            # Results can contain requester-scoped RAG evidence. Workspace admin does not
+            # imply permission to another requester's source content.
+            result = await connection.execute(
+                """SELECT id,workspace_id,agent_id,trace_id,status,failure_code
+                   FROM agent_runs
+                   WHERE workspace_id=%s AND id=%s
+                     AND requested_by_issuer=%s AND requested_by_subject=%s
+                   FOR SHARE""",
+                (workspace_id, run_id, principal.issuer, principal.subject),
+            )
+            run = await result.fetchone()
+            if not run:
+                raise HTTPException(404)
+            if run["status"] not in ("succeeded", "failed", "cancelled"):
+                raise HTTPException(409, "run_result_not_ready")
+            steps = await connection.execute(
+                """SELECT step_no,provider,model,response FROM agent_model_steps
+                   WHERE workspace_id=%s AND run_id=%s ORDER BY step_no LIMIT 33""",
+                (workspace_id, run_id),
+            )
+            try:
+                return summarize_result(run, await steps.fetchall())
+            except (ValueError, KeyError, TypeError) as exc:
+                raise HTTPException(409, "run_result_unavailable") from exc
 
     async def cancel_run(self, principal, workspace_id, run_id, request_id):
         async with self.connection() as connection:

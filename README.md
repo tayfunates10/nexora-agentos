@@ -236,12 +236,23 @@ Use `/docs` for the full schema. Core endpoints are:
 - `GET /api/v1/workspaces/{workspace_id}/agents`
 - `POST /api/v1/workspaces/{workspace_id}/runs`
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}`
+- `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}/result` (original requester only)
 - `POST /api/v1/workspaces/{workspace_id}/runs/{run_id}/cancel`
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}/events`
 
 See [ADR 0004](docs/architecture/0004-agent-runs-outbox.md) for persistence/outbox semantics and
 [ADR 0005](docs/architecture/0005-worker-state-machine.md) for worker state transitions,
 at-least-once delivery, leases, retry, cancellation and recovery.
+
+The result endpoint requires current workspace membership and the original requester identity;
+owner/admin status does not grant access to another user's raw answer. Successful runs return the
+final text and explicit stop/refusal reason. Failed/cancelled runs return no partial answer.
+Nonterminal runs and incomplete success journals return HTTP 409.
+
+Results also include model-step metadata, recorded token totals and model-selected tool names.
+Token totals cover persisted responses only; tool selection does not imply execution or approval.
+Arguments, intermediate text and tool outputs are omitted. This endpoint does not automatically
+create evaluations. See [ADR 0019](docs/architecture/0019-agent-run-results.md).
 
 ## Governed MCP tools and approvals
 
