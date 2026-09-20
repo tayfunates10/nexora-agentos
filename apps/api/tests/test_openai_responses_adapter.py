@@ -16,7 +16,6 @@ from nexora_api.model_routing import (
 )
 from nexora_api.openai_responses import OpenAIResponsesAdapter
 
-
 CAPABILITIES = frozenset(
     {
         ModelCapability.TEXT,
