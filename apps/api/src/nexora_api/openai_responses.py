@@ -68,7 +68,10 @@ class OpenAIResponsesAdapter:
                 timeout=timeout_seconds,
             )
             self._raise_for_status(response)
-            return self._parse_response(self._decode_json(response))
+            return self._parse_response(
+                self._decode_json(response),
+                structured=request.response_schema is not None,
+            )
         except asyncio.CancelledError as exc:
             raise ProviderError("provider_cancelled") from exc
         except httpx.TimeoutException as exc:
@@ -220,7 +223,12 @@ class OpenAIResponsesAdapter:
             raise ProviderError("provider_bad_request")
         raise ProviderError("provider_http_error")
 
-    def _parse_response(self, data: dict[str, Any]) -> ProviderResponse:
+    def _parse_response(
+        self,
+        data: dict[str, Any],
+        *,
+        structured: bool,
+    ) -> ProviderResponse:
         status = data.get("status")
         if status == "failed":
             raise ProviderError("provider_failed")
@@ -253,7 +261,7 @@ class OpenAIResponsesAdapter:
 
         text = "".join(text_parts) or None
         structured_output = None
-        if text is not None and data.get("text") is not None:
+        if text is not None and structured:
             structured_output = self._parse_structured_text(text)
 
         if refusal:
