@@ -26,6 +26,10 @@ from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
 
+class KnowledgeIngestionLeaseLost(RuntimeError):
+    pass
+
+
 class RagRepository:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -270,6 +274,9 @@ class RagRepository:
         metadata: dict[str, Any] | None = None,
         max_chars: int = 1200,
         overlap_chars: int = 120,
+        ingestion_job_id: UUID | None = None,
+        ingestion_worker_id: str | None = None,
+        embedding_input_tokens: int | None = None,
     ) -> UUID:
         self._validate_source_fields(source_key, version, title, embedding_model)
         normalized = normalize_document(text)
@@ -293,6 +300,13 @@ class RagRepository:
         if access_scope == AccessScope.WORKSPACE and identities:
             raise ValueError("workspace sources must not include explicit ACL identities")
 
+        if (ingestion_job_id is None) != (ingestion_worker_id is None):
+            raise ValueError("ingestion fencing arguments must be provided together")
+        if ingestion_job_id is not None and (
+            embedding_input_tokens is None or embedding_input_tokens < 0
+        ):
+            raise ValueError("embedding_input_tokens is required for ingestion completion")
+
         async with self.connection() as connection:
             await self.workspaces.scoped(
                 connection,
@@ -300,6 +314,27 @@ class RagRepository:
                 workspace_id,
                 Permission.MANAGE_KNOWLEDGE,
             )
+            if ingestion_job_id is not None:
+                fence_result = await connection.execute(
+                    """SELECT id FROM knowledge_ingestion_jobs
+                       WHERE id=%s AND workspace_id=%s AND source_key=%s AND version=%s
+                         AND requested_by_issuer=%s AND requested_by_subject=%s
+                         AND status='running' AND lease_owner=%s
+                         AND lease_expires_at > clock_timestamp()
+                       FOR UPDATE""",
+                    (
+                        ingestion_job_id,
+                        workspace_id,
+                        source_key,
+                        version,
+                        principal.issuer,
+                        principal.subject,
+                        ingestion_worker_id,
+                    ),
+                )
+                if await fence_result.fetchone() is None:
+                    raise KnowledgeIngestionLeaseLost("knowledge_ingestion_lease_lost")
+
             existing_result = await connection.execute(
                 """SELECT id FROM rag_sources
                    WHERE workspace_id=%s AND source_key=%s AND version=%s
@@ -390,6 +425,25 @@ class RagRepository:
                         vector_literal,
                     ),
                 )
+
+            if ingestion_job_id is not None:
+                completed = await connection.execute(
+                    """UPDATE knowledge_ingestion_jobs
+                       SET status='succeeded',source_id=%s,chunk_count=%s,
+                           embedding_input_tokens=%s,lease_owner=NULL,lease_expires_at=NULL,
+                           error_code=NULL,finished_at=now(),updated_at=now()
+                       WHERE id=%s AND status='running' AND lease_owner=%s
+                         AND lease_expires_at > clock_timestamp()""",
+                    (
+                        source_id,
+                        len(chunks),
+                        embedding_input_tokens,
+                        ingestion_job_id,
+                        ingestion_worker_id,
+                    ),
+                )
+                if completed.rowcount != 1:
+                    raise KnowledgeIngestionLeaseLost("knowledge_ingestion_lease_lost")
 
             await self.workspaces.audit(
                 connection,
