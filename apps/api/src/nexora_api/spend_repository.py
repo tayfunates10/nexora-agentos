@@ -99,6 +99,17 @@ async def raise_threshold_alerts(connection, workspace_id: UUID) -> tuple[int, .
     # This helper runs inside whatever transaction is paying for the work, so it
     # reads its own rows rather than trusting that caller's row factory.
     async with connection.cursor(row_factory=tuple_row) as cursor:
+        # Serialize threshold evaluation for this budget until transaction end.
+        # Uniqueness only prevents duplicate alerts; without this lock two writes
+        # can each see a sub-threshold total and both commit without any alert.
+        # NO KEY UPDATE remains compatible with foreign-key KEY SHARE locks.
+        # Keep the aggregate in a separate statement so READ COMMITTED takes a
+        # fresh snapshot after the preceding evaluator commits or rolls back.
+        await cursor.execute(
+            """SELECT workspace_id FROM workspace_spend_budgets
+               WHERE workspace_id=%s FOR NO KEY UPDATE""",
+            (workspace_id,),
+        )
         await cursor.execute(
             f"""WITH budget AS (
                     SELECT monthly_limit_micros,enforcement,alert_thresholds

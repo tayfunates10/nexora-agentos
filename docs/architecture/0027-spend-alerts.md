@@ -27,6 +27,13 @@ evaluation statement inserts every reached threshold and lets the conflict claus
 already exists, so a workspace that makes ten thousand calls after crossing 80% stores one 80% row.
 No worker state, cache or scheduler is involved in that guarantee.
 
+Uniqueness does not prevent a missed crossing: concurrent transactions could each see only their
+own sub-threshold spend. Before evaluating, each transaction locks its budget row with
+`FOR NO KEY UPDATE` until commit or rollback. The aggregate runs in a separate statement under
+READ COMMITTED, so a waiting evaluator sees the preceding committed spend. The lock is scoped
+to one workspace budget and remains compatible with foreign-key key-share locks. Rolled-back
+spend never contributes to the crossing.
+
 The evaluation runs inside the same transaction as the ledger row that caused it, so an alert
 cannot exist for spend that was rolled back, and a spend row cannot commit without its crossing
 being considered. It also runs when a budget is written, because lowering a limit can put a period
@@ -79,6 +86,8 @@ the workspace total, not per category, and there is no per-agent or per-user thr
   further spending in the same band does not repeat it, that a tighter budget raises the next
   threshold without new spend, that an alert keeps the amounts it fired at, that append-only
   mutation is refused, and that a workspace without thresholds never alerts;
+- concurrent PostgreSQL transactions proving two sub-threshold writes raise one alert after
+  commit, a rolled-back write does not contribute, and replay does not charge or alert again;
 - browser coverage for selecting thresholds, reading raised alerts with their amounts, the
   no-thresholds notice, clearing and re-adding thresholds, and alerts not repeating on a second
   budget save.

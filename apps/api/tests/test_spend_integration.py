@@ -823,3 +823,87 @@ def test_a_workspace_without_thresholds_never_alerts(keys, auth_settings):
             (UUID(workspace_id),),
         ).fetchone()[0]
         assert count == 0
+
+
+@pytest.mark.parametrize("commit_first", [True, False])
+def test_concurrent_spend_cannot_miss_a_threshold(keys, auth_settings, commit_first):
+    """Two individually small writes must alert when their committed sum crosses."""
+    migrate(auth_settings)
+    headers = {"Authorization": "Bearer " + token(keys, "concurrent-spend-" + str(uuid4()))}
+    with TestClient(create_app(settings=auth_settings)) as client:
+        workspace_id = UUID(
+            client.post(
+                "/api/v1/workspaces", json={"name": "Concurrent spend"}, headers=headers
+            ).json()["id"]
+        )
+        budget = client.put(
+            f"/api/v1/workspaces/{workspace_id}/spend/budget",
+            json={"monthly_limit_micros": 100, "alert_thresholds": [100]},
+            headers=headers,
+        )
+        assert budget.status_code == 200, budget.text
+
+    async def exercise():
+        dsn = auth_settings.database_url.get_secret_value()
+        async with (
+            await psycopg.AsyncConnection.connect(dsn) as first,
+            await psycopg.AsyncConnection.connect(dsn) as second,
+            await psycopg.AsyncConnection.connect(dsn, autocommit=True) as observer,
+        ):
+
+            async def write(connection, key):
+                return await record_spend(
+                    connection,
+                    workspace_id=workspace_id,
+                    source_key=key,
+                    category="agent_run",
+                    provider="test",
+                    model="test-model",
+                    input_tokens=60,
+                    output_tokens=0,
+                    cost_micros=60,
+                )
+
+            # First has evaluated 60/100, but has not yet committed its ledger row.
+            initial = await write(first, "concurrent:first")
+            assert initial.recorded and initial.alerts == ()
+            pending = asyncio.create_task(write(second, "concurrent:second"))
+            try:
+                # Release the first transaction only after the second reaches the
+                # database lock (or finishes, reproducing the original bug). This
+                # uses actual database state, not a guessed scheduling delay.
+                async with asyncio.timeout(5):
+                    while not pending.done():
+                        cursor = await observer.execute(
+                            "SELECT wait_event_type FROM pg_stat_activity WHERE pid=%s",
+                            (second.info.backend_pid,),
+                        )
+                        row = await cursor.fetchone()
+                        if row and row[0] == "Lock":
+                            break
+                        await asyncio.sleep(0.01)
+                if commit_first:
+                    await first.commit()
+                else:
+                    await first.rollback()
+                following = await asyncio.wait_for(pending, timeout=5)
+                await second.commit()
+            finally:
+                await first.rollback()
+                if not pending.done():
+                    pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+
+            assert following.recorded
+            assert following.alerts == ((100,) if commit_first else ())
+            rows = await observer.execute(
+                """SELECT threshold_percent,consumed_micros FROM workspace_spend_alerts
+                   WHERE workspace_id=%s""",
+                (workspace_id,),
+            )
+            assert await rows.fetchall() == ([(100, 120)] if commit_first else [])
+            # Retry keeps both the ledger and crossing exactly once.
+            replay = await write(second, "concurrent:second")
+            assert not replay.recorded and replay.alerts == ()
+
+    asyncio.run(exercise())
