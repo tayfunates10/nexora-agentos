@@ -7,6 +7,7 @@ from uuid import UUID
 
 from nexora_api import metrics
 from nexora_api.auth import Principal
+from nexora_api.model_costs import ModelCostError
 from nexora_api.model_routing import (
     ModelCapability,
     ModelRouter,
@@ -261,6 +262,10 @@ class DurableAgentExecutor:
                     response,
                     request.request_id,
                 )
+            except ModelCostError as exc:
+                record_error(active, exc.code)
+                error = RetryableExecutionError if exc.retryable else TerminalExecutionError
+                raise error(exc.code) from exc
             except Exception as exc:
                 record_error(active, "cost_accounting_unavailable")
                 raise RetryableExecutionError("cost_accounting_unavailable") from exc
