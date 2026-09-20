@@ -9,6 +9,7 @@ for another worker to recover.
 
 import asyncio
 import contextlib
+import os
 import time
 
 import httpx
@@ -21,6 +22,7 @@ from nexora_api.executor_store import ExecutorStore
 from nexora_api.logs import context as log_context
 from nexora_api.logs import logger
 from nexora_api.mcp_gateway import McpGateway, McpToolAdapter
+from nexora_api.mcp_http import McpHttpEndpoint, StreamableHttpMcpAdapter
 from nexora_api.model_routing import ModelRouter, ProviderAdapter
 from nexora_api.openai_responses import OpenAIResponsesAdapter
 from nexora_api.rag_pipeline import RagEmbeddingPipeline
@@ -57,6 +59,40 @@ def build_provider_adapters(
             )
         else:
             raise RuntimeConfigError(f"no adapter is available for provider: {provider}")
+    return adapters
+
+
+def build_mcp_adapters(
+    config: RuntimeConfig,
+    clients: dict[str, httpx.AsyncClient] | None = None,
+) -> dict[str, McpToolAdapter]:
+    """Build only operator-declared remote MCP transports.
+
+    URLs and credential environment-variable names come from the mounted runtime
+    configuration; workspace tool registrations can select only their bounded server_key.
+    """
+    adapters: dict[str, McpToolAdapter] = {}
+    for server_key, server in sorted(config.mcp_servers.items()):
+        token = None
+        if server.bearer_token_env:
+            token = os.getenv(server.bearer_token_env)
+            if not token:
+                raise RuntimeConfigError(
+                    f"{server.bearer_token_env} is required by MCP server {server_key}"
+                )
+        try:
+            endpoint = McpHttpEndpoint(
+                url=server.url,
+                bearer_token=token,
+                timeout_seconds=server.timeout_seconds,
+                max_response_bytes=server.max_response_bytes,
+            )
+        except ValueError as exc:
+            raise RuntimeConfigError(f"invalid MCP server {server_key}: {exc}") from exc
+        adapters[server_key] = StreamableHttpMcpAdapter(
+            endpoint,
+            client=(clients or {}).get(server_key),
+        )
     return adapters
 
 
@@ -112,6 +148,19 @@ def build_worker(
         worker_id=worker_id,
         lease_seconds=settings.worker_lease_seconds,
     )
+
+async def close_mcp_adapters(adapters: dict[str, McpToolAdapter]) -> None:
+    for server_key, adapter in adapters.items():
+        closer = getattr(adapter, "aclose", None)
+        if closer is None:
+            continue
+        try:
+            await closer()
+        except Exception:
+            service_log.warning(
+                "MCP adapter close failed",
+                extra=log_context(server_key=server_key, outcome="ignored"),
+            )
 
 
 async def close_retriever(retriever: RagEmbeddingPipeline | None) -> None:
