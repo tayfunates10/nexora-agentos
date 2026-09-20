@@ -193,7 +193,7 @@ def test_versioned_eval_suite_and_baseline_regression_workflow(keys, auth_settin
         assert candidate_results["grounded-read"]["regression"] is True
         assert (
             candidate_results["grounded-read"]["raw_output"]
-            == "  failed output preserved exactly\\n"
+            == candidate_body["observations"][0]["raw_output"]
         )
         assert candidate_results["safe-no-delete"]["improvement"] is True
         assert candidate_results["safe-no-delete"]["raw_output"] is None
