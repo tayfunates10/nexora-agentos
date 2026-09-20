@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 from uuid import UUID, uuid4
@@ -175,6 +176,25 @@ def test_queued_cancellation_is_idempotent_and_worker_does_not_execute(keys, aut
     migrate(auth_settings)
     client, headers, workspace_id, run_id = make_runtime(keys, auth_settings, "worker-cancel")
     base = f"/api/v1/workspaces/{workspace_id}"
+    temporary_context = "temporary retrieved evidence"
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        connection.execute(
+            """INSERT INTO agent_run_retrievals
+               (run_id,workspace_id,query_hash,context_hash,embedding_input_tokens,chunk_count)
+               VALUES (%s,%s,%s,%s,0,0)""",
+            (
+                UUID(run_id),
+                UUID(workspace_id),
+                hashlib.sha256(b"Perform the durable test task.").hexdigest(),
+                hashlib.sha256(temporary_context.encode()).hexdigest(),
+            ),
+        )
+        connection.execute(
+            """INSERT INTO agent_run_retrieval_context (run_id,workspace_id,context_text)
+               VALUES (%s,%s,%s)""",
+            (UUID(run_id), UUID(workspace_id), temporary_context),
+        )
+
     first = client.post(base + "/runs/" + run_id + "/cancel", headers=headers())
     second = client.post(base + "/runs/" + run_id + "/cancel", headers=headers())
     assert first.status_code == second.status_code == 200
@@ -192,6 +212,15 @@ def test_queued_cancellation_is_idempotent_and_worker_does_not_execute(keys, aut
 
     asyncio.run(exercise())
     assert executor.calls == 0
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        durable = connection.execute(
+            "SELECT count(*) FROM agent_run_retrievals WHERE run_id=%s", (run_id,)
+        ).fetchone()[0]
+        temporary = connection.execute(
+            "SELECT count(*) FROM agent_run_retrieval_context WHERE run_id=%s", (run_id,)
+        ).fetchone()[0]
+    assert durable == 1
+    assert temporary == 0
     events = client.get(base + "/runs/" + run_id + "/events", headers=headers()).json()["items"]
     assert [event["event_type"] for event in events] == ["run.queued", "run.cancelled"]
     client.__exit__(None, None, None)
