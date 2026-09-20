@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -5,7 +6,12 @@ import pytest
 from nexora_api.config import Settings
 from nexora_api.model_routing import ModelCapability
 from nexora_api.runtime_config import RuntimeConfigError, load_runtime_config
-from nexora_api.worker_service import build_provider_adapters, load_worker_config
+from nexora_api.worker_service import (
+    build_provider_adapters,
+    build_retriever,
+    close_retriever,
+    load_worker_config,
+)
 
 WORKSPACE = "11111111-1111-1111-1111-111111111111"
 
@@ -164,3 +170,46 @@ def test_unsupported_provider_has_no_adapter(tmp_path):
 
     with pytest.raises(RuntimeConfigError, match="no adapter is available"):
         build_provider_adapters(Settings(), config)
+
+
+def test_retrieval_is_opt_in_and_uses_operator_configuration(tmp_path):
+    disabled = load_runtime_config(write(tmp_path, document()))
+    assert build_retriever(Settings(openai_api_key=None), disabled) is None
+
+    enabled_doc = document(
+        retrieval={
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "dimensions": 768,
+            "limit": 6,
+            "batch_size": 64,
+            "timeout_seconds": 9,
+        }
+    )
+    enabled = load_runtime_config(write(tmp_path, enabled_doc))
+
+    with pytest.raises(RuntimeConfigError, match="NEXORA_OPENAI_API_KEY"):
+        build_retriever(Settings(openai_api_key=None), enabled)
+
+    retriever = build_retriever(Settings(openai_api_key="sk-operator-test"), enabled)
+    assert retriever is not None
+    assert retriever.embedding_model == "text-embedding-3-small"
+    assert retriever.dimensions == 768
+    assert retriever.retrieval_limit == 6
+    assert retriever.batch_size == 64
+    assert retriever.timeout_seconds == 9
+    asyncio.run(close_retriever(retriever))
+
+
+@pytest.mark.parametrize(
+    "retrieval",
+    [
+        {"provider": "other", "model": "embed", "dimensions": 768},
+        {"provider": "openai", "model": "embed", "dimensions": 0},
+        {"provider": "openai", "model": "embed", "limit": 51},
+        {"provider": "openai", "model": "embed", "batch_size": 0},
+    ],
+)
+def test_invalid_retrieval_configuration_is_refused(tmp_path, retrieval):
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(write(tmp_path, document(retrieval=retrieval)))

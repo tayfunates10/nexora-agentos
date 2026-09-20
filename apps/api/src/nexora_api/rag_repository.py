@@ -38,6 +38,32 @@ class RagRepository:
         ) as connection:
             yield connection
 
+    async def authorize_manage(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+    ) -> None:
+        async with self.connection() as connection:
+            await self.workspaces.scoped(
+                connection,
+                principal,
+                workspace_id,
+                Permission.MANAGE_KNOWLEDGE,
+            )
+
+    async def authorize_retrieve(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+    ) -> None:
+        async with self.connection() as connection:
+            await self.workspaces.scoped(
+                connection,
+                principal,
+                workspace_id,
+                Permission.READ,
+            )
+
     async def index_source(
         self,
         principal: Principal,

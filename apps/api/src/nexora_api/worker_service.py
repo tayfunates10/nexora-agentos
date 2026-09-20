@@ -15,6 +15,7 @@ import httpx
 from redis.asyncio import Redis
 
 from nexora_api.config import Settings
+from nexora_api.embeddings import OpenAIEmbeddingsAdapter
 from nexora_api.executor import DurableAgentExecutor
 from nexora_api.executor_store import ExecutorStore
 from nexora_api.logs import context as log_context
@@ -22,6 +23,8 @@ from nexora_api.logs import logger
 from nexora_api.mcp_gateway import McpGateway, McpToolAdapter
 from nexora_api.model_routing import ModelRouter, ProviderAdapter
 from nexora_api.openai_responses import OpenAIResponsesAdapter
+from nexora_api.rag_pipeline import RagEmbeddingPipeline
+from nexora_api.rag_repository import RagRepository
 from nexora_api.runtime_config import RuntimeConfig, RuntimeConfigError, load_runtime_config
 from nexora_api.worker import AgentWorker
 
@@ -57,6 +60,33 @@ def build_provider_adapters(
     return adapters
 
 
+def build_retriever(
+    settings: Settings,
+    config: RuntimeConfig,
+    client: httpx.AsyncClient | None = None,
+) -> RagEmbeddingPipeline | None:
+    """Build retrieval only when an operator explicitly enables it."""
+    retrieval = config.retrieval
+    if retrieval is None:
+        return None
+    if settings.openai_api_key is None or not settings.openai_api_key.get_secret_value():
+        raise RuntimeConfigError("NEXORA_OPENAI_API_KEY is required by configured retrieval")
+    adapter = OpenAIEmbeddingsAdapter(
+        api_key=settings.openai_api_key,
+        model_dimensions={retrieval.model: frozenset({retrieval.dimensions})},
+        client=client,
+    )
+    return RagEmbeddingPipeline(
+        RagRepository(settings),
+        adapter,
+        embedding_model=retrieval.model,
+        dimensions=retrieval.dimensions,
+        batch_size=retrieval.batch_size,
+        timeout_seconds=retrieval.timeout_seconds,
+        retrieval_limit=retrieval.limit,
+    )
+
+
 def build_worker(
     settings: Settings,
     config: RuntimeConfig,
@@ -64,6 +94,7 @@ def build_worker(
     *,
     adapters: dict[str, ProviderAdapter] | None = None,
     mcp_adapters: dict[str, McpToolAdapter] | None = None,
+    retriever: RagEmbeddingPipeline | None = None,
     worker_id: str | None = None,
 ) -> AgentWorker:
     executor = DurableAgentExecutor(
@@ -72,6 +103,7 @@ def build_worker(
         adapters=adapters if adapters is not None else build_provider_adapters(settings, config),
         gateway=McpGateway(settings, adapters=mcp_adapters),
         profiles=config.execution_profiles(),
+        retriever=retriever,
     )
     return AgentWorker(
         settings,
@@ -80,6 +112,18 @@ def build_worker(
         worker_id=worker_id,
         lease_seconds=settings.worker_lease_seconds,
     )
+
+
+async def close_retriever(retriever: RagEmbeddingPipeline | None) -> None:
+    if retriever is None:
+        return
+    try:
+        await retriever.aclose()
+    except Exception:
+        service_log.warning(
+            "retriever close failed",
+            extra=log_context(outcome="ignored"),
+        )
 
 
 async def close_provider_adapters(adapters: dict[str, ProviderAdapter]) -> None:
