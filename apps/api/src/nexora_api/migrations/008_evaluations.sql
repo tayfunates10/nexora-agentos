@@ -8,9 +8,12 @@ CREATE TABLE eval_suites (
     ),
     created_by_issuer text NOT NULL,
     created_by_subject text NOT NULL,
+    request_hash text NOT NULL CHECK (length(request_hash) = 64),
+    idempotency_key text NOT NULL CHECK (length(idempotency_key) BETWEEN 8 AND 128),
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (id, workspace_id),
-    UNIQUE (workspace_id, name, version)
+    UNIQUE (workspace_id, name, version),
+    UNIQUE (workspace_id, created_by_issuer, created_by_subject, idempotency_key)
 );
 CREATE INDEX eval_suites_workspace_version
     ON eval_suites(workspace_id, name, version DESC, id);
@@ -19,6 +22,7 @@ CREATE TABLE eval_cases (
     id uuid PRIMARY KEY,
     workspace_id uuid NOT NULL REFERENCES workspaces(id),
     suite_id uuid NOT NULL,
+    case_no integer NOT NULL CHECK (case_no > 0),
     case_key text NOT NULL CHECK (length(btrim(case_key)) BETWEEN 1 AND 100),
     input_text text NOT NULL CHECK (length(btrim(input_text)) BETWEEN 1 AND 20000),
     expected_tools text[] NOT NULL DEFAULT '{}',
@@ -26,10 +30,11 @@ CREATE TABLE eval_cases (
     expected_citations text[] NOT NULL DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (id, workspace_id),
+    UNIQUE (suite_id, case_no),
     UNIQUE (suite_id, case_key),
     FOREIGN KEY (suite_id, workspace_id) REFERENCES eval_suites(id, workspace_id)
 );
-CREATE INDEX eval_cases_suite ON eval_cases(suite_id, case_key);
+CREATE INDEX eval_cases_suite ON eval_cases(suite_id, case_no);
 
 CREATE TABLE eval_runs (
     id uuid PRIMARY KEY,
@@ -39,6 +44,8 @@ CREATE TABLE eval_runs (
     baseline_eval_run_id uuid,
     created_by_issuer text NOT NULL,
     created_by_subject text NOT NULL,
+    request_hash text NOT NULL CHECK (length(request_hash) = 64),
+    idempotency_key text NOT NULL CHECK (length(idempotency_key) BETWEEN 8 AND 128),
     case_count integer NOT NULL CHECK (case_count > 0),
     passed_count integer NOT NULL CHECK (passed_count >= 0),
     failed_count integer NOT NULL CHECK (failed_count >= 0),
@@ -46,6 +53,7 @@ CREATE TABLE eval_runs (
     improvement_count integer NOT NULL DEFAULT 0 CHECK (improvement_count >= 0),
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (id, workspace_id),
+    UNIQUE (workspace_id, created_by_issuer, created_by_subject, idempotency_key),
     FOREIGN KEY (suite_id, workspace_id) REFERENCES eval_suites(id, workspace_id),
     FOREIGN KEY (baseline_eval_run_id, workspace_id) REFERENCES eval_runs(id, workspace_id),
     CHECK (passed_count + failed_count = case_count),
