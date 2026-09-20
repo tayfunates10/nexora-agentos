@@ -61,12 +61,6 @@ class ModelCandidateConfig(BaseModel):
             raise ValueError("a model price must declare both input and output rates")
         return self
 
-    @model_validator(mode="after")
-    def _ann_dimensions(self):
-        if self.ann is not None and self.dimensions > 2000:
-            raise ValueError("HNSW vector indexing supports at most 2000 dimensions")
-        return self
-
     @property
     def priced(self) -> bool:
         return self.input_micros_per_million_tokens is not None
@@ -145,6 +139,12 @@ class RetrievalConfig(BaseModel):
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     # Embeddings are billed on input tokens only; there is no output rate to declare.
     input_micros_per_million_tokens: int | None = Field(default=None, ge=0, le=MAX_PRICE_MICROS)
+
+    @model_validator(mode="after")
+    def _ann_dimensions(self):
+        if self.ann is not None and self.dimensions > 2000:
+            raise ValueError("HNSW vector indexing supports at most 2000 dimensions")
+        return self
 
     @property
     def priced(self) -> bool:
