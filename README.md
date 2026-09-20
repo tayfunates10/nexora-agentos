@@ -53,7 +53,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [MCP Streamable HTTP transport](docs/architecture/0015-mcp-streamable-http.md), and
 [durable knowledge ingestion](docs/architecture/0016-knowledge-ingestion.md), and
 [durable evaluations](docs/architecture/0017-durable-evaluations.md), and
-[LLM judge evaluations](docs/architecture/0022-llm-judge-evaluations.md).
+[LLM judge evaluations](docs/architecture/0022-llm-judge-evaluations.md), and
+[judge observability](docs/architecture/0024-evaluation-judge-observability.md).
 
 ## Run locally with Docker Compose
 
@@ -423,7 +424,11 @@ Exposed series include `nexora_http_requests_total`,
 `nexora_agent_run_duration_seconds`, `nexora_model_calls_total`,
 `nexora_model_tokens_total`, `nexora_tool_calls_total`,
 `nexora_retrieval_queries_total`, `nexora_approval_wait_seconds`,
-`nexora_queue_depth` and `nexora_outbox_published_total`.
+`nexora_queue_depth`, `nexora_outbox_published_total`,
+`nexora_evaluation_judge_calls_total`,
+`nexora_evaluation_judge_call_duration_seconds`,
+`nexora_evaluation_judge_tokens_total` and
+`nexora_evaluation_judge_jobs_total`.
 
 Two user-facing objectives are declared in code and exported alongside them, so alert
 rules read the stated goal rather than a hardcoded number: API availability at 99.9% and
@@ -433,7 +438,8 @@ targets, not contractual guarantees.
 
 Metric labels stay bounded deliberately: workspace, user, run, approval and tool names
 are tenant data and remain on spans, while metrics carry only HTTP method, matched route
-template, status, outcome, provider, MCP server key, token kind and approval decision.
+template, status, outcome, provider, MCP server key, token kind, approval decision and fixed
+evaluation-judge target/outcome values.
 Unmatched paths collapse to `unmatched` and unexpected label values to `other`, so no
 request can grow the series count. Metrics are per-process, so each replica is scraped
 separately. See [ADR 0010](docs/architecture/0010-observability.md) for trace identity,
