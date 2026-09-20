@@ -193,6 +193,12 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
         assert candidate.status_code == 201, candidate.text
         candidate_id = candidate.json()["id"]
 
+        none_yet = client.get(
+            base + f"/eval-runs/{candidate_id}/judge-runs/latest",
+            headers=headers(admin),
+        )
+        assert none_yet.status_code == 404
+
         denied = client.post(
             base + f"/eval-runs/{candidate_id}/judge-runs",
             headers=headers(member, "judge-member-denied"),
@@ -207,6 +213,20 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
         judge_run_id = queued.json()["id"]
         assert queued.json()["status"] == "queued"
         assert queued.json()["judge_model"] is None
+
+        latest = client.get(
+            base + f"/eval-runs/{candidate_id}/judge-runs/latest",
+            headers=headers(admin),
+        )
+        assert latest.status_code == 200
+        assert latest.json()["id"] == judge_run_id
+        assert (
+            client.get(
+                base + f"/eval-runs/{candidate_id}/judge-runs/latest",
+                headers=headers(owner),
+            ).status_code
+            == 404
+        )
 
         replay = client.post(
             base + f"/eval-runs/{candidate_id}/judge-runs",
@@ -269,6 +289,14 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
         assert len(adapter.calls) == 4
         assert all(call[2]["additionalProperties"] is False for call in adapter.calls)
         assert all(result["quality_delta_milli"] == 750 for result in payload["results"])
+
+        latest_completed = client.get(
+            base + f"/eval-runs/{candidate_id}/judge-runs/latest",
+            headers=headers(admin),
+        )
+        assert latest_completed.status_code == 200
+        assert latest_completed.json()["id"] == judge_run_id
+        assert latest_completed.json()["status"] == "succeeded"
 
         deterministic = client.get(
             base + f"/eval-runs/{candidate_id}",
