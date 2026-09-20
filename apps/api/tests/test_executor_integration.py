@@ -16,7 +16,7 @@ from nexora_api.executor import DurableAgentExecutor, ExecutionProfile
 from nexora_api.executor_store import ExecutorStore
 from nexora_api.mcp_gateway import McpGateway
 from nexora_api.migrate import migrate
-from nexora_api.model_routing import ModelCandidate, ModelCapability, ModelRouter
+from nexora_api.model_routing import ModelCandidate, ModelCapability, ModelPricing, ModelRouter
 from nexora_api.outbox import QUEUE_STREAM
 from nexora_api.tool_contracts import ToolContractError
 from nexora_api.worker import AgentWorker
@@ -40,7 +40,16 @@ def test_durable_executor_worker_and_attempt_fence(keys, auth_settings):
     store = ExecutorStore(auth_settings)
     executor = DurableAgentExecutor(
         store=store,
-        router=ModelRouter([ModelCandidate("test", "test-model", frozenset(ModelCapability))]),
+        router=ModelRouter(
+            [
+                ModelCandidate(
+                    "test",
+                    "test-model",
+                    frozenset(ModelCapability),
+                    pricing=ModelPricing("test-pricing-v1", 2000000, 8000000),
+                )
+            ]
+        ),
         adapters={"test": provider},
         gateway=McpGateway(auth_settings),
         profiles={
@@ -72,6 +81,14 @@ def test_durable_executor_worker_and_attempt_fence(keys, auth_settings):
                     "SELECT response FROM agent_model_steps WHERE run_id=%s", (run_id,)
                 )
                 assert (await result.fetchone())["response"]["text"] == "Persisted answer"
+                cost = await connection.execute(
+                    """SELECT pricing_version,total_usd_picos
+                       FROM model_usage_costs WHERE run_id=%s""",
+                    (run_id,),
+                )
+                cost_row = await cost.fetchone()
+                assert cost_row["pricing_version"] == "test-pricing-v1"
+                assert int(cost_row["total_usd_picos"]) == 28000000
             with pytest.raises(ToolContractError, match="execution_fenced"):
                 await original_check(captured[0])
         finally:
@@ -89,6 +106,10 @@ def test_durable_executor_worker_and_attempt_fence(keys, auth_settings):
         assert saved.json()["finish_reason"] == "stop"
         assert saved.json()["recorded_input_tokens"] == 10
         assert saved.json()["recorded_output_tokens"] == 1
+        assert saved.json()["model_cost_usd_picos"] == "28000000"
+        assert saved.json()["model_cost_call_count"] == 1
+        assert saved.json()["model_cost_pricing_complete"] is True
+        assert saved.json()["model_cost_pricing_versions"] == ["test-pricing-v1"]
         assert saved.json()["model_steps"][0]["model"] == "test-model"
         assert "response" not in saved.json()["model_steps"][0]
         assert client.get(result_path).status_code == 401
