@@ -248,7 +248,7 @@ class SpendAlertNotifier:
         abandoned = not retryable or attempts >= MAX_DELIVERY_ATTEMPTS
         async with self.connection() as connection:
             if abandoned:
-                await connection.execute(
+                updated = await connection.execute(
                     """UPDATE workspace_spend_alert_outbox
                        SET attempts=%s,dead_lettered_at=now(),last_error=%s,
                            lease_owner=NULL,lease_expires_at=NULL,updated_at=now()
@@ -257,7 +257,7 @@ class SpendAlertNotifier:
                     (attempts, error_code[:100], row["alert_id"], self.worker_id),
                 )
             else:
-                await connection.execute(
+                updated = await connection.execute(
                     """UPDATE workspace_spend_alert_outbox
                        SET attempts=%s,available_at=now()+(%s * interval '1 second'),
                            last_error=%s,lease_owner=NULL,lease_expires_at=NULL,
@@ -272,6 +272,13 @@ class SpendAlertNotifier:
                         self.worker_id,
                     ),
                 )
+            changed = updated.rowcount == 1
+
+        # If this worker lost its lease, another worker owns the durable outcome.
+        # Do not emit a retry/abandoned metric or warning for a transition we did not commit.
+        if not changed:
+            return
+
         observe_spend_alert_delivery("abandoned" if abandoned else "retry")
         # An abandoned notification is an operator problem, so it is logged once with
         # the reason. The durable alert itself stays readable in the console.
