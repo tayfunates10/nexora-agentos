@@ -316,14 +316,13 @@ def test_agent_run_eval_import_is_requester_scoped_and_fail_closed(keys, auth_se
         with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
             connection.execute(
                 """INSERT INTO agent_run_retrievals
-                   (run_id,workspace_id,query_hash,context_text,context_hash,
+                   (run_id,workspace_id,query_hash,context_hash,
                     embedding_input_tokens,chunk_count)
-                   VALUES (%s,%s,%s,%s,%s,3,1)""",
+                   VALUES (%s,%s,%s,%s,3,1)""",
                 (
                     UUID(search_run),
                     UUID(workspace_id),
                     hashlib.sha256(b"Find the account record.").hexdigest(),
-                    context_text,
                     hashlib.sha256(context_text.encode()).hexdigest(),
                 ),
             )
@@ -373,7 +372,7 @@ def test_agent_run_eval_import_is_requester_scoped_and_fail_closed(keys, auth_se
         connection.rollback()
         with pytest.raises(psycopg.errors.RaiseException):
             connection.execute(
-                "UPDATE agent_run_retrievals SET context_text='tampered' WHERE run_id=%s",
+                "UPDATE agent_run_retrievals SET query_hash=query_hash WHERE run_id=%s",
                 (UUID(search_run),),
             )
         connection.rollback()
