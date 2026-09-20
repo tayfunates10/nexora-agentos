@@ -136,7 +136,7 @@ def test_cache_avoids_network_fetch_for_known_kid():
 
 
 def test_cross_origin_discovery_requires_operator_override():
-    _, jwk = make_key("one")
+    private, jwk = make_key("one")
 
     def handler(request):
         if "openid-configuration" in request.url.path:
@@ -153,7 +153,7 @@ def test_cross_origin_discovery_requires_operator_override():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             resolver = OidcKeyResolver(settings(), client=client)
             with pytest.raises(OidcKeyUnavailable, match="Cross-origin"):
-                await resolver.key_for("eyJhbGciOiJSUzI1NiIsImtpZCI6Im9uZSJ9.e30.invalid")
+                await resolver.key_for(make_token(private, "one"))
 
     run(scenario())
 
