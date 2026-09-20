@@ -298,7 +298,11 @@ class OpenAIResponsesAdapter:
         call_id = item.get("call_id")
         name = item.get("name")
         arguments = item.get("arguments")
-        if not isinstance(call_id, str) or not isinstance(name, str) or not isinstance(arguments, str):
+        if (
+            not isinstance(call_id, str)
+            or not isinstance(name, str)
+            or not isinstance(arguments, str)
+        ):
             raise ProviderError("provider_invalid_response")
         try:
             parsed = json.loads(arguments)
