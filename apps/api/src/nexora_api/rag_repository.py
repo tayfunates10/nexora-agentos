@@ -16,12 +16,6 @@ from psycopg.types.json import Jsonb
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.metrics import observe_spend_denied
-from nexora_api.rag_ann import (
-    HNSW_MAX_EF_SEARCH,
-    MAX_HNSW_VECTOR_DIMENSIONS,
-    hnsw_index_name,
-    validate_ann_target,
-)
 from nexora_api.rag import (
     AccessScope,
     AclIdentity,
@@ -29,6 +23,12 @@ from nexora_api.rag import (
     chunk_text,
     normalize_document,
     sha256_text,
+)
+from nexora_api.rag_ann import (
+    HNSW_MAX_EF_SEARCH,
+    MAX_HNSW_VECTOR_DIMENSIONS,
+    hnsw_index_name,
+    validate_ann_target,
 )
 from nexora_api.spend import (
     EmbeddingSpend,
@@ -621,7 +621,9 @@ class RagRepository:
             raise RuntimeError(f"required RAG HNSW index is not usable: {index_name}")
         definition = row["pg_get_indexdef"]
         if f"vector({dimensions})" not in definition or "vector_cosine_ops" not in definition:
-            raise RuntimeError(f"required RAG HNSW index has an unexpected definition: {index_name}")
+            raise RuntimeError(
+                f"required RAG HNSW index has an unexpected definition: {index_name}"
+            )
         return index_name
 
     @staticmethod
