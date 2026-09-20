@@ -13,6 +13,11 @@ data:
   NEXORA_OTEL_EXPORTER_ENDPOINT: ""
   NEXORA_AUTH_ISSUER: ""
   NEXORA_AUTH_AUDIENCE: ""
+  # Empty means discover jwks_uri from the configured issuer. Set an HTTPS URL
+  # only when the provider intentionally serves keys from a different origin.
+  NEXORA_AUTH_JWKS_URL: ""
+  NEXORA_AUTH_JWKS_CACHE_SECONDS: "300"
+  NEXORA_AUTH_JWKS_MIN_REFRESH_SECONDS: "10"
   NEXORA_API_RATE_LIMIT_REQUESTS: "120"
   NEXORA_API_RATE_LIMIT_WINDOW_SECONDS: "60"
 ---
