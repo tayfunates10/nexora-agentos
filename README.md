@@ -346,6 +346,7 @@ Core endpoints are:
 - `GET /api/v1/workspaces/{workspace_id}/eval-suites`
 - `GET /api/v1/workspaces/{workspace_id}/eval-suites/{suite_id}`
 - `POST /api/v1/workspaces/{workspace_id}/eval-suites/{suite_id}/runs`
+- `POST /api/v1/workspaces/{workspace_id}/eval-suites/{suite_id}/run-imports`
 - `GET /api/v1/workspaces/{workspace_id}/eval-suites/{suite_id}/runs` (owner/admin history)
 - `GET /api/v1/workspaces/{workspace_id}/eval-runs/{eval_run_id}`
 
@@ -353,6 +354,14 @@ Creating suites or runs requires an `Idempotency-Key`. A baseline must use the e
 version. A case is marked as a regression only when the baseline passed and the candidate fails; the
 inverse is recorded as an improvement. Raw output is retained only for failed cases and run details
 require owner/admin evaluation-management permission.
+
+Agent-run imports map exactly one requester-owned successful agent run to each suite case. The
+persisted case input must match the agent-run input exactly; selected tools and final output are
+derived from the immutable model journal, not supplied by the client. Source run IDs are preserved as
+append-only evaluation provenance. Citation-bearing suites are rejected by the automated importer
+until exact retrieval provenance is durably tied to runs; citation-looking model text is never
+treated as verified evidence. See
+[ADR 0020](docs/architecture/0020-agent-run-evaluation-import.md).
 
 History accepts `limit` (1–100, default 25) and the `next_cursor` returned by the preceding
 page. It orders runs newest first and excludes raw output and case details. Cursors are scoped
