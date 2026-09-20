@@ -17,7 +17,9 @@ contains a credential:
 ```bash
 kubectl create namespace nexora
 kubectl create secret generic nexora-secrets -n nexora \
-  --from-literal=NEXORA_DATABASE_URL='postgresql://user:password@host:5432/nexora' \
+  --from-literal=NEXORA_MIGRATION_DATABASE_URL='postgresql://nexora_migrate:password@host:5432/nexora' \
+  --from-literal=NEXORA_API_DATABASE_URL='postgresql://nexora_api_login:password@host:5432/nexora' \
+  --from-literal=NEXORA_WORKER_DATABASE_URL='postgresql://nexora_worker_login:password@host:5432/nexora' \
   --from-literal=NEXORA_REDIS_URL='redis://host:6379/0' \
   --from-literal=NEXORA_SESSION_REDIS_URL='redis://host:6379/1' \
   --from-literal=NEXORA_METRICS_TOKEN='<at least 32 characters>' \
@@ -26,6 +28,15 @@ kubectl create secret generic nexora-secrets -n nexora \
   --from-literal=NEXORA_OIDC_CLIENT_SECRET='<client secret>' \
   --from-literal=NEXORA_OPENAI_API_KEY='<provider key>'
 ```
+
+Before applying the migration Job, provision database roles once. Run
+`infra/postgres/production_roles.sql` as a database administrator to create the NOLOGIN
+capability roles. Create three independent login identities in your database/identity
+system: one migration owner, one API login inheriting `nexora_api_runtime`, and one worker
+login inheriting `nexora_worker_runtime`. The migration identity must own the Nexora
+database, `public` schema and existing Nexora tables. For an upgraded installation, perform
+the ownership transfer as a DBA before enabling these three URLs; the migration step fails
+closed when it finds tables owned by another role.
 
 Then edit, in `base/configmap.yaml`, the issuer and audience, and the worker's model
 profiles — the workspace IDs, provider and model this deployment allows. The API discovers
@@ -50,8 +61,11 @@ loopback, link-local and carrier-grade NAT ranges.
 ## Deploying a release
 
 Migrations run first and are awaited, so no pod starts against a schema it has not
-migrated. Migrations must remain backward compatible with the running version: the old
-pods keep serving while the Job runs.
+migrated. The Job uses only the migration-owner credential. After DDL it revokes PUBLIC
+application-object access and reapplies the reviewed API/worker privilege matrix. A new
+table that has not been classified in that matrix fails the migration rather than receiving
+implicit runtime access. Migrations must remain backward compatible with the running version:
+the old pods keep serving while the Job runs.
 
 ```bash
 kubectl delete job nexora-migrate -n nexora --ignore-not-found

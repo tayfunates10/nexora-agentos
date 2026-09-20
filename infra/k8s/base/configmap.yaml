@@ -24,6 +24,19 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: nexora-database-roles
+  namespace: nexora
+  labels:
+    app.kubernetes.io/part-of: nexora
+data:
+  # Capability roles are created once by the database administrator. They carry no
+  # login credential; API/worker login identities inherit the corresponding role.
+  NEXORA_DATABASE_API_ROLE: "nexora_api_runtime"
+  NEXORA_DATABASE_WORKER_ROLE: "nexora_worker_runtime"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: nexora-worker-config
   namespace: nexora
   labels:

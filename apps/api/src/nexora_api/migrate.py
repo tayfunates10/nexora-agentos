@@ -6,6 +6,7 @@ from pathlib import Path
 import psycopg
 
 from nexora_api.config import Settings
+from nexora_api.database_roles import apply_runtime_grants, configured_runtime_roles
 
 
 def migrate(settings: Settings | None = None):
@@ -29,6 +30,13 @@ def migrate(settings: Settings | None = None):
             connection.execute(
                 "INSERT INTO schema_migrations(name,checksum) VALUES (%s,%s)", (path.name, checksum)
             )
+
+        runtime_roles = configured_runtime_roles(
+            settings.database_api_role,
+            settings.database_worker_role,
+        )
+        if runtime_roles is not None:
+            apply_runtime_grants(connection, *runtime_roles)
 
 
 if __name__ == "__main__":
