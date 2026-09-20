@@ -29,7 +29,9 @@ errors/streaming and cancellation. The RAG foundation now adds versioned tenant-
 ACL-filtered pgvector retrieval, deterministic chunking and citation provenance. The worker can now
 opt into fixed-egress OpenAI embeddings and permission-aware retrieval through operator configuration.
 The knowledge API can queue durable text/Markdown ingestion jobs; embedding and indexing stay in the
-worker so the API process never gains provider egress.
+worker so the API process never gains provider egress. Durable deterministic evaluations now add
+versioned golden suites, baseline regression comparison and failed-case evidence without giving the
+API model-provider egress.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
@@ -47,7 +49,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [release pipeline](docs/architecture/0013-release-pipeline.md), and
 [RAG embedding runtime](docs/architecture/0014-rag-embedding-runtime.md), and
 [MCP Streamable HTTP transport](docs/architecture/0015-mcp-streamable-http.md), and
-[durable knowledge ingestion](docs/architecture/0016-knowledge-ingestion.md).
+[durable knowledge ingestion](docs/architecture/0016-knowledge-ingestion.md), and
+[durable evaluations](docs/architecture/0017-durable-evaluations.md).
 
 ## Run locally with Docker Compose
 
@@ -313,6 +316,30 @@ ingestion returns HTTP 409 rather than racing the worker and being recreated aft
 The first public ingestion surface accepts bounded UTF-8 text/Markdown; PDF parsing and other
 untrusted binary formats remain a separate parser/sandbox milestone. See
 [ADR 0016](docs/architecture/0016-knowledge-ingestion.md).
+
+## Durable deterministic evaluations
+
+Owners and admins can create immutable, versioned golden evaluation suites and score candidate
+observations without calling a model provider from the API process. Each run must submit exactly one
+observation for every case, so pass/fail rates remain comparable.
+
+Core endpoints are:
+
+- `POST /api/v1/workspaces/{workspace_id}/eval-suites`
+- `GET /api/v1/workspaces/{workspace_id}/eval-suites`
+- `GET /api/v1/workspaces/{workspace_id}/eval-suites/{suite_id}`
+- `POST /api/v1/workspaces/{workspace_id}/eval-suites/{suite_id}/runs`
+- `GET /api/v1/workspaces/{workspace_id}/eval-runs/{eval_run_id}`
+
+Creating suites or runs requires an `Idempotency-Key`. A baseline must use the exact same suite
+version. A case is marked as a regression only when the baseline passed and the candidate fails; the
+inverse is recorded as an improvement. Raw output is retained only for failed cases and run details
+require owner/admin evaluation-management permission.
+
+The first layer is deterministic: expected tools, forbidden tools and required citation identifiers.
+Judge-model scoring remains a separate future worker capability so deterministic assertions and
+probabilistic scores are never conflated. See
+[ADR 0017](docs/architecture/0017-durable-evaluations.md).
 
 ## Traces, metrics and structured logs
 
