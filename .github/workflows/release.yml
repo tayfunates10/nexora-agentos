@@ -130,10 +130,10 @@ jobs:
             echo ""
             echo "Promote with:"
             echo ""
-            echo '___BASH_FENCE___'
+            printf '%s\n' '```bash'
             echo "python scripts/promote_release.py \\"
             echo "  --image nexora/${IMAGE#nexora-} \\"
             echo "  --new-name $REPOSITORY \\"
             echo "  --digest $DIGEST"
-            echo '___BASH_FENCE___'
-          } | sed 's/___BASH_FENCE___/```bash/' | sed '0,/^```bash$/! s/^```bash$/```/' >> "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' '```'
+          } >> "$GITHUB_STEP_SUMMARY"
