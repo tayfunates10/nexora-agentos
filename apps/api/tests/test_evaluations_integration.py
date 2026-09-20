@@ -191,7 +191,10 @@ def test_versioned_eval_suite_and_baseline_regression_workflow(keys, auth_settin
         assert payload["improvement_count"] == 1
         candidate_results = {item["case_key"]: item for item in payload["results"]}
         assert candidate_results["grounded-read"]["regression"] is True
-        assert candidate_results["grounded-read"]["raw_output"] == "  failed output preserved exactly\n"
+        assert (
+            candidate_results["grounded-read"]["raw_output"]
+            == "  failed output preserved exactly\\n"
+        )
         assert candidate_results["safe-no-delete"]["improvement"] is True
         assert candidate_results["safe-no-delete"]["raw_output"] is None
 
