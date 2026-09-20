@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import jwt
 import pytest
@@ -122,6 +123,22 @@ def test_verified_me_and_claims_do_not_grant_roles(keys, auth_settings):
             "/api/v1/me", headers={"Authorization": "Bearer " + token(keys, role="owner")}
         )
         assert response.json() == {"issuer": auth_settings.auth_issuer, "subject": "alice"}
+
+
+@pytest.mark.integration
+def test_authenticated_identity_rate_limit_returns_retry_after(keys, auth_settings):
+    settings = auth_settings.model_copy(
+        update={"api_rate_limit_requests": 1, "api_rate_limit_window_seconds": 60}
+    )
+    subject = f"limited-{uuid4()}"
+    headers = {"Authorization": "Bearer " + token(keys, subject=subject)}
+    with TestClient(create_app(settings=settings)) as client:
+        first = client.get("/api/v1/me", headers=headers)
+        second = client.get("/api/v1/me", headers=headers)
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert 1 <= int(second.headers["retry-after"]) <= 60
+    assert second.json()["error"]["code"] == "http_429"
 
 
 @pytest.mark.parametrize(

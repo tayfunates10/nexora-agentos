@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from nexora_api.config import Settings
+from nexora_api.rate_limit import RateLimitUnavailable
 
 
 @dataclass(frozen=True)
@@ -46,10 +47,23 @@ def verify_token(token: str, settings: Settings) -> Principal:
         raise HTTPException(503, "Authentication configuration invalid") from None
 
 
-def authenticated(
+async def authenticated(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
 ) -> Principal:
     if credentials is None:
         raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
-    return verify_token(credentials.credentials, request.app.state.settings)
+    principal = verify_token(credentials.credentials, request.app.state.settings)
+    try:
+        decision = await request.app.state.identity_rate_limiter.check(
+            principal.issuer, principal.subject
+        )
+    except RateLimitUnavailable:
+        raise HTTPException(503, "Rate limiting unavailable") from None
+    if not decision.allowed:
+        raise HTTPException(
+            429,
+            "Rate limit exceeded",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
+    return principal

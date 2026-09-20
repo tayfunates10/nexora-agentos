@@ -63,7 +63,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [judge observability](docs/architecture/0024-evaluation-judge-observability.md), and
 [spend governance](docs/architecture/0025-spend-governance.md), and
 [spend console](docs/architecture/0026-spend-console.md), and
-[spend alerts](docs/architecture/0027-spend-alerts.md).
+[spend alerts](docs/architecture/0027-spend-alerts.md), and
+[API rate limiting](docs/architecture/0029-api-rate-limiting.md).
 
 ## Run locally with Docker Compose
 
@@ -174,8 +175,9 @@ subject with `PUT /api/v1/workspaces/{id}/members`. Admins can rename a workspac
 members can only read. The initial owner cannot be demoted, and assigning a second
 owner is blocked. This endpoint changes database membership; it does not send invitations.
 The web panel includes browser sign-in and workspace management (setup below).
-Rate limiting, automatic key rotation and production database
-role separation remain deployment work before public exposure.
+Authenticated API rate limiting is now shared across replicas through Redis and enabled by the
+repository deployment configs. Automatic key rotation and production database role separation
+remain deployment work before public exposure.
 
 ## Agent definitions, durable runs and worker orchestration
 
