@@ -41,6 +41,10 @@ jobs:
           cache-dependency-path: apps/api/requirements-dev.lock
       - run: pip install -r apps/api/requirements-dev.lock && pip install --no-deps -e apps/api
       - run: python scripts/sync_skills.py --check
+      - name: Check migration history is append-only
+        run: |
+          git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF:-main}"
+          python scripts/check_migrations.py --base FETCH_HEAD
       - run: ruff check apps/api && ruff format --check apps/api
       - name: Initialize pgvector
         run: |
