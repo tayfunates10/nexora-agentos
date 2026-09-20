@@ -38,6 +38,12 @@ class KnowledgeIngestionLeaseLost(RuntimeError):
     pass
 
 
+HYBRID_RRF_K = 60
+HYBRID_CANDIDATE_MULTIPLIER = 4
+HYBRID_MAX_CANDIDATES = 200
+HYBRID_QUERY_MAX_CHARS = 4096
+
+
 class RagRepository:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -585,6 +591,7 @@ class RagRepository:
         *,
         embedding_model: str,
         query_embedding: tuple[float, ...],
+        query_text: str | None = None,
         limit: int = 8,
     ) -> tuple[RetrievedChunk, ...]:
         if not 1 <= limit <= 50:
@@ -594,6 +601,11 @@ class RagRepository:
 
         vector_literal = self._vector_literal(query_embedding)
         dimensions = len(query_embedding)
+        lexical_query = query_text.strip() if query_text is not None else ""
+        if len(lexical_query) > HYBRID_QUERY_MAX_CHARS:
+            raise ValueError(
+                f"hybrid retrieval query must be at most {HYBRID_QUERY_MAX_CHARS} characters"
+            )
 
         async with self.connection() as connection:
             await self.workspaces.scoped(
@@ -602,40 +614,149 @@ class RagRepository:
                 workspace_id,
                 Permission.READ,
             )
-            result = await connection.execute(
-                """SELECT c.id,c.source_id,s.source_key,c.source_version,s.title,
-                          c.chunk_index,c.start_offset,c.end_offset,c.content,c.metadata,
-                          1 - (c.embedding <=> %s::vector) AS score
-                   FROM rag_chunks c
-                   JOIN rag_sources s
-                     ON s.id=c.source_id AND s.workspace_id=c.workspace_id
-                   WHERE c.workspace_id=%s
-                     AND s.is_current
-                     AND c.embedding_model=%s
-                     AND c.embedding_dimensions=%s
-                     AND (
-                         c.access_scope='workspace'
-                         OR EXISTS (
-                             SELECT 1 FROM rag_source_acl a
-                             WHERE a.workspace_id=c.workspace_id
-                               AND a.source_id=c.source_id
-                               AND a.issuer=%s
-                               AND a.subject=%s
+            if lexical_query:
+                candidate_limit = min(
+                    HYBRID_MAX_CANDIDATES,
+                    max(limit, limit * HYBRID_CANDIDATE_MULTIPLIER),
+                )
+                result = await connection.execute(
+                    """WITH lexical_query AS (
+                           SELECT plainto_tsquery('simple', %s) AS query
+                       ),
+                       vector_candidates AS (
+                           SELECT c.id,
+                                  row_number() OVER (
+                                      ORDER BY c.embedding <=> %s::vector,
+                                               c.source_id,c.chunk_index
+                                  ) AS vector_rank
+                           FROM rag_chunks c
+                           JOIN rag_sources s
+                             ON s.id=c.source_id AND s.workspace_id=c.workspace_id
+                           WHERE c.workspace_id=%s
+                             AND s.is_current
+                             AND c.embedding_model=%s
+                             AND c.embedding_dimensions=%s
+                             AND (
+                                 c.access_scope='workspace'
+                                 OR EXISTS (
+                                     SELECT 1 FROM rag_source_acl a
+                                     WHERE a.workspace_id=c.workspace_id
+                                       AND a.source_id=c.source_id
+                                       AND a.issuer=%s
+                                       AND a.subject=%s
+                                 )
+                             )
+                           ORDER BY c.embedding <=> %s::vector,c.source_id,c.chunk_index
+                           LIMIT %s
+                       ),
+                       lexical_candidates AS (
+                           SELECT ranked.id,
+                                  row_number() OVER (
+                                      ORDER BY ranked.lexical_score DESC,
+                                               ranked.source_id,ranked.chunk_index
+                                  ) AS lexical_rank
+                           FROM (
+                               SELECT c.id,c.source_id,c.chunk_index,
+                                      ts_rank_cd(
+                                          to_tsvector('simple', c.content),
+                                          lexical_query.query
+                                      ) AS lexical_score
+                               FROM rag_chunks c
+                               JOIN rag_sources s
+                                 ON s.id=c.source_id AND s.workspace_id=c.workspace_id
+                               CROSS JOIN lexical_query
+                               WHERE c.workspace_id=%s
+                                 AND s.is_current
+                                 AND c.embedding_model=%s
+                                 AND c.embedding_dimensions=%s
+                                 AND lexical_query.query <> ''::tsquery
+                                 AND to_tsvector('simple', c.content) @@ lexical_query.query
+                                 AND (
+                                     c.access_scope='workspace'
+                                     OR EXISTS (
+                                         SELECT 1 FROM rag_source_acl a
+                                         WHERE a.workspace_id=c.workspace_id
+                                           AND a.source_id=c.source_id
+                                           AND a.issuer=%s
+                                           AND a.subject=%s
+                                     )
+                                 )
+                               ORDER BY lexical_score DESC,c.source_id,c.chunk_index
+                               LIMIT %s
+                           ) ranked
+                       ),
+                       fused AS (
+                           SELECT coalesce(v.id,l.id) AS id,
+                                  v.vector_rank,l.lexical_rank
+                           FROM vector_candidates v
+                           FULL OUTER JOIN lexical_candidates l ON l.id=v.id
+                       )
+                       SELECT c.id,c.source_id,s.source_key,c.source_version,s.title,
+                              c.chunk_index,c.start_offset,c.end_offset,c.content,c.metadata,
+                              coalesce(1.0 / (%s + fused.vector_rank),0.0)
+                              + coalesce(1.0 / (%s + fused.lexical_rank),0.0) AS score
+                       FROM fused
+                       JOIN rag_chunks c ON c.id=fused.id
+                       JOIN rag_sources s
+                         ON s.id=c.source_id AND s.workspace_id=c.workspace_id
+                       ORDER BY score DESC,c.source_id,c.chunk_index
+                       LIMIT %s""",
+                    (
+                        lexical_query,
+                        vector_literal,
+                        workspace_id,
+                        embedding_model,
+                        dimensions,
+                        principal.issuer,
+                        principal.subject,
+                        vector_literal,
+                        candidate_limit,
+                        workspace_id,
+                        embedding_model,
+                        dimensions,
+                        principal.issuer,
+                        principal.subject,
+                        candidate_limit,
+                        HYBRID_RRF_K,
+                        HYBRID_RRF_K,
+                        limit,
+                    ),
+                )
+            else:
+                result = await connection.execute(
+                    """SELECT c.id,c.source_id,s.source_key,c.source_version,s.title,
+                              c.chunk_index,c.start_offset,c.end_offset,c.content,c.metadata,
+                              1 - (c.embedding <=> %s::vector) AS score
+                       FROM rag_chunks c
+                       JOIN rag_sources s
+                         ON s.id=c.source_id AND s.workspace_id=c.workspace_id
+                       WHERE c.workspace_id=%s
+                         AND s.is_current
+                         AND c.embedding_model=%s
+                         AND c.embedding_dimensions=%s
+                         AND (
+                             c.access_scope='workspace'
+                             OR EXISTS (
+                                 SELECT 1 FROM rag_source_acl a
+                                 WHERE a.workspace_id=c.workspace_id
+                                   AND a.source_id=c.source_id
+                                   AND a.issuer=%s
+                                   AND a.subject=%s
+                             )
                          )
-                     )
-                   ORDER BY c.embedding <=> %s::vector,c.source_id,c.chunk_index
-                   LIMIT %s""",
-                (
-                    vector_literal,
-                    workspace_id,
-                    embedding_model,
-                    dimensions,
-                    principal.issuer,
-                    principal.subject,
-                    vector_literal,
-                    limit,
-                ),
-            )
+                       ORDER BY c.embedding <=> %s::vector,c.source_id,c.chunk_index
+                       LIMIT %s""",
+                    (
+                        vector_literal,
+                        workspace_id,
+                        embedding_model,
+                        dimensions,
+                        principal.issuer,
+                        principal.subject,
+                        vector_literal,
+                        limit,
+                    ),
+                )
             rows = await result.fetchall()
             return tuple(
                 RetrievedChunk(
