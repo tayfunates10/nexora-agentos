@@ -26,6 +26,7 @@ from nexora_api.runtime_config import RuntimeConfigError
 from nexora_api.telemetry import configure_telemetry
 from nexora_api.worker_service import (
     WorkerRuntime,
+    build_evaluation_judge_worker,
     build_knowledge_worker,
     build_mcp_adapters,
     build_provider_adapters,
@@ -108,7 +109,18 @@ async def serve(settings: Settings) -> None:
         retriever,
         worker_id=worker.worker_id,
     )
-    runtime = WorkerRuntime(worker, settings, knowledge_worker=knowledge_worker)
+    evaluation_judge_worker = build_evaluation_judge_worker(
+        settings,
+        config,
+        adapters,
+        worker_id=worker.worker_id,
+    )
+    runtime = WorkerRuntime(
+        worker,
+        settings,
+        knowledge_worker=knowledge_worker,
+        evaluation_judge_worker=evaluation_judge_worker,
+    )
     admin = create_admin_app(settings, DependencyProbe(settings, redis))
     server = uvicorn.Server(
         uvicorn.Config(

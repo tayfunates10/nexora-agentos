@@ -43,6 +43,28 @@ def test_loop_processes_until_stopped():
     assert worker.calls == 3
 
 
+class FakeAuxWorker:
+    def __init__(self, result=True):
+        self.result = result
+        self.calls = 0
+
+    async def process_once(self):
+        self.calls += 1
+        return self.result
+
+
+def test_loop_services_evaluation_judge_jobs_between_agent_iterations():
+    worker = FakeWorker([False])
+    judge = FakeAuxWorker()
+    runtime = WorkerRuntime(worker, settings(), evaluation_judge_worker=judge)
+
+    iterations = asyncio.run(runtime.run(max_iterations=1))
+
+    assert iterations == 1
+    assert worker.calls == 1
+    assert judge.calls == 1
+
+
 def test_stop_request_ends_the_loop_between_jobs():
     worker = FakeWorker([True] * 50)
     runtime = WorkerRuntime(worker, settings())

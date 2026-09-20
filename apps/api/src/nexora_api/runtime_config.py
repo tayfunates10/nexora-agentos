@@ -104,6 +104,24 @@ class RetrievalConfig(BaseModel):
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
 
 
+class EvaluationJudgeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    provider: str = Field(pattern=PROVIDER_NAME)
+    model: str = Field(min_length=1, max_length=128)
+    allowed_workspaces: list[UUID] = Field(min_length=1, max_length=1000)
+    prompt_version: Literal["nexora-eval-judge-v1"] = "nexora-eval-judge-v1"
+    timeout_seconds: float = Field(default=30.0, ge=1, le=120)
+    max_output_tokens: int = Field(default=512, ge=64, le=4096)
+    max_input_chars: int = Field(default=70000, ge=1000, le=120000)
+
+    @model_validator(mode="after")
+    def _unique_workspaces(self):
+        if len(self.allowed_workspaces) != len(set(self.allowed_workspaces)):
+            raise ValueError("evaluation judge workspaces must be unique")
+        return self
+
+
 class McpServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -148,6 +166,7 @@ class RuntimeConfig(BaseModel):
     model_candidates: list[ModelCandidateConfig] = Field(min_length=1, max_length=32)
     profiles: dict[str, ExecutionProfileConfig] = Field(min_length=1, max_length=16)
     retrieval: RetrievalConfig | None = None
+    evaluation_judge: EvaluationJudgeConfig | None = None
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict, max_length=32)
 
     @model_validator(mode="after")
@@ -166,6 +185,21 @@ class RuntimeConfig(BaseModel):
                 raise ValueError(f"invalid MCP server key: {server_key}")
 
         configured = {candidate.provider for candidate in self.model_candidates}
+        if self.evaluation_judge is not None:
+            judge_candidate = next(
+                (
+                    candidate
+                    for candidate in self.model_candidates
+                    if candidate.provider == self.evaluation_judge.provider
+                    and candidate.model == self.evaluation_judge.model
+                ),
+                None,
+            )
+            if judge_candidate is None:
+                raise ValueError("evaluation judge model must be a configured candidate")
+            required = {ModelCapability.TEXT, ModelCapability.STRUCTURED_OUTPUT}
+            if not required.issubset(set(judge_candidate.capabilities)):
+                raise ValueError("evaluation judge model requires text and structured_output")
         for name, profile in self.profiles.items():
             if not re.fullmatch(PROFILE_NAME, name):
                 raise ValueError(f"invalid profile name: {name}")

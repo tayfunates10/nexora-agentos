@@ -3,15 +3,23 @@
     {
       "provider": "openai",
       "model": "replace-with-a-model-your-account-can-call",
-      "capabilities": ["text", "tools"],
+      "capabilities": [
+        "text",
+        "tools",
+        "structured_output"
+      ],
       "quality_tier": 2,
       "estimated_cost_per_million_tokens": 0
     }
   ],
   "profiles": {
     "default": {
-      "allowed_workspaces": ["00000000-0000-0000-0000-000000000000"],
-      "allowed_providers": ["openai"],
+      "allowed_workspaces": [
+        "00000000-0000-0000-0000-000000000000"
+      ],
+      "allowed_providers": [
+        "openai"
+      ],
       "allowed_tools": [],
       "max_steps": 8,
       "max_output_tokens": 2048,
@@ -28,5 +36,16 @@
     "limit": 8,
     "batch_size": 128,
     "timeout_seconds": 15
+  },
+  "evaluation_judge": {
+    "provider": "openai",
+    "model": "replace-with-a-model-your-account-can-call",
+    "allowed_workspaces": [
+      "00000000-0000-0000-0000-000000000000"
+    ],
+    "prompt_version": "nexora-eval-judge-v1",
+    "timeout_seconds": 30,
+    "max_output_tokens": 512,
+    "max_input_chars": 70000
   }
 }

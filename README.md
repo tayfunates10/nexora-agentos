@@ -31,7 +31,9 @@ opt into fixed-egress OpenAI embeddings and permission-aware retrieval through o
 The knowledge API can queue durable text/Markdown ingestion jobs; embedding and indexing stay in the
 worker so the API process never gains provider egress. Durable deterministic evaluations now add
 versioned golden suites, baseline regression comparison and failed-case evidence without giving the
-API model-provider egress.
+API model-provider egress. Imported real-run evaluations can now queue a worker-side pinned LLM judge
+for task-completion, relevance and clarity scoring while keeping probabilistic quality separate from
+deterministic pass/fail.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
@@ -50,7 +52,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [RAG embedding runtime](docs/architecture/0014-rag-embedding-runtime.md), and
 [MCP Streamable HTTP transport](docs/architecture/0015-mcp-streamable-http.md), and
 [durable knowledge ingestion](docs/architecture/0016-knowledge-ingestion.md), and
-[durable evaluations](docs/architecture/0017-durable-evaluations.md).
+[durable evaluations](docs/architecture/0017-durable-evaluations.md), and
+[LLM judge evaluations](docs/architecture/0022-llm-judge-evaluations.md).
 
 ## Run locally with Docker Compose
 
@@ -198,7 +201,7 @@ nothing runs unless a deployment explicitly allows it.
 ```json
 {
   "model_candidates": [
-    {"provider": "openai", "model": "your-model", "capabilities": ["text", "tools"]}
+    {"provider": "openai", "model": "your-model", "capabilities": ["text", "tools", "structured_output"]}
   ],
   "profiles": {
     "default": {
@@ -214,6 +217,12 @@ nothing runs unless a deployment explicitly allows it.
     "model": "text-embedding-3-small",
     "dimensions": 1536,
     "limit": 8
+  },
+  "evaluation_judge": {
+    "provider": "openai",
+    "model": "your-model",
+    "allowed_workspaces": ["<workspace-uuid>"],
+    "prompt_version": "nexora-eval-judge-v1"
   }
 }
 ```
@@ -373,10 +382,15 @@ History accepts `limit` (1–100, default 25) and the `next_cursor` returned by 
 page. It orders runs newest first and excludes raw output and case details. Cursors are scoped
 to the selected workspace and suite; an unknown or unrelated cursor returns 404.
 
-The first layer is deterministic: expected tools, forbidden tools and required citation identifiers.
-Judge-model scoring remains a separate future worker capability so deterministic assertions and
-probabilistic scores are never conflated. See
-[ADR 0017](docs/architecture/0017-durable-evaluations.md).
+The first layer remains deterministic: expected tools, forbidden tools and required citation
+identifiers. For agent-run imports, owners/admins can additionally queue an asynchronous pinned judge
+with `POST /api/v1/workspaces/{workspace_id}/eval-runs/{eval_run_id}/judge-runs` and read it with
+`GET /api/v1/workspaces/{workspace_id}/eval-judge-runs/{judge_run_id}`. Judge v1 scores task
+completion, relevance and clarity from 0-4, with a deterministic 0-1000 aggregate. When the eval run
+has a baseline, candidate and baseline are scored by the same pinned provider/model/prompt and a
+per-case quality delta is stored. Judge results never alter deterministic pass/fail. See
+[ADR 0017](docs/architecture/0017-durable-evaluations.md) and
+[ADR 0022](docs/architecture/0022-llm-judge-evaluations.md).
 
 ## Traces, metrics and structured logs
 
