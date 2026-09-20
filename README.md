@@ -23,12 +23,15 @@ sessions, workspace-scoped agent definitions, durable runs, append-only run even
 and a transactional PostgreSQL outbox. The provider-independent worker runtime adds Redis
 Streams consumer groups, durable job receipts, leases, fencing, bounded retries, cancellation
 and crash recovery. Tool governance now adds a typed MCP tool registry, default-deny policy
-evaluation, idempotent call records and durable human approvals. A production model executor and
-production MCP transport adapter are not enabled yet.
+evaluation, idempotent call records and durable human approvals. Provider routing now has a
+normalized adapter contract plus an OpenAI Responses API adapter with fixed egress, normalized
+errors/streaming and cancellation. A production model executor and production MCP transport
+adapter are not enabled yet.
 See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [agent run architecture](docs/architecture/0004-agent-runs-outbox.md),
 [worker architecture](docs/architecture/0005-worker-state-machine.md), and
-[MCP tool governance](docs/architecture/0006-mcp-tool-governance.md).
+[MCP tool governance](docs/architecture/0006-mcp-tool-governance.md), and
+[OpenAI provider adapter](docs/architecture/0007-openai-responses-adapter.md).
 
 ## Run locally with Docker Compose
 
