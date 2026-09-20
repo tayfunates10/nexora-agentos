@@ -1,10 +1,19 @@
 -- Delivery intent is written with the alert it belongs to, so a notification can
 -- never be owed for a crossing that was rolled back, and a crossing can never be
 -- committed without its notification being queued.
+-- The composite target makes it impossible to pair an alert id with another
+-- workspace even if a future code path supplies inconsistent identifiers.
+ALTER TABLE workspace_spend_alerts
+    ADD CONSTRAINT workspace_spend_alerts_id_workspace_unique
+    UNIQUE (id, workspace_id);
+
 CREATE TABLE workspace_spend_alert_outbox (
     -- One notification per alert: the primary key is the deduplication.
-    alert_id uuid PRIMARY KEY REFERENCES workspace_spend_alerts(id),
-    workspace_id uuid NOT NULL REFERENCES workspaces(id),
+    alert_id uuid PRIMARY KEY,
+    workspace_id uuid NOT NULL,
+    CONSTRAINT workspace_spend_alert_outbox_alert_workspace_fk
+        FOREIGN KEY (alert_id, workspace_id)
+        REFERENCES workspace_spend_alerts(id, workspace_id),
     attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     available_at timestamptz NOT NULL DEFAULT now(),
     lease_owner text CHECK (lease_owner IS NULL OR length(lease_owner) BETWEEN 1 AND 100),
