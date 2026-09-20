@@ -32,9 +32,12 @@ so zero regressions is not confused with no comparison.
 
 ## Boundaries
 
-This is an inspection surface. Suite creation and observation submission continue through the
-existing API. It does not launch models, create judge scores, execute tools or change permissions.
-All displayed results remain deterministic evaluations of submitted observations.
+The deterministic history portion remains an inspection surface. Suite creation and observation
+submission continue through the existing API, and deterministic pass/fail remains unchanged.
+
+The optional judge controls added later in ADR 0023 are a separate explicit mutation surface. They
+queue worker-side judge work but never execute a model from the web or API process, and judge results
+are labelled probabilistic rather than folded into deterministic counts.
 
 ## Verification
 

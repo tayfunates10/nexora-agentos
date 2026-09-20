@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
 import type { AddressInfo } from "node:net";
-import type { EvalRun, EvalSuite } from "../../lib/evaluation-contracts.ts";
+import type { EvalJudgeRun, EvalRun, EvalSuite } from "../../lib/evaluation-contracts.ts";
 
 export async function startProvider() {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
@@ -12,6 +12,8 @@ export async function startProvider() {
   const workspaces = new Map<string, { id: string; name: string; role: string }>();
   const evalSuites = new Map<string, EvalSuite>();
   const evalRuns = new Map<string, EvalRun>();
+  const evalJudgeRuns = new Map<string, EvalJudgeRun>();
+  const judgeIdempotency = new Map<string, string>();
   let historyUnavailable = false;
   let issuer = "";
   let wrongNonce = false;
@@ -40,6 +42,47 @@ export async function startProvider() {
       if (url.pathname === "/api/v1/workspaces") {
         if (request.method === "POST") { const entry = { id: randomUUID(), name: JSON.parse(body).name, role: "owner" }; workspaces.set(entry.id, entry); return send(entry, 201); }
         return send({ items: [...workspaces.values()], next_cursor: null });
+      }
+      const latestJudge = url.pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/eval-runs\/([^/]+)\/judge-runs\/latest$/,
+      );
+      if (latestJudge && request.method === "GET") {
+        const [, workspaceId, evalRunId] = latestJudge;
+        const scope = workspaces.get(workspaceId);
+        if (!scope || scope.role === "member") return send({}, scope ? 403 : 404);
+        const run = evalRuns.get(evalRunId);
+        if (!run || run.workspace_id !== workspaceId) return send({}, 404);
+        const judge = [...evalJudgeRuns.values()].reverse().find(
+          item => item.workspace_id === workspaceId && item.eval_run_id === evalRunId,
+        );
+        return judge ? send(judge) : send({}, 404);
+      }
+      const queueJudge = url.pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/eval-runs\/([^/]+)\/judge-runs$/,
+      );
+      if (queueJudge && request.method === "POST") {
+        const [, workspaceId, evalRunId] = queueJudge;
+        const scope = workspaces.get(workspaceId);
+        if (!scope || scope.role === "member") return send({}, scope ? 403 : 404);
+        const run = evalRuns.get(evalRunId);
+        if (!run || run.workspace_id !== workspaceId) return send({}, 404);
+        const key = request.headers["idempotency-key"];
+        if (typeof key !== "string" || key.length < 8) return send({}, 400);
+        const scopedKey = workspaceId + ":" + key;
+        const existingId = judgeIdempotency.get(scopedKey);
+        if (existingId) return send(evalJudgeRuns.get(existingId), 200);
+        const id = randomUUID();
+        const judge: EvalJudgeRun = {
+          id, workspace_id: workspaceId, eval_run_id: evalRunId, status: "queued",
+          case_count: run.case_count, scored_count: 0, judge_provider: null, judge_model: null,
+          prompt_version: null, error_code: null, quality_milli: null,
+          baseline_quality_milli: null, quality_delta_milli: null, regression_count: 0,
+          improvement_count: 0, input_tokens: 0, output_tokens: 0, latency_ms: 0,
+          created_at: "2026-09-20T14:00:00Z", finished_at: null, results: [],
+        };
+        evalJudgeRuns.set(id, judge);
+        judgeIdempotency.set(scopedKey, id);
+        return send(judge, 202);
       }
       const evaluation = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/(eval-suites|eval-runs)(?:\/([^/]+))?(\/runs)?$/);
       if (evaluation) {
@@ -78,7 +121,7 @@ export async function startProvider() {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  return { issuer, workspaces, evalSuites, evalRuns,
+  return { issuer, workspaces, evalSuites, evalRuns, evalJudgeRuns,
     historyUnavailable: (value: boolean) => { historyUnavailable = value; },
     wrongNonce: (value: boolean) => { wrongNonce = value; }, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }
