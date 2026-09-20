@@ -10,6 +10,7 @@ the worker from starting rather than silently granting execution.
 import json
 import re
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -83,11 +84,23 @@ class ExecutionProfileConfig(BaseModel):
         )
 
 
+class RetrievalConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    provider: Literal["openai"] = "openai"
+    model: str = Field(min_length=1, max_length=128)
+    dimensions: int = Field(default=1536, ge=1, le=4096)
+    limit: int = Field(default=8, ge=1, le=50)
+    batch_size: int = Field(default=128, ge=1, le=256)
+    timeout_seconds: float = Field(default=15.0, gt=0, le=120)
+
+
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_candidates: list[ModelCandidateConfig] = Field(min_length=1, max_length=32)
     profiles: dict[str, ExecutionProfileConfig] = Field(min_length=1, max_length=16)
+    retrieval: RetrievalConfig | None = None
 
     @model_validator(mode="after")
     def _consistent(self):
