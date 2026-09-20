@@ -34,9 +34,7 @@ def test_router_never_silently_downgrades_required_capabilities():
 
     decision = router.route(
         RoutingRequest(
-            required_capabilities=frozenset(
-                [ModelCapability.TEXT, ModelCapability.TOOLS]
-            ),
+            required_capabilities=frozenset([ModelCapability.TEXT, ModelCapability.TOOLS]),
             allowed_providers=frozenset(["alpha", "beta"]),
         )
     )
@@ -65,9 +63,7 @@ def test_router_enforces_provider_allowlist_and_budget():
 
 
 def test_router_fails_closed_when_no_model_satisfies_policy():
-    router = ModelRouter(
-        [candidate("alpha", "text-only", [ModelCapability.TEXT], quality=3)]
-    )
+    router = ModelRouter([candidate("alpha", "text-only", [ModelCapability.TEXT], quality=3)])
 
     with pytest.raises(ProviderError) as error:
         router.route(
