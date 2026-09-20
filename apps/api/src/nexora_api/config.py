@@ -1,3 +1,5 @@
+import re
+
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -49,9 +51,7 @@ class Settings(BaseSettings):
     def _database_role_name(cls, value):
         if value in (None, ""):
             return None
-        if not isinstance(value, str) or not __import__("re").fullmatch(
-            r"[a-z_][a-z0-9_]{0,62}", value
-        ):
+        if not isinstance(value, str) or not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", value):
             raise ValueError("database runtime role must be a simple PostgreSQL identifier")
         return value
 
