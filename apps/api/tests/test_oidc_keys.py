@@ -6,6 +6,7 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi import HTTPException
 
 from nexora_api.auth import Principal, verify_request_token
 from nexora_api.config import Settings
@@ -185,9 +186,9 @@ def test_provider_failure_fails_closed_as_service_unavailable():
     async def scenario():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             resolver = OidcKeyResolver(settings(), client=client)
-            with pytest.raises(Exception) as error:
+            with pytest.raises(HTTPException) as error:
                 await verify_request_token(make_token(private, "one"), settings(), resolver)
-            assert getattr(error.value, "status_code", None) == 503
+            assert error.value.status_code == 503
 
     run(scenario())
 
@@ -210,10 +211,52 @@ def test_dynamic_tokens_require_rs256_and_kid():
     async def scenario():
         resolver = OidcKeyResolver(settings())
         try:
-            with pytest.raises(Exception) as error:
+            with pytest.raises(HTTPException) as error:
                 await verify_request_token(no_kid, settings(), resolver)
-            assert getattr(error.value, "status_code", None) == 401
+            assert error.value.status_code == 401
         finally:
             await resolver.aclose()
+
+    run(scenario())
+
+
+def test_unknown_kid_forced_refresh_is_throttled():
+    private, jwk = make_key("known")
+    attacker, _ = make_key("missing")
+    now = [100.0]
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if "openid-configuration" in request.url.path:
+            return httpx.Response(
+                200,
+                json={
+                    "issuer": "https://identity.example.test/tenant",
+                    "jwks_uri": "https://identity.example.test/tenant/jwks",
+                },
+            )
+        return httpx.Response(200, json={"keys": [jwk]})
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            resolver = OidcKeyResolver(settings(), client=client, clock=lambda: now[0])
+            await verify_request_token(make_token(private, "known"), settings(), resolver)
+            baseline = len(calls)
+
+            now[0] += 1
+            for kid in ("random-one", "random-two"):
+                with pytest.raises(HTTPException) as error:
+                    await verify_request_token(make_token(attacker, kid), settings(), resolver)
+                assert error.value.status_code == 401
+            assert len(calls) == baseline
+
+            now[0] += 10
+            with pytest.raises(HTTPException) as error:
+                await verify_request_token(
+                    make_token(attacker, "random-three"), settings(), resolver
+                )
+            assert error.value.status_code == 401
+            assert len(calls) == baseline + 1
 
     run(scenario())
