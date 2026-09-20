@@ -106,9 +106,7 @@ class EvaluationJudgeRepository:
                 if item.baseline_quality_milli is not None
             ]
             if len(baseline_values) == scored_count:
-                baseline_quality_milli = (
-                    sum(baseline_values) + scored_count // 2
-                ) // scored_count
+                baseline_quality_milli = (sum(baseline_values) + scored_count // 2) // scored_count
                 quality_delta_milli = quality_milli - baseline_quality_milli
 
         return EvalJudgeRun(
