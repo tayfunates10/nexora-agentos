@@ -473,19 +473,29 @@ class RagRepository:
                 workspace_id,
                 Permission.MANAGE_KNOWLEDGE,
             )
-            running = await connection.execute(
-                """SELECT id FROM knowledge_ingestion_jobs
-                   WHERE workspace_id=%s AND source_key=%s AND status='running'
+            pending = await connection.execute(
+                """SELECT id,status,lease_expires_at,clock_timestamp() AS checked_at
+                   FROM knowledge_ingestion_jobs
+                   WHERE workspace_id=%s AND source_key=%s
+                     AND status IN ('queued','running')
                    FOR UPDATE""",
                 (workspace_id, source_key),
             )
-            if await running.fetchone():
+            pending_rows = await pending.fetchall()
+            if any(
+                row["status"] == "running"
+                and row["lease_expires_at"] is not None
+                and row["lease_expires_at"] > row["checked_at"]
+                for row in pending_rows
+            ):
                 raise HTTPException(409)
 
             cancelled = await connection.execute(
                 """UPDATE knowledge_ingestion_jobs
-                   SET status='cancelled',finished_at=now(),updated_at=now()
-                   WHERE workspace_id=%s AND source_key=%s AND status='queued'""",
+                   SET status='cancelled',lease_owner=NULL,lease_expires_at=NULL,
+                       finished_at=now(),updated_at=now()
+                   WHERE workspace_id=%s AND source_key=%s
+                     AND status IN ('queued','running')""",
                 (workspace_id, source_key),
             )
             deleted = await connection.execute(
