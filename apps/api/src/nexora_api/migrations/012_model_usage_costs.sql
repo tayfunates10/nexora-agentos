@@ -3,6 +3,8 @@ CREATE TABLE model_usage_costs (
     source_kind text NOT NULL CHECK (
         source_kind IN ('agent_model_step','eval_judge_candidate','eval_judge_baseline')
     ),
+    provider_request_id text NOT NULL CHECK (length(provider_request_id) BETWEEN 1 AND 250),
+    attempt_count integer NOT NULL CHECK (attempt_count >= 0),
     run_id uuid,
     step_no integer CHECK (step_no IS NULL OR step_no BETWEEN 0 AND 31),
     judge_run_id uuid,
@@ -10,20 +12,43 @@ CREATE TABLE model_usage_costs (
     case_id uuid,
     provider text NOT NULL CHECK (length(provider) BETWEEN 1 AND 64),
     model text NOT NULL CHECK (length(model) BETWEEN 1 AND 128),
-    pricing_version text NOT NULL CHECK (length(pricing_version) BETWEEN 1 AND 100),
+    pricing_version text CHECK (
+        pricing_version IS NULL OR length(pricing_version) BETWEEN 1 AND 100
+    ),
     input_tokens integer NOT NULL CHECK (input_tokens >= 0),
     output_tokens integer NOT NULL CHECK (output_tokens >= 0),
-    input_usd_micros_per_million_tokens bigint NOT NULL CHECK (
-        input_usd_micros_per_million_tokens >= 0
+    input_usd_micros_per_million_tokens bigint CHECK (
+        input_usd_micros_per_million_tokens IS NULL
+        OR input_usd_micros_per_million_tokens >= 0
     ),
-    output_usd_micros_per_million_tokens bigint NOT NULL CHECK (
-        output_usd_micros_per_million_tokens >= 0
+    output_usd_micros_per_million_tokens bigint CHECK (
+        output_usd_micros_per_million_tokens IS NULL
+        OR output_usd_micros_per_million_tokens >= 0
     ),
     total_usd_picos numeric(30,0) GENERATED ALWAYS AS (
-        input_tokens::numeric * input_usd_micros_per_million_tokens
-        + output_tokens::numeric * output_usd_micros_per_million_tokens
+        CASE
+            WHEN pricing_version IS NULL THEN NULL
+            ELSE (
+                input_tokens::numeric * input_usd_micros_per_million_tokens
+                + output_tokens::numeric * output_usd_micros_per_million_tokens
+            )
+        END
     ) STORED,
     created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (workspace_id,provider,provider_request_id),
+    CHECK (
+        (
+            pricing_version IS NULL
+            AND input_usd_micros_per_million_tokens IS NULL
+            AND output_usd_micros_per_million_tokens IS NULL
+        )
+        OR
+        (
+            pricing_version IS NOT NULL
+            AND input_usd_micros_per_million_tokens IS NOT NULL
+            AND output_usd_micros_per_million_tokens IS NOT NULL
+        )
+    ),
     CHECK (
         (
             source_kind='agent_model_step'
@@ -49,12 +74,12 @@ CREATE TABLE model_usage_costs (
     FOREIGN KEY (eval_run_id,case_id) REFERENCES eval_case_results(eval_run_id,case_id)
 );
 
-CREATE UNIQUE INDEX model_usage_costs_agent_step
-    ON model_usage_costs(run_id,step_no)
+CREATE INDEX model_usage_costs_run
+    ON model_usage_costs(workspace_id,run_id,step_no,created_at)
     WHERE source_kind='agent_model_step';
 
-CREATE UNIQUE INDEX model_usage_costs_judge_case
-    ON model_usage_costs(judge_run_id,case_id,source_kind)
+CREATE INDEX model_usage_costs_judge
+    ON model_usage_costs(workspace_id,judge_run_id,case_id,source_kind,created_at)
     WHERE source_kind IN ('eval_judge_candidate','eval_judge_baseline');
 
 CREATE INDEX model_usage_costs_workspace_created
