@@ -9,6 +9,7 @@ from psycopg.rows import dict_row
 
 from nexora_api.config import Settings
 from nexora_api.evaluation_judges import EvalJudgeCaseScore, EvalJudgeRun
+from nexora_api.model_costs import load_model_cost_summary
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
@@ -64,6 +65,16 @@ class EvaluationJudgeRepository:
             (workspace_id, judge_run_id),
         )
         score_rows = await scores_result.fetchall()
+        expected_cost_calls = sum(
+            1 + (item["baseline_quality_milli"] is not None)
+            for item in score_rows
+        )
+        cost_summary = await load_model_cost_summary(
+            connection,
+            workspace_id=workspace_id,
+            judge_run_id=judge_run_id,
+            minimum_expected_calls=expected_cost_calls,
+        )
         scores = [
             EvalJudgeCaseScore(
                 case_id=item["case_id"],
@@ -128,6 +139,14 @@ class EvaluationJudgeRepository:
             input_tokens=sum(item.input_tokens for item in scores),
             output_tokens=sum(item.output_tokens for item in scores),
             latency_ms=sum(item.latency_ms for item in scores),
+            model_cost_usd_picos=(
+                str(cost_summary.total_usd_picos)
+                if cost_summary.total_usd_picos is not None
+                else None
+            ),
+            model_cost_call_count=cost_summary.call_count,
+            model_cost_pricing_complete=cost_summary.pricing_complete,
+            model_cost_pricing_versions=list(cost_summary.pricing_versions),
             created_at=row["created_at"],
             finished_at=row["finished_at"],
             results=scores,
