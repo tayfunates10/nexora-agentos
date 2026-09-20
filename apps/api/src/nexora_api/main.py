@@ -24,6 +24,7 @@ from nexora_api.health import DependencyProbe, HealthResponse, Probe
 from nexora_api.knowledge import router as knowledge_router
 from nexora_api.logs import configure_logging, context, logger
 from nexora_api.mcp_gateway import McpGateway
+from nexora_api.oidc_keys import OidcKeyResolver
 from nexora_api.rag_repository import RagRepository
 from nexora_api.rate_limit import IdentityRateLimiter
 from nexora_api.spend import router as spend_router
@@ -55,6 +56,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         )
         app.state.probe = probe or DependencyProbe(settings, redis)
         app.state.settings = settings
+        app.state.oidc_keys = OidcKeyResolver(settings)
         app.state.workspaces = WorkspaceRepository(settings)
         app.state.agent_runtime = AgentRuntimeRepository(settings)
         app.state.evaluations = EvaluationRepository(settings)
@@ -71,6 +73,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         try:
             yield
         finally:
+            await app.state.oidc_keys.aclose()
             await redis.aclose()
 
     app = FastAPI(title="Nexora AgentOS API", version="0.1.0", lifespan=lifespan)
