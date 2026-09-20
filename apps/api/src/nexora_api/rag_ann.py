@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import re
 
 import psycopg
 from psycopg import sql
