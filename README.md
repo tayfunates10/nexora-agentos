@@ -68,7 +68,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [API rate limiting](docs/architecture/0029-api-rate-limiting.md), and
 [OIDC JWKS rotation](docs/architecture/0030-oidc-jwks-rotation.md), and
 [PostgreSQL role separation](docs/architecture/0031-postgres-role-separation.md), and
-[spend alert delivery](docs/architecture/0032-spend-alert-delivery.md).
+[spend alert delivery](docs/architecture/0032-spend-alert-delivery.md), and
+[hybrid RAG retrieval](docs/architecture/0033-hybrid-retrieval.md).
 
 ## Run locally with Docker Compose
 
@@ -241,6 +242,7 @@ nothing runs unless a deployment explicitly allows it.
     "provider": "openai",
     "model": "text-embedding-3-small",
     "dimensions": 1536,
+    "strategy": "hybrid",
     "limit": 8,
     "input_micros_per_million_tokens": 20000
   },
@@ -271,7 +273,10 @@ The worker serves liveness, readiness and token-guarded metrics on port 8001
 jobs so an in-flight attempt finishes under its own lease. Retrieval remains off unless the
 operator supplies a `retrieval` block. When enabled, the worker checks current workspace
 membership before embedding the query, applies source ACLs in SQL, and injects only delimited
-untrusted evidence with citation provenance. See [ADR 0011](docs/architecture/0011-worker-service.md)
+untrusted evidence with citation provenance. Retrieval defaults to `hybrid`: vector and
+language-neutral PostgreSQL full-text candidates are fused with deterministic RRF so exact
+identifiers can recover from a weak embedding match. Operators can set `strategy: "vector"`
+to retain vector-only ranking. See [ADR 0011](docs/architecture/0011-worker-service.md)
 and [ADR 0014](docs/architecture/0014-rag-embedding-runtime.md).
 
 Use `/docs` for the full schema. Core endpoints are:
