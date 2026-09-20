@@ -249,6 +249,35 @@ class EvaluationJudgeRepository:
             )
             return await self._load(connection, workspace_id, judge_run_id), True
 
+    async def latest_for_eval_run(
+        self,
+        principal,
+        workspace_id: UUID,
+        eval_run_id: UUID,
+    ) -> EvalJudgeRun:
+        async with self.connection() as connection:
+            await self.workspaces.scoped(
+                connection, principal, workspace_id, Permission.MANAGE_EVALS
+            )
+            result = await connection.execute(
+                """SELECT id FROM eval_judge_runs
+                   WHERE workspace_id=%s AND eval_run_id=%s
+                     AND requested_by_issuer=%s
+                     AND requested_by_subject=%s
+                   ORDER BY created_at DESC,id DESC
+                   LIMIT 1""",
+                (
+                    workspace_id,
+                    eval_run_id,
+                    principal.issuer,
+                    principal.subject,
+                ),
+            )
+            row = await result.fetchone()
+            if not row:
+                raise HTTPException(404)
+            return await self._load(connection, workspace_id, row["id"])
+
     async def get(self, principal, workspace_id: UUID, judge_run_id: UUID) -> EvalJudgeRun:
         async with self.connection() as connection:
             await self.workspaces.scoped(
