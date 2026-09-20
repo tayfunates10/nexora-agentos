@@ -389,9 +389,9 @@ def test_knowledge_endpoints_reject_cross_tenant_access(keys, auth_settings):
     assert created.status_code == 202, created.text
     job_id = created.json()["id"]
 
-    assert client.get(other_base + "/sources", headers=headers(admin)).status_code == 403
+    assert client.get(other_base + "/sources", headers=headers(admin)).status_code == 404
     assert (
-        client.get(other_base + "/ingestions/" + job_id, headers=headers(admin)).status_code == 403
+        client.get(other_base + "/ingestions/" + job_id, headers=headers(admin)).status_code == 404
     )
     assert (
         client.post(
@@ -404,13 +404,13 @@ def test_knowledge_endpoints_reject_cross_tenant_access(keys, auth_settings):
             },
             headers=headers(admin, "knowledge-cross-tenant-write"),
         ).status_code
-        == 403
+        == 404
     )
     assert (
         client.delete(
             other_base + "/sources/private-handbook",
             headers=headers(admin),
         ).status_code
-        == 403
+        == 404
     )
     client.__exit__(None, None, None)
