@@ -7,13 +7,15 @@ fails closed: an unreadable, malformed or internally inconsistent configuration 
 the worker from starting rather than silently granting execution.
 """
 
+import ipaddress
 import json
 import re
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from nexora_api.executor import ExecutionProfile
 from nexora_api.model_routing import ModelCandidate, ModelCapability
@@ -106,6 +108,31 @@ class McpServerConfig(BaseModel):
     )
     timeout_seconds: float = Field(default=15.0, ge=0.1, le=120)
     max_response_bytes: int = Field(default=131072, ge=1024, le=1048576)
+
+    @field_validator("url")
+    @classmethod
+    def _secure_endpoint(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.port not in (None, 443)
+        ):
+            raise ValueError("MCP URL must use HTTPS port 443 without credentials/query")
+        hostname = parsed.hostname.rstrip(".").lower()
+        if hostname == "localhost" or not hostname:
+            raise ValueError("MCP hostname is not allowed")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return value
+        if not address.is_global:
+            raise ValueError("MCP literal IP must be globally routable")
+        return value
 
 
 class RuntimeConfig(BaseModel):
