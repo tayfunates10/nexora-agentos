@@ -116,7 +116,6 @@ def test_model_usage_is_recorded_per_provider():
     assert sample("nexora_model_calls_total", provider="test", outcome="success")
 
 
-
 def test_evaluation_judge_metrics_are_bounded_and_track_tokens():
     calls_before = sample(
         "nexora_evaluation_judge_calls_total",
@@ -137,24 +136,33 @@ def test_evaluation_judge_metrics_are_bounded_and_track_tokens():
     )
     metrics.observe_evaluation_judge_job("succeeded")
 
-    assert sample(
-        "nexora_evaluation_judge_calls_total",
-        provider="test",
-        target="candidate",
-        outcome="success",
-    ) == calls_before + 1
-    assert sample(
-        "nexora_evaluation_judge_tokens_total",
-        provider="test",
-        target="candidate",
-        kind="input",
-    ) == tokens_before + 12
+    assert (
+        sample(
+            "nexora_evaluation_judge_calls_total",
+            provider="test",
+            target="candidate",
+            outcome="success",
+        )
+        == calls_before + 1
+    )
+    assert (
+        sample(
+            "nexora_evaluation_judge_tokens_total",
+            provider="test",
+            target="candidate",
+            kind="input",
+        )
+        == tokens_before + 12
+    )
     assert sample("nexora_evaluation_judge_jobs_total", outcome="succeeded") == jobs_before + 1
-    assert sample(
-        "nexora_evaluation_judge_call_duration_seconds_count",
-        provider="test",
-        target="candidate",
-    ) >= 1
+    assert (
+        sample(
+            "nexora_evaluation_judge_call_duration_seconds_count",
+            provider="test",
+            target="candidate",
+        )
+        >= 1
+    )
 
 
 def test_evaluation_judge_unknown_labels_collapse():
