@@ -335,9 +335,7 @@ class EvaluationJudgeWorker:
             separators=(",", ":"),
         )
         request = ProviderRequest(
-            request_id=(
-                f"eval-judge:{job['id']}:{case_id}:{target}:{job['attempt_count']}"
-            ),
+            request_id=(f"eval-judge:{job['id']}:{case_id}:{target}:{job['attempt_count']}"),
             messages=(
                 ProviderMessage("system", JUDGE_SYSTEM_PROMPT),
                 ProviderMessage("user", user_payload),
