@@ -37,7 +37,8 @@ metadata:
     app.kubernetes.io/part-of: nexora
 data:
   # Operator-declared model profiles. A run cannot name a model, provider or tool
-  # that is not listed here. Replace the workspace IDs and model before deploying.
+  # that is not listed here. Replace the workspace IDs, model and prices before
+  # deploying; prices are micros per million tokens and enable spend accounting.
   runtime.json: |
     {
       "model_candidates": [
@@ -45,7 +46,9 @@ data:
           "provider": "openai",
           "model": "replace-with-a-model-your-account-can-call",
           "capabilities": ["text", "tools"],
-          "quality_tier": 2
+          "quality_tier": 2,
+          "input_micros_per_million_tokens": 3000000,
+          "output_micros_per_million_tokens": 15000000
         }
       ],
       "profiles": {

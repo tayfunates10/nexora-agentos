@@ -25,6 +25,8 @@ from nexora_api.knowledge import router as knowledge_router
 from nexora_api.logs import configure_logging, context, logger
 from nexora_api.mcp_gateway import McpGateway
 from nexora_api.rag_repository import RagRepository
+from nexora_api.spend import router as spend_router
+from nexora_api.spend_repository import SpendRepository
 from nexora_api.telemetry import configure_telemetry, record, record_error, span
 from nexora_api.tooling import router as tool_router
 from nexora_api.workspace_repository import WorkspaceRepository
@@ -58,6 +60,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         app.state.eval_judges = EvaluationJudgeRepository(settings)
         app.state.mcp_gateway = McpGateway(settings)
         app.state.rag = RagRepository(settings)
+        app.state.spend = SpendRepository(settings)
         app.state.tool_governance = app.state.mcp_gateway.repository
         try:
             yield
@@ -170,6 +173,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
     app.include_router(evaluation_judge_router)
     app.include_router(tool_router)
     app.include_router(knowledge_router)
+    app.include_router(spend_router)
     return app
 
 

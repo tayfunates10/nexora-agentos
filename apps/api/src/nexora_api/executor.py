@@ -133,6 +133,8 @@ class DurableAgentExecutor:
                         profile.max_output_tokens, profile.max_total_tokens - total_tokens
                     ),
                 )
+                # Budget is checked before egress, not after billing arrives.
+                await self.store.authorize_spend(context)
                 response = await self._observed_generate(
                     adapter, decision, request, profile.timeout_seconds, context, step, is_cancelled
                 )

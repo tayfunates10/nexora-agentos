@@ -34,6 +34,9 @@ versioned golden suites, baseline regression comparison and failed-case evidence
 API model-provider egress. Imported real-run evaluations can now queue a worker-side pinned LLM judge
 for task-completion, relevance and clarity scoring while keeping probabilistic quality separate from
 deterministic pass/fail.
+Provider spend is now metered per workspace: operator-declared model prices are converted to an
+append-only cost ledger inside the transaction that commits each model step or judge case, and
+per-workspace monthly budgets are enforced before provider egress.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
@@ -54,7 +57,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [durable knowledge ingestion](docs/architecture/0016-knowledge-ingestion.md), and
 [durable evaluations](docs/architecture/0017-durable-evaluations.md), and
 [LLM judge evaluations](docs/architecture/0022-llm-judge-evaluations.md), and
-[judge observability](docs/architecture/0024-evaluation-judge-observability.md).
+[judge observability](docs/architecture/0024-evaluation-judge-observability.md), and
+[spend governance](docs/architecture/0025-spend-governance.md).
 
 ## Run locally with Docker Compose
 
@@ -202,7 +206,13 @@ nothing runs unless a deployment explicitly allows it.
 ```json
 {
   "model_candidates": [
-    {"provider": "openai", "model": "your-model", "capabilities": ["text", "tools", "structured_output"]}
+    {
+      "provider": "openai",
+      "model": "your-model",
+      "capabilities": ["text", "tools", "structured_output"],
+      "input_micros_per_million_tokens": 3000000,
+      "output_micros_per_million_tokens": 15000000
+    }
   ],
   "profiles": {
     "default": {
@@ -394,6 +404,43 @@ per-case quality delta is stored. Judge results never alter deterministic pass/f
 [ADR 0022](docs/architecture/0022-llm-judge-evaluations.md), and
 [ADR 0023](docs/architecture/0023-evaluation-judge-console.md).
 
+## Spend accounting and budgets
+
+Provider spend is metered per workspace. Operators declare a price for every model candidate in the
+worker runtime configuration (`input_micros_per_million_tokens` and
+`output_micros_per_million_tokens`); a run, an agent or a tenant can never influence one. Cost is an
+integer count of micros — millionths of one unit of the operator accounting currency — and a partial
+price unit always rounds up.
+
+A deployment prices every candidate or none. Leaving prices out keeps accounting and enforcement off
+instead of recording a fabricated zero cost; a half-priced configuration stops the worker from
+starting, and a model that is routed but unpriced fails the run with `model_price_not_configured`
+rather than executing unmetered.
+
+Each priced call is written to an append-only ledger in the same transaction that commits the work it
+pays for — the agent model step, or the judge case score — under a deterministic source key, so a
+retried, resumed or crash-recovered attempt is never charged twice.
+
+- `GET /api/v1/workspaces/{workspace_id}/spend` — current UTC month: consumed micros, limit,
+  enforcement, remaining micros and per-category totals (members and above).
+- `PUT /api/v1/workspaces/{workspace_id}/spend/budget` — set `monthly_limit_micros` and
+  `enforcement` (`enforce` or `monitor`); owners and admins only.
+- `GET /api/v1/workspaces/{workspace_id}/spend/records` — the priced calls themselves, newest first,
+  with `limit` (1–100, default 25), `next_cursor` and an optional `category` filter.
+
+The worker checks the remaining budget before provider egress. In `enforce` mode an exhausted budget
+stops the run terminally with `workspace_budget_exhausted` and appends a `spend.denied` run event
+carrying the limit and consumed amount; a judge job fails with `judge_budget_exhausted` before any
+request leaves the process. In `monitor` mode the overage is reported and execution continues. The
+check is a gate rather than a hard cap: the call that crosses the limit is the last one allowed, and
+concurrent runs can overshoot by the cost of the calls already in flight, bounded by the profile
+token limits. A workspace without a budget is metered but unlimited.
+
+Budget changes are recorded twice — in an append-only budget event with actor and request identity,
+and in the workspace security audit trail. Ledger rows and budget events reject update, delete and
+truncate at the database. Embedding calls are not priced in this increment, so the ledger and budget
+cover model generation only. See [ADR 0025](docs/architecture/0025-spend-governance.md).
+
 ## Traces, metrics and structured logs
 
 Every run carries a durable `trace_id`, and that UUID is used directly as the
@@ -427,8 +474,10 @@ Exposed series include `nexora_http_requests_total`,
 `nexora_queue_depth`, `nexora_outbox_published_total`,
 `nexora_evaluation_judge_calls_total`,
 `nexora_evaluation_judge_call_duration_seconds`,
-`nexora_evaluation_judge_tokens_total` and
-`nexora_evaluation_judge_jobs_total`.
+`nexora_evaluation_judge_tokens_total`,
+`nexora_evaluation_judge_jobs_total`,
+`nexora_model_cost_micros_total` and
+`nexora_spend_denials_total`.
 
 Two user-facing objectives are declared in code and exported alongside them, so alert
 rules read the stated goal rather than a hardcoded number: API availability at 99.9% and
@@ -439,7 +488,7 @@ targets, not contractual guarantees.
 Metric labels stay bounded deliberately: workspace, user, run, approval and tool names
 are tenant data and remain on spans, while metrics carry only HTTP method, matched route
 template, status, outcome, provider, MCP server key, token kind, approval decision and fixed
-evaluation-judge target/outcome values.
+evaluation-judge target/outcome and spend-category values.
 Unmatched paths collapse to `unmatched` and unexpected label values to `other`, so no
 request can grow the series count. Metrics are per-process, so each replica is scraped
 separately. See [ADR 0010](docs/architecture/0010-observability.md) for trace identity,

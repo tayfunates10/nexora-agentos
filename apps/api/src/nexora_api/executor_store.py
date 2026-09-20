@@ -3,11 +3,20 @@ from dataclasses import asdict, dataclass
 
 from psycopg.types.json import Jsonb
 
+from nexora_api.config import Settings
 from nexora_api.execution_fence import executable_run
+from nexora_api.metrics import observe_spend, observe_spend_denied
 from nexora_api.model_routing import ProviderResponse, ProviderToolCall, ProviderUsage
 from nexora_api.rag import build_untrusted_context, sha256_text
 from nexora_api.run_state import RunStateStore
 from nexora_api.runtime_events import append_run_event
+from nexora_api.spend import (
+    SpendCategory,
+    SpendPolicy,
+    SpendPricingError,
+    agent_step_source_key,
+)
+from nexora_api.spend_repository import evaluate_budget, record_spend
 from nexora_api.tool_contracts import ToolContractError
 
 
@@ -29,6 +38,34 @@ class RunRetrievalSnapshot:
 
 
 class ExecutorStore(RunStateStore):
+    def __init__(self, settings: Settings, spend: SpendPolicy | None = None):
+        super().__init__(settings)
+        # Without operator pricing nothing can be costed, so accounting stays off
+        # rather than recording a fabricated zero cost.
+        self.spend = spend
+
+    async def authorize_spend(self, context):
+        """Refuse provider egress once a workspace has spent its budget for the period."""
+        if self.spend is None:
+            return
+        async with self.connection() as connection:
+            await executable_run(connection, context)
+            decision = await evaluate_budget(connection, context.workspace_id)
+            if decision.allowed:
+                return
+            await append_run_event(
+                connection,
+                context.workspace_id,
+                context.run_id,
+                "spend.denied",
+                {
+                    "limit_micros": decision.limit_micros,
+                    "consumed_micros": decision.consumed_micros,
+                },
+            )
+        observe_spend_denied(SpendCategory.AGENT_RUN)
+        raise ToolContractError("workspace_budget_exhausted")
+
     async def check(self, context):
         async with self.connection() as connection:
             return await executable_run(connection, context)
@@ -232,6 +269,17 @@ class ExecutorStore(RunStateStore):
             return decode_response(row["response"]) if row else None
 
     async def save(self, context, step_no, decision, response):
+        cost_micros = None
+        if self.spend is not None:
+            try:
+                cost_micros = self.spend.cost_micros(
+                    decision.candidate.provider,
+                    decision.candidate.model,
+                    response.usage.input_tokens,
+                    response.usage.output_tokens,
+                )
+            except SpendPricingError as exc:
+                raise ToolContractError(exc.code) from exc
         async with self.connection() as connection:
             await executable_run(connection, context)
             await connection.execute(
@@ -248,6 +296,21 @@ class ExecutorStore(RunStateStore):
                     Jsonb(asdict(response)),
                 ),
             )
+            # The ledger row commits with the step it prices, so a replayed step is
+            # never charged twice and a charged call always has its stored response.
+            recorded = False
+            if cost_micros is not None:
+                recorded = await record_spend(
+                    connection,
+                    workspace_id=context.workspace_id,
+                    source_key=agent_step_source_key(context.run_id, step_no),
+                    category=SpendCategory.AGENT_RUN,
+                    provider=decision.candidate.provider,
+                    model=decision.candidate.model,
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
+                    cost_micros=cost_micros,
+                )
             await append_run_event(
                 connection,
                 context.workspace_id,
@@ -261,5 +324,9 @@ class ExecutorStore(RunStateStore):
                     "input_tokens": response.usage.input_tokens,
                     "output_tokens": response.usage.output_tokens,
                     "finish_reason": response.finish_reason,
+                    "cost_micros": cost_micros,
                 },
             )
+        # Only a ledger row that this attempt actually wrote is counted.
+        if recorded:
+            observe_spend(decision.candidate.provider, SpendCategory.AGENT_RUN, cost_micros)

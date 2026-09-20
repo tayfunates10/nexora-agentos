@@ -26,6 +26,7 @@ from pydantic import (
 
 from nexora_api.executor import ExecutionProfile
 from nexora_api.model_routing import ModelCandidate, ModelCapability
+from nexora_api.spend import MAX_PRICE_MICROS, ModelPrice, SpendPolicy
 
 PROFILE_NAME = r"^[A-Za-z0-9._-]{1,64}$"
 PROVIDER_NAME = r"^[a-z][a-z0-9_.-]{1,63}$"
@@ -45,6 +46,32 @@ class ModelCandidateConfig(BaseModel):
     capabilities: list[ModelCapability] = Field(min_length=1, max_length=8)
     quality_tier: int = Field(default=1, ge=1, le=5)
     estimated_cost_per_million_tokens: int = Field(default=0, ge=0, le=1_000_000)
+    # Billing prices in micros of the operator accounting currency per million tokens.
+    # Declaring them turns on durable spend accounting and budget enforcement.
+    input_micros_per_million_tokens: int | None = Field(default=None, ge=0, le=MAX_PRICE_MICROS)
+    output_micros_per_million_tokens: int | None = Field(default=None, ge=0, le=MAX_PRICE_MICROS)
+
+    @model_validator(mode="after")
+    def _complete_price(self):
+        declared = (
+            self.input_micros_per_million_tokens is None,
+            self.output_micros_per_million_tokens is None,
+        )
+        if len(set(declared)) != 1:
+            raise ValueError("a model price must declare both input and output rates")
+        return self
+
+    @property
+    def priced(self) -> bool:
+        return self.input_micros_per_million_tokens is not None
+
+    def price(self) -> ModelPrice | None:
+        if not self.priced:
+            return None
+        return ModelPrice(
+            input_micros_per_million_tokens=self.input_micros_per_million_tokens,
+            output_micros_per_million_tokens=self.output_micros_per_million_tokens,
+        )
 
     def candidate(self) -> ModelCandidate:
         return ModelCandidate(
@@ -184,6 +211,12 @@ class RuntimeConfig(BaseModel):
             if not re.fullmatch(TOOL_NAME, server_key):
                 raise ValueError(f"invalid MCP server key: {server_key}")
 
+        # Partial pricing would meter some provider egress and silently exempt the
+        # rest, so a deployment either prices every candidate or prices none.
+        priced = {candidate.priced for candidate in self.model_candidates}
+        if len(priced) != 1:
+            raise ValueError("model prices must be declared for every candidate or for none")
+
         configured = {candidate.provider for candidate in self.model_candidates}
         if self.evaluation_judge is not None:
             judge_candidate = next(
@@ -218,6 +251,15 @@ class RuntimeConfig(BaseModel):
 
     def candidates(self) -> list[ModelCandidate]:
         return [candidate.candidate() for candidate in self.model_candidates]
+
+    def spend_policy(self) -> SpendPolicy | None:
+        """Pricing for every configured model, or None when accounting is not enabled."""
+        prices = {
+            (candidate.provider, candidate.model): candidate.price()
+            for candidate in self.model_candidates
+            if candidate.priced
+        }
+        return SpendPolicy(prices=prices) if prices else None
 
     def execution_profiles(self) -> dict[str, ExecutionProfile]:
         return {name: profile.profile() for name, profile in self.profiles.items()}
