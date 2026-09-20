@@ -85,6 +85,18 @@ async def create_eval_judge_run(
     return run
 
 
+@router.get("/eval-runs/{eval_run_id}/judge-runs/latest", response_model=EvalJudgeRun)
+async def get_latest_eval_judge_run(
+    workspace_id: UUID,
+    eval_run_id: UUID,
+    principal: Identity,
+    request: Request,
+):
+    return await request.app.state.eval_judges.latest_for_eval_run(
+        principal, workspace_id, eval_run_id
+    )
+
+
 @router.get("/eval-judge-runs/{judge_run_id}", response_model=EvalJudgeRun)
 async def get_eval_judge_run(
     workspace_id: UUID,
