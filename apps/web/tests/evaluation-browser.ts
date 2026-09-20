@@ -38,11 +38,13 @@ export async function checkEvaluations(page: Page, provider: Awaited<ReturnType<
         { case_id: firstCase, case_key: "grounded-read", passed: !candidate,
           failures: candidate ? ["missing_citation:handbook:v1"] : [], selected_tools: ["search"],
           citations: candidate ? [] : ["handbook:v1"], raw_output: candidate ? failedOutput : null,
-          baseline_passed: candidate ? true : null, regression: candidate, improvement: false },
+          source_agent_run_id: randomUUID(), baseline_passed: candidate ? true : null,
+          regression: candidate, improvement: false },
         { case_id: secondCase, case_key: "safe-action", passed: candidate,
           failures: candidate ? [] : ["forbidden_tool:delete"], selected_tools: candidate ? [] : ["delete"],
           citations: [], raw_output: candidate ? null : "Unsafe delete",
-          baseline_passed: candidate ? false : null, regression: false, improvement: candidate },
+          source_agent_run_id: randomUUID(), baseline_passed: candidate ? false : null,
+          regression: false, improvement: candidate },
       ],
     });
   }
@@ -58,6 +60,55 @@ export async function checkEvaluations(page: Page, provider: Awaited<ReturnType<
   await page.getByText("Failed output", { exact: true }).click();
   await expect(page.locator(".eval-evidence")).toHaveText(failedOutput);
   expect(await page.evaluate(() => "evaluationInjected" in window)).toBe(false);
+
+  await page.getByRole("button", { name: "Run quality judge" }).click();
+  await expect(page.getByRole("status")).toContainText("quality judge was queued");
+  await expect(page.locator(".judge-panel")).toContainText("Judge queued");
+  const queuedJudge = [...provider.evalJudgeRuns.values()].find(
+    item => item.eval_run_id === candidateId,
+  );
+  expect(queuedJudge).toBeTruthy();
+  provider.evalJudgeRuns.set(queuedJudge!.id, {
+    ...queuedJudge!,
+    status: "succeeded",
+    scored_count: 2,
+    judge_provider: "openai",
+    judge_model: "judge-model-v1",
+    prompt_version: "nexora-eval-judge-v1",
+    quality_milli: 875,
+    baseline_quality_milli: 750,
+    quality_delta_milli: 125,
+    regression_count: 0,
+    improvement_count: 1,
+    input_tokens: 48,
+    output_tokens: 16,
+    latency_ms: 123,
+    finished_at: "2026-09-20T14:01:00Z",
+    results: [
+      {
+        case_id: firstCase, case_key: "grounded-read", task_completion: 4,
+        answer_relevance: 4, clarity: 4, quality_milli: 1000,
+        rationale: "Strong grounded answer.", baseline_task_completion: 3,
+        baseline_answer_relevance: 3, baseline_clarity: 3, baseline_quality_milli: 750,
+        quality_delta_milli: 250, regression: false, improvement: true,
+        input_tokens: 24, output_tokens: 8, latency_ms: 70,
+      },
+      {
+        case_id: secondCase, case_key: "safe-action", task_completion: 3,
+        answer_relevance: 3, clarity: 3, quality_milli: 750,
+        rationale: "Clear and relevant.", baseline_task_completion: 3,
+        baseline_answer_relevance: 3, baseline_clarity: 3, baseline_quality_milli: 750,
+        quality_delta_milli: 0, regression: false, improvement: false,
+        input_tokens: 24, output_tokens: 8, latency_ms: 53,
+      },
+    ],
+  });
+  await page.goto(root + "/runs/" + candidateId);
+  await expect(page.locator(".judge-panel")).toContainText("Judge succeeded");
+  await expect(page.locator(".judge-panel")).toContainText("87.5%");
+  await expect(page.locator(".judge-panel")).toContainText("+12.5 pts");
+  await expect(page.getByText("Strong grounded answer.", { exact: true })).toBeVisible();
+
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
