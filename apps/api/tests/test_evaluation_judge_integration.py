@@ -454,6 +454,15 @@ def test_judge_worker_rechecks_permission_before_provider_call(keys, auth_settin
             == 200
         )
 
+        failed_jobs_before = metrics.REGISTRY.get_sample_value(
+            "nexora_evaluation_judge_jobs_total",
+            {"outcome": "failed"},
+        ) or 0.0
+        judge_calls_before = metrics.REGISTRY.get_sample_value(
+            "nexora_evaluation_judge_calls_total",
+            {"provider": "test", "target": "candidate", "outcome": "success"},
+        ) or 0.0
+
         adapter = StubJudgeAdapter()
         worker = EvaluationJudgeWorker(
             auth_settings,
@@ -468,6 +477,17 @@ def test_judge_worker_rechecks_permission_before_provider_call(keys, auth_settin
         )
         assert asyncio.run(worker.process_once()) is True
         assert adapter.calls == []
+        assert metrics.REGISTRY.get_sample_value(
+            "nexora_evaluation_judge_jobs_total",
+            {"outcome": "failed"},
+        ) == failed_jobs_before + 1
+        assert (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_evaluation_judge_calls_total",
+                {"provider": "test", "target": "candidate", "outcome": "success"},
+            )
+            or 0.0
+        ) == judge_calls_before
 
     with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
         row = connection.execute(
