@@ -7,7 +7,7 @@ export const MICROS_PER_UNIT = 1_000_000;
 export const MAX_LIMIT_MICROS = 1_000_000_000_000_000;
 const micros = z.number().int().min(0).max(MAX_LIMIT_MICROS);
 
-export const spendCategorySchema = z.enum(["agent_run", "evaluation_judge"]);
+export const spendCategorySchema = z.enum(["agent_run", "evaluation_judge", "embedding"]);
 export const enforcementSchema = z.enum(["enforce", "monitor"]);
 
 export const spendSummarySchema = z.object({
@@ -69,6 +69,7 @@ export type SpendCategory = z.infer<typeof spendCategorySchema>;
 export const CATEGORY_LABELS: Record<SpendCategory, string> = {
   agent_run: "Agent runs",
   evaluation_judge: "Quality judge",
+  embedding: "Embeddings",
 };
 
 // Operators think in accounting units, the ledger stores exact micros. Both

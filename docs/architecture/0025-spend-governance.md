@@ -17,8 +17,8 @@ independently of history and Prometheus deliberately carries no tenant labels.
 
 Nexora adds a durable, append-only spend ledger plus per-workspace monthly budgets.
 
-- Operators declare per-model prices in the worker runtime configuration. A run, an agent, a tenant
-  and a model response cannot influence a price.
+- Operators declare per-model prices in the worker runtime configuration, including a price for the
+  retrieval embedding model. A run, an agent, a tenant and a model response cannot influence a price.
 - A priced provider call is converted to cost once, at the moment its result is committed, and
   stored in `workspace_spend_records`. A later price change never rewrites recorded history.
 - Owners and admins set a monthly limit and an enforcement mode per workspace through the API.
@@ -34,22 +34,36 @@ accounting currency. Prices are declared per million tokens, separately for inpu
 cost is computed with integer arithmetic that rounds a partial price unit up, so accounting never
 silently under-reports. Floating point is not used anywhere in this path.
 
-A deployment prices every configured model candidate or none of them. Partial pricing would meter
-some provider egress and silently exempt the rest, so the worker refuses to start with it. Without
-prices, accounting and budget enforcement stay off rather than recording a fabricated zero cost; a
-model that is routed but not priced fails the run closed with `model_price_not_configured` instead
-of executing unmetered.
+A deployment prices every configured model candidate or none of them, and a configured retrieval
+model is priced exactly when the candidates are. Partial pricing would meter some provider egress
+and silently exempt the rest, so the worker refuses to start with it. Without prices, accounting and
+budget enforcement stay off rather than recording a fabricated zero cost; a model that is routed but
+not priced fails the run closed with `model_price_not_configured` instead of executing unmetered.
+
+Embeddings are billed on input tokens only, so their price declares an input rate alone rather than
+an output rate that would invent a charge.
 
 A deployment uses a single accounting currency. Multi-currency ledgers and currency conversion are
 deliberately out of scope: a stored number whose currency can change is not evidence.
 
 ## Exactly-once accounting
 
-Every ledger row carries a deterministic `source_key` — `agent-run:{run_id}:step:{n}` for a model
-step and `eval-judge:{judge_run_id}:case:{case_id}` for a judge case — unique per workspace. The
-row is written in the same transaction that commits the work it prices: the agent model step, or
-the judge case score. A replayed step, a resumed run, a requeued judge job and crash recovery
-therefore cannot charge the same unit of work twice.
+Every ledger row carries a deterministic `source_key`, unique per workspace:
+
+- `agent-run:{run_id}:step:{n}` for a model step;
+- `eval-judge:{judge_run_id}:case:{case_id}` for a judge case;
+- `agent-run:{run_id}:retrieval` for the query embedding of a run;
+- `knowledge-source:{source_id}` for the embeddings of an indexed knowledge version.
+
+Each row is written in the same transaction that commits the work it prices — the agent model step,
+the judge case score, or the indexed source version — so a replayed step, a resumed run, a requeued
+judge job, a re-indexed source and crash recovery cannot charge the same unit of work twice.
+
+A query embedding is the exception: it has no durable artifact of its own, because a run keeps a
+retrieval snapshot rather than the call that produced it. It is therefore recorded immediately after
+the provider answers, under the run's retrieval key, so a later run failure cannot erase money that
+was already spent, and a retry of the same run cannot charge it again. A retrieval call that cannot
+name a key to charge is refused before egress rather than run unattributed.
 
 The inverse boundary is the one ADR 0022 already documents: a process that dies after provider
 success but before its transaction commits loses both the durable result and its ledger row. That
@@ -72,8 +86,10 @@ rather than a hard cap:
 
 A denied agent run fails terminally with `workspace_budget_exhausted` and appends a `spend.denied`
 run event carrying the limit and the consumed amount, so the tenant sees why the run stopped. A
-denied judge job fails with `judge_budget_exhausted` without provider egress. Neither path invents
-token usage or cost for a call that never happened.
+denied judge job fails with `judge_budget_exhausted` and a denied knowledge ingestion job fails with
+`workspace_budget_exhausted`, both without provider egress. An exhausted budget is terminal for an
+ingestion job rather than retryable, because a bounded retry budget cannot outlast a billing period.
+No path invents token usage or cost for a call that never happened.
 
 Budgets do not grant permission. Execution still requires workspace membership, an authorized model
 profile and, for tools, policy and approval. A budget can only subtract.
@@ -112,10 +128,9 @@ durable ledger, which is permission-scoped, rather than from metrics, which are 
 
 ## Limits
 
-Embedding calls made for retrieval and knowledge ingestion are not priced in this increment, so the
-ledger covers model generation only and a budget bounds generation spend only. Making ingestion and
-retrieval embeddings billable units is the next step; until then the API and this document state
-which categories are metered instead of implying a complete bill.
+The ledger covers every provider call the platform makes on a tenant's behalf: model generation,
+judge scoring and both embedding paths. It is not a provider invoice — it prices what this platform
+called, using operator prices, and cannot see spend a provider bills outside Nexora.
 
 There is no deployment-wide default cap: a workspace without a budget row is metered but unlimited.
 A second source of truth in worker configuration would report a limit the API could not see.
@@ -125,18 +140,24 @@ starts, spend forecasting and alert thresholds are not part of this increment.
 
 ## Verification
 
-- unit coverage for integer cost rounding, invalid prices, unpriced models, the full budget decision
-  matrix, bounded source keys, all-or-none pricing configuration and bounded metric labels;
+- unit coverage for integer cost rounding, invalid prices, unpriced models, input-only embedding
+  pricing, the full budget decision matrix, distinct and bounded source keys, all-or-none pricing
+  configuration including retrieval, and bounded metric labels;
 - PostgreSQL/API integration coverage for RBAC on budget changes, member-readable summaries,
   cross-tenant record and cursor isolation, budget history, audit records and append-only rejection;
 - worker integration coverage proving a real run writes exactly one priced ledger row per model
   step, that a replayed step is not charged twice, that an exhausted budget stops the run before any
   provider request, and that an unpriced model fails closed;
 - judge integration coverage proving candidate and baseline scoring are priced into the ledger and
-  that an exhausted budget denies scoring before egress.
+  that an exhausted budget denies scoring before egress;
+- ingestion integration coverage proving an indexed knowledge version writes one priced embedding
+  row and that an exhausted budget fails the job before the first embedding call;
+- retrieval coverage proving a query embedding is charged to its run, is not charged twice when the
+  run retries, and is refused when no key can be charged, plus an executor check that a refused
+  retrieval fails the run closed without a model call.
 
 ## Skills applied
 
-cost-performance, model-routing, postgres-data-modeling, auth-rbac-multitenancy, api-openapi,
-fastapi-backend, observability-otel, security-threat-modeling, testing-quality,
+cost-performance, model-routing, rag-engineering, postgres-data-modeling, auth-rbac-multitenancy,
+api-openapi, fastapi-backend, observability-otel, security-threat-modeling, testing-quality,
 code-review-debugging.

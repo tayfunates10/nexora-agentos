@@ -14,6 +14,7 @@ from nexora_api.rag import (
     chunk_text,
 )
 from nexora_api.rag_repository import RagRepository
+from nexora_api.spend import EmbeddingSpend, SpendPricingError, adhoc_retrieval_source_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,7 @@ class RagEmbeddingPipeline:
         batch_size: int = 128,
         timeout_seconds: float = 15.0,
         retrieval_limit: int = 8,
+        spend: EmbeddingSpend | None = None,
     ):
         if not 1 <= dimensions <= 4096:
             raise ValueError("dimensions must be between 1 and 4096")
@@ -56,6 +58,9 @@ class RagEmbeddingPipeline:
         self.batch_size = batch_size
         self.timeout_seconds = timeout_seconds
         self.retrieval_limit = retrieval_limit
+        # Without operator pricing, embedding accounting and budgets stay off rather
+        # than recording a fabricated zero cost.
+        self.spend = spend
 
     async def index_source(
         self,
@@ -78,6 +83,8 @@ class RagEmbeddingPipeline:
         # Do not trigger paid provider work for an unauthorized caller.
         # The repository rechecks permission inside the write transaction.
         await self.repository.authorize_manage(principal, workspace_id)
+        if self.spend is not None:
+            await self.repository.authorize_spend(workspace_id)
 
         chunks = chunk_text(text, max_chars=max_chars, overlap_chars=overlap_chars)
         vectors, input_tokens = await self._embed_texts(
@@ -102,6 +109,7 @@ class RagEmbeddingPipeline:
             ingestion_job_id=ingestion_job_id,
             ingestion_worker_id=ingestion_worker_id,
             embedding_input_tokens=input_tokens,
+            embedding_spend=self.spend,
         )
         return RagIndexResult(
             source_id=source_id,
@@ -117,13 +125,30 @@ class RagEmbeddingPipeline:
         query: str,
         request_id: str,
         limit: int | None = None,
+        spend_key: str | None = None,
     ) -> RagSearchResult:
         # Membership is checked before provider egress and again in retrieval SQL.
         await self.repository.authorize_retrieve(principal, workspace_id)
+        if self.spend is not None:
+            # A query embedding with nowhere to charge it would be unmetered egress.
+            if spend_key is None:
+                raise SpendPricingError("embedding_spend_key_missing")
+            await self.repository.authorize_spend(workspace_id)
         vectors, input_tokens = await self._embed_texts(
             (query,),
             request_id=request_id + ":query",
         )
+        if self.spend is not None and spend_key is not None:
+            # A query embedding has no durable artifact of its own: record the paid
+            # call now, so a later run failure cannot erase what was already spent.
+            await self.repository.record_embedding_spend(
+                workspace_id,
+                source_key=spend_key,
+                provider=self.spend.provider,
+                model=self.spend.model,
+                input_tokens=input_tokens,
+                cost_micros=self.spend.cost_micros(input_tokens),
+            )
         chunks = await self.repository.retrieve(
             principal,
             workspace_id,
@@ -139,11 +164,13 @@ class RagEmbeddingPipeline:
         workspace_id: UUID,
         query: str,
     ) -> str:
+        request_id = uuid4()
         result = await self.retrieve(
             principal,
             workspace_id,
             query=query,
-            request_id=f"worker-retrieval:{uuid4()}",
+            request_id=f"worker-retrieval:{request_id}",
+            spend_key=adhoc_retrieval_source_key(request_id),
         )
         if not result.chunks:
             return ""

@@ -100,8 +100,8 @@ export default async function Spend({ params, searchParams }: {
       </p>
       <p className="notice">
         Amounts are accounting units of your operator&apos;s currency, stored exactly as
-        millionths (micros) and priced when each call was made. Embedding calls are not
-        metered yet, so this covers model generation only.
+        millionths (micros) and priced when each call was made. Model generation, quality
+        judging and retrieval or ingestion embeddings are all metered here.
       </p>
 
       {query.saved === "budget" && <p role="status">The budget was saved.</p>}

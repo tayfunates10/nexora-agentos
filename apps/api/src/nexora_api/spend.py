@@ -30,11 +30,20 @@ MAX_SOURCE_KEY_LENGTH = 200
 class SpendCategory(StrEnum):
     AGENT_RUN = "agent_run"
     EVALUATION_JUDGE = "evaluation_judge"
+    EMBEDDING = "embedding"
 
 
 class BudgetEnforcement(StrEnum):
     ENFORCE = "enforce"
     MONITOR = "monitor"
+
+
+class SpendLimitExceeded(RuntimeError):
+    """A workspace budget refuses further paid work. Raised before provider egress."""
+
+    def __init__(self, code: str = "workspace_budget_exhausted"):
+        super().__init__(code)
+        self.code = code
 
 
 class SpendPricingError(RuntimeError):
@@ -86,6 +95,21 @@ class SpendPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class EmbeddingSpend:
+    """Operator pricing for the single embedding model a deployment may call.
+
+    Embeddings report input tokens only; an output rate would invent a charge.
+    """
+
+    provider: str
+    model: str
+    price: ModelPrice
+
+    def cost_micros(self, input_tokens: int) -> int:
+        return self.price.cost_micros(input_tokens, 0)
+
+
+@dataclass(frozen=True, slots=True)
 class BudgetDecision:
     allowed: bool
     reason: str
@@ -126,6 +150,19 @@ def agent_step_source_key(run_id: UUID, step_no: int) -> str:
 
 def judge_case_source_key(judge_run_id: UUID, case_id: UUID) -> str:
     return f"eval-judge:{judge_run_id}:case:{case_id}"
+
+
+def run_retrieval_source_key(run_id: UUID) -> str:
+    return f"agent-run:{run_id}:retrieval"
+
+
+def adhoc_retrieval_source_key(reference: UUID) -> str:
+    """A retrieval that belongs to no durable run still has to be charged somewhere."""
+    return f"retrieval:{reference}"
+
+
+def knowledge_source_key(source_id: UUID) -> str:
+    return f"knowledge-source:{source_id}"
 
 
 class BudgetInput(BaseModel):

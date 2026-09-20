@@ -66,11 +66,33 @@ test("a zero limit reads as fully used rather than dividing by zero", () => {
   assert.equal(usedRatio(blocked), 1);
 });
 
+test("embedding rows carry input tokens only and stay inside the contract", () => {
+  const embedding = {
+    ...record, category: "embedding", model: "embed-test",
+    source_key: "knowledge-source:" + id, input_tokens: 240, output_tokens: 0,
+  };
+  const page = spendRecordPageSchema.parse({ items: [embedding], next_cursor: null });
+  assert.equal(page.items[0].category, "embedding");
+  const withEmbeddings = spendSummarySchema.parse({
+    ...summary,
+    consumed_micros: 8_000_000,
+    remaining_micros: 2_000_000,
+    categories: [
+      ...summary.categories,
+      {
+        category: "embedding", call_count: 2, input_tokens: 240,
+        output_tokens: 0, cost_micros: 500_000,
+      },
+    ],
+  });
+  assert.equal(withEmbeddings.categories.length, 3);
+});
+
 test("record page contract bounds cursors and category values", () => {
   assert.equal(spendRecordPageSchema.parse({ items: [record], next_cursor: null }).items[0].cost_micros, 2_500_000);
   assert.equal(spendRecordPageSchema.safeParse({ items: [record], next_cursor: "../other" }).success, false);
   assert.equal(spendRecordPageSchema.safeParse({
-    items: [{ ...record, category: "embeddings" }], next_cursor: null,
+    items: [{ ...record, category: "fine-tuning" }], next_cursor: null,
   }).success, false);
   assert.equal(spendRecordPageSchema.safeParse({
     items: [{ ...record, source_key: "x".repeat(201) }], next_cursor: null,

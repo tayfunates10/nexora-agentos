@@ -34,10 +34,11 @@ versioned golden suites, baseline regression comparison and failed-case evidence
 API model-provider egress. Imported real-run evaluations can now queue a worker-side pinned LLM judge
 for task-completion, relevance and clarity scoring while keeping probabilistic quality separate from
 deterministic pass/fail.
-Provider spend is now metered per workspace: operator-declared model prices are converted to an
-append-only cost ledger inside the transaction that commits each model step or judge case, and
-per-workspace monthly budgets are enforced before provider egress. The web console reports that
-spend per period and lets owners and admins set the cap.
+Provider spend is now metered per workspace: operator-declared prices are converted to an
+append-only cost ledger inside the transaction that commits each model step, judge case or indexed
+knowledge version, and per-workspace monthly budgets are enforced before any provider egress,
+generation and embeddings alike. The web console reports that spend per period and lets owners and
+admins set the cap.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
@@ -229,7 +230,8 @@ nothing runs unless a deployment explicitly allows it.
     "provider": "openai",
     "model": "text-embedding-3-small",
     "dimensions": 1536,
-    "limit": 8
+    "limit": 8,
+    "input_micros_per_million_tokens": 20000
   },
   "evaluation_judge": {
     "provider": "openai",
@@ -410,7 +412,8 @@ per-case quality delta is stored. Judge results never alter deterministic pass/f
 
 The workspace panel links to **Spend and budget**. Members can read the current UTC month: consumed
 and remaining amounts, the budget state, the per-category breakdown and the priced-call ledger with
-cursor pagination and a category filter. Owners and admins can also set the monthly limit and
+cursor pagination and a category filter across agent runs, quality judging and embeddings. Owners
+and admins can also set the monthly limit and
 enforcement mode through a CSRF-protected form; the browser never receives the API token. Amounts
 are converted between units and exact micros with integer arithmetic, and an amount that cannot be
 represented exactly is refused by both the input pattern and the server route. See
@@ -418,18 +421,21 @@ represented exactly is refused by both the input pattern and the server route. S
 
 Provider spend is metered per workspace. Operators declare a price for every model candidate in the
 worker runtime configuration (`input_micros_per_million_tokens` and
-`output_micros_per_million_tokens`); a run, an agent or a tenant can never influence one. Cost is an
-integer count of micros — millionths of one unit of the operator accounting currency — and a partial
-price unit always rounds up.
+`output_micros_per_million_tokens`) and, when retrieval is enabled, an input rate for the embedding
+model; a run, an agent or a tenant can never influence one. Cost is an integer count of micros —
+millionths of one unit of the operator accounting currency — and a partial price unit always rounds
+up.
 
-A deployment prices every candidate or none. Leaving prices out keeps accounting and enforcement off
-instead of recording a fabricated zero cost; a half-priced configuration stops the worker from
-starting, and a model that is routed but unpriced fails the run with `model_price_not_configured`
-rather than executing unmetered.
+A deployment prices every candidate or none, and prices retrieval embeddings exactly when it prices
+candidates. Leaving prices out keeps accounting and enforcement off instead of recording a fabricated
+zero cost; a half-priced configuration stops the worker from starting, and a model that is routed but
+unpriced fails the run with `model_price_not_configured` rather than executing unmetered.
 
 Each priced call is written to an append-only ledger in the same transaction that commits the work it
-pays for — the agent model step, or the judge case score — under a deterministic source key, so a
-retried, resumed or crash-recovered attempt is never charged twice.
+pays for — the agent model step, the judge case score, or the indexed knowledge version — under a
+deterministic source key, so a retried, resumed or crash-recovered attempt is never charged twice. A
+query embedding has no durable artifact of its own, so it is recorded as soon as the provider answers,
+under its run's retrieval key; a retrieval that cannot name a key to charge is refused before egress.
 
 - `GET /api/v1/workspaces/{workspace_id}/spend` — current UTC month: consumed micros, limit,
   enforcement, remaining micros and per-category totals (members and above).
@@ -440,16 +446,18 @@ retried, resumed or crash-recovered attempt is never charged twice.
 
 The worker checks the remaining budget before provider egress. In `enforce` mode an exhausted budget
 stops the run terminally with `workspace_budget_exhausted` and appends a `spend.denied` run event
-carrying the limit and consumed amount; a judge job fails with `judge_budget_exhausted` before any
-request leaves the process. In `monitor` mode the overage is reported and execution continues. The
+carrying the limit and consumed amount; a judge job fails with `judge_budget_exhausted` and a
+knowledge ingestion job fails terminally with `workspace_budget_exhausted`, both before any request
+leaves the process. In `monitor` mode the overage is reported and execution continues. The
 check is a gate rather than a hard cap: the call that crosses the limit is the last one allowed, and
 concurrent runs can overshoot by the cost of the calls already in flight, bounded by the profile
 token limits. A workspace without a budget is metered but unlimited.
 
 Budget changes are recorded twice — in an append-only budget event with actor and request identity,
 and in the workspace security audit trail. Ledger rows and budget events reject update, delete and
-truncate at the database. Embedding calls are not priced in this increment, so the ledger and budget
-cover model generation only. See [ADR 0025](docs/architecture/0025-spend-governance.md).
+truncate at the database. The ledger covers every provider call the platform makes for a tenant —
+agent runs, quality judging and both embedding paths — priced with operator rates; it is not a
+provider invoice. See [ADR 0025](docs/architecture/0025-spend-governance.md).
 
 ## Traces, metrics and structured logs
 

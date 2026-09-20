@@ -8,13 +8,17 @@ from nexora_api.runtime_config import RuntimeConfig, RuntimeConfigError, load_ru
 from nexora_api.spend import (
     MAX_SOURCE_KEY_LENGTH,
     BudgetEnforcement,
+    EmbeddingSpend,
     ModelPrice,
     SpendCategory,
     SpendPolicy,
     SpendPricingError,
+    adhoc_retrieval_source_key,
     agent_step_source_key,
     budget_decision,
     judge_case_source_key,
+    knowledge_source_key,
+    run_retrieval_source_key,
 )
 
 
@@ -99,12 +103,36 @@ def test_source_keys_are_deterministic_and_bounded():
     assert agent_step_source_key(run_id, 3) == agent_step_source_key(run_id, 3)
     assert agent_step_source_key(run_id, 3) != agent_step_source_key(run_id, 4)
     assert judge_case_source_key(run_id, case_id) != agent_step_source_key(run_id, 0)
-    for key in (agent_step_source_key(run_id, 31), judge_case_source_key(run_id, case_id)):
+    keys = (
+        agent_step_source_key(run_id, 31),
+        judge_case_source_key(run_id, case_id),
+        run_retrieval_source_key(run_id),
+        adhoc_retrieval_source_key(run_id),
+        knowledge_source_key(case_id),
+    )
+    # A retrieval must never collide with the model steps of the same run.
+    assert len(set(keys)) == len(keys)
+    for key in keys:
         assert 1 <= len(key) <= MAX_SOURCE_KEY_LENGTH
 
 
-def runtime_document(**candidate):
-    return {
+def test_embedding_spend_charges_input_tokens_only():
+    spend = EmbeddingSpend(
+        provider="openai",
+        model="embed-test",
+        price=ModelPrice(
+            input_micros_per_million_tokens=20_000,
+            output_micros_per_million_tokens=0,
+        ),
+    )
+    assert spend.cost_micros(1_000_000) == 20_000
+    # Rounding up keeps a small embedding from costing a recorded zero.
+    assert spend.cost_micros(1) == 1
+    assert spend.cost_micros(0) == 0
+
+
+def runtime_document(retrieval=None, **candidate):
+    document = {
         "model_candidates": [
             {
                 "provider": "openai",
@@ -120,6 +148,41 @@ def runtime_document(**candidate):
             }
         },
     }
+    if retrieval is not None:
+        document["retrieval"] = {"provider": "openai", "model": "embed-test", **retrieval}
+    return document
+
+
+PRICED = {
+    "input_micros_per_million_tokens": 3_000_000,
+    "output_micros_per_million_tokens": 15_000_000,
+}
+
+
+def test_embedding_price_is_required_exactly_when_models_are_priced():
+    # Unpriced deployment: retrieval stays unpriced too.
+    config = RuntimeConfig.model_validate(runtime_document(retrieval={}))
+    assert config.embedding_spend() is None
+
+    priced = RuntimeConfig.model_validate(
+        runtime_document(retrieval={"input_micros_per_million_tokens": 20_000}, **PRICED)
+    )
+    spend = priced.embedding_spend()
+    assert spend is not None
+    assert (spend.provider, spend.model) == ("openai", "embed-test")
+    assert spend.cost_micros(500_000) == 10_000
+
+    # Embeddings are provider egress; leaving them unpriced would exempt them.
+    with pytest.raises(ValueError, match="retrieval embeddings must be priced"):
+        RuntimeConfig.model_validate(runtime_document(retrieval={}, **PRICED))
+    with pytest.raises(ValueError, match="retrieval embeddings must be priced"):
+        RuntimeConfig.model_validate(
+            runtime_document(retrieval={"input_micros_per_million_tokens": 20_000})
+        )
+
+
+def test_a_deployment_without_retrieval_needs_no_embedding_price():
+    assert RuntimeConfig.model_validate(runtime_document(**PRICED)).embedding_spend() is None
 
 
 def test_runtime_config_without_prices_disables_accounting():

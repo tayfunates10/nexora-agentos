@@ -4,7 +4,7 @@ CREATE TABLE workspace_spend_records (
     -- Deterministic identity of the priced unit of work. It makes the ledger
     -- exactly-once under worker retries and crash recovery.
     source_key text NOT NULL CHECK (length(source_key) BETWEEN 1 AND 200),
-    category text NOT NULL CHECK (category IN ('agent_run','evaluation_judge')),
+    category text NOT NULL CHECK (category IN ('agent_run','evaluation_judge','embedding')),
     provider text NOT NULL CHECK (length(provider) BETWEEN 1 AND 64),
     model text NOT NULL CHECK (length(model) BETWEEN 1 AND 128),
     input_tokens integer NOT NULL CHECK (input_tokens >= 0),

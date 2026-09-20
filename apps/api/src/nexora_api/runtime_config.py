@@ -26,7 +26,7 @@ from pydantic import (
 
 from nexora_api.executor import ExecutionProfile
 from nexora_api.model_routing import ModelCandidate, ModelCapability
-from nexora_api.spend import MAX_PRICE_MICROS, ModelPrice, SpendPolicy
+from nexora_api.spend import MAX_PRICE_MICROS, EmbeddingSpend, ModelPrice, SpendPolicy
 
 PROFILE_NAME = r"^[A-Za-z0-9._-]{1,64}$"
 PROVIDER_NAME = r"^[a-z][a-z0-9_.-]{1,63}$"
@@ -129,6 +129,24 @@ class RetrievalConfig(BaseModel):
     limit: int = Field(default=8, ge=1, le=50)
     batch_size: int = Field(default=128, ge=1, le=256)
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
+    # Embeddings are billed on input tokens only; there is no output rate to declare.
+    input_micros_per_million_tokens: int | None = Field(default=None, ge=0, le=MAX_PRICE_MICROS)
+
+    @property
+    def priced(self) -> bool:
+        return self.input_micros_per_million_tokens is not None
+
+    def spend(self) -> EmbeddingSpend | None:
+        if not self.priced:
+            return None
+        return EmbeddingSpend(
+            provider=self.provider,
+            model=self.model,
+            price=ModelPrice(
+                input_micros_per_million_tokens=self.input_micros_per_million_tokens,
+                output_micros_per_million_tokens=0,
+            ),
+        )
 
 
 class EvaluationJudgeConfig(BaseModel):
@@ -216,6 +234,10 @@ class RuntimeConfig(BaseModel):
         priced = {candidate.priced for candidate in self.model_candidates}
         if len(priced) != 1:
             raise ValueError("model prices must be declared for every candidate or for none")
+        # Retrieval and ingestion embeddings are provider egress too. Leaving them
+        # unpriced under a priced deployment would exempt them from every budget.
+        if self.retrieval is not None and self.retrieval.priced != (True in priced):
+            raise ValueError("retrieval embeddings must be priced exactly when models are priced")
 
         configured = {candidate.provider for candidate in self.model_candidates}
         if self.evaluation_judge is not None:
@@ -251,6 +273,10 @@ class RuntimeConfig(BaseModel):
 
     def candidates(self) -> list[ModelCandidate]:
         return [candidate.candidate() for candidate in self.model_candidates]
+
+    def embedding_spend(self) -> EmbeddingSpend | None:
+        """Pricing for configured retrieval embeddings, or None when accounting is off."""
+        return self.retrieval.spend() if self.retrieval is not None else None
 
     def spend_policy(self) -> SpendPolicy | None:
         """Pricing for every configured model, or None when accounting is not enabled."""

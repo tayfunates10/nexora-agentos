@@ -13,6 +13,7 @@ from nexora_api.config import Settings
 from nexora_api.model_routing import ProviderError
 from nexora_api.rag import AccessScope, AclIdentity
 from nexora_api.rag_pipeline import RagEmbeddingPipeline
+from nexora_api.spend import SpendLimitExceeded, SpendPricingError
 
 MAX_INGESTION_ATTEMPTS = 3
 
@@ -78,6 +79,8 @@ class KnowledgeIngestionWorker:
             )
         except HTTPException:
             await self._fail(job, "knowledge_permission_revoked", retryable=False)
+        except (SpendLimitExceeded, SpendPricingError) as exc:
+            await self._fail(job, exc.code, retryable=False)
         except ProviderError as exc:
             await self._fail(job, exc.code, retryable=exc.retryable)
         except ValueError:

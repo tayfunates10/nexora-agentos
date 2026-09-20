@@ -70,8 +70,8 @@ The page holds no client state and performs no polling; the URL carries the curs
 ## Limits
 
 The console reports the current UTC month only. Historical periods, export and spend alerts are not
-part of this increment, and embedding calls remain unmetered upstream, which the page states rather
-than implying a complete bill.
+part of this increment. Every metered category the platform records — agent runs, quality judging
+and embeddings — is shown and filterable.
 
 ## Verification
 
