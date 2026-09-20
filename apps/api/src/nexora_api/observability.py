@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from time import monotonic
-from typing import Mapping
 
 
 SAFE_ATTRIBUTE_KEYS = frozenset(
