@@ -45,10 +45,15 @@ class ExecutorStore(RunStateStore):
             row = await result.fetchone()
             if row is None:
                 return None
-            expected_query_hash = hashlib.sha256(context.input_text.encode("utf-8")).hexdigest()
+            expected_query_hash = hashlib.sha256(
+                context.input_text.encode("utf-8")
+            ).hexdigest()
             if row["query_hash"] != expected_query_hash:
                 raise RuntimeError("retrieval snapshot query mismatch")
-            if hashlib.sha256(row["context_text"].encode("utf-8")).hexdigest() != row["context_hash"]:
+            if (
+                hashlib.sha256(row["context_text"].encode("utf-8")).hexdigest()
+                != row["context_hash"]
+            ):
                 raise RuntimeError("retrieval snapshot context hash mismatch")
             return RunRetrievalSnapshot(
                 context_text=row["context_text"],
@@ -115,7 +120,11 @@ class ExecutorStore(RunStateStore):
                 (context.workspace_id, context.run_id),
             )
             row = await current.fetchone()
-            if row is None or row["query_hash"] != query_hash or row["context_hash"] != context_hash:
+            if (
+                row is None
+                or row["query_hash"] != query_hash
+                or row["context_hash"] != context_hash
+            ):
                 raise RuntimeError("retrieval snapshot conflict")
             return RunRetrievalSnapshot(
                 context_text=row["context_text"],
