@@ -30,7 +30,8 @@ ACL-filtered pgvector retrieval, deterministic chunking and citation provenance.
 opt into fixed-egress OpenAI embeddings and permission-aware retrieval through operator configuration.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
-operator-managed model profiles. No production MCP transport adapter is enabled yet.
+operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
+2026-07-28 Streamable HTTP servers over public TLS; remote transport remains opt-in.
 See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [agent run architecture](docs/architecture/0004-agent-runs-outbox.md),
 [worker architecture](docs/architecture/0005-worker-state-machine.md), and
@@ -42,7 +43,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [worker service](docs/architecture/0011-worker-service.md), and
 [Kubernetes deployment](docs/architecture/0012-kubernetes-deployment.md), and
 [release pipeline](docs/architecture/0013-release-pipeline.md), and
-[RAG embedding runtime](docs/architecture/0014-rag-embedding-runtime.md).
+[RAG embedding runtime](docs/architecture/0014-rag-embedding-runtime.md), and
+[MCP Streamable HTTP transport](docs/architecture/0015-mcp-streamable-http.md).
 
 ## Run locally with Docker Compose
 
@@ -200,6 +202,7 @@ nothing runs unless a deployment explicitly allows it.
       "max_steps": 8
     }
   },
+  "mcp_servers": {},
   "retrieval": {
     "provider": "openai",
     "model": "text-embedding-3-small",
@@ -255,8 +258,33 @@ The worker releases its lease while waiting. Approval requeues the run through t
 outbox; rejection, expiry or run cancellation closes the workflow without calling the adapter.
 
 Workspace users cannot register raw MCP URLs, stdio commands or credentials. This keeps network
-egress and service credentials outside model-visible configuration. See
-[ADR 0006](docs/architecture/0006-mcp-tool-governance.md).
+egress and service credentials outside model-visible configuration. Operators may opt into a
+remote server in the worker runtime file:
+
+```json
+{
+  "mcp_servers": {
+    "ops": {
+      "transport": "streamable_http",
+      "url": "https://mcp.example.com/mcp",
+      "bearer_token_env": "NEXORA_MCP_OPS_TOKEN",
+      "timeout_seconds": 15,
+      "max_response_bytes": 131072
+    }
+  }
+}
+```
+
+The token value stays in the process environment; only its environment-variable name is in the
+runtime file. A workspace tool may reference the bounded `server_key` (`ops` above), but cannot
+change that server's URL or credentials. The built-in adapter pins MCP revision `2026-07-28`,
+sends the required method/name headers, accepts JSON or SSE responses, refuses redirects and
+private/local literal endpoints, and bounds response bytes. It currently supports synchronous
+`tools/call` results only: MRTR `input_required`, Tasks results and non-text fallback content
+fail closed rather than widening the trust boundary.
+
+See [ADR 0006](docs/architecture/0006-mcp-tool-governance.md) and
+[ADR 0015](docs/architecture/0015-mcp-streamable-http.md).
 
 ## Traces, metrics and structured logs
 

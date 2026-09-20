@@ -200,3 +200,15 @@ def test_worker_shutdown_window_covers_its_configured_grace():
 
     grace = float(config["data"]["NEXORA_WORKER_SHUTDOWN_GRACE_SECONDS"])
     assert worker["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] > grace
+
+
+def test_worker_accepts_mcp_credentials_only_from_an_optional_secret():
+    worker = next(
+        document
+        for document in by_kind("Deployment")
+        if document["metadata"]["name"] == "nexora-worker"
+    )
+    sources = worker["spec"]["template"]["spec"]["containers"][0]["envFrom"]
+    secret_refs = [source["secretRef"] for source in sources if "secretRef" in source]
+
+    assert secret_refs == [{"name": "nexora-mcp-secrets", "optional": True}]

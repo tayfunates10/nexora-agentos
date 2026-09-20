@@ -7,13 +7,22 @@ fails closed: an unreadable, malformed or internally inconsistent configuration 
 the worker from starting rather than silently granting execution.
 """
 
+import ipaddress
 import json
 import re
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from nexora_api.executor import ExecutionProfile
 from nexora_api.model_routing import ModelCandidate, ModelCapability
@@ -95,12 +104,51 @@ class RetrievalConfig(BaseModel):
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
 
 
+class McpServerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    transport: Literal["streamable_http"] = "streamable_http"
+    url: str = Field(min_length=1, max_length=1000)
+    bearer_token_env: str | None = Field(
+        default=None,
+        pattern=r"^NEXORA_MCP_[A-Z0-9_]{1,100}$",
+    )
+    timeout_seconds: float = Field(default=15.0, ge=0.1, le=120)
+    max_response_bytes: int = Field(default=131072, ge=1024, le=1048576)
+
+    @field_validator("url")
+    @classmethod
+    def _secure_endpoint(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.port not in (None, 443)
+        ):
+            raise ValueError("MCP URL must use HTTPS port 443 without credentials/query")
+        hostname = parsed.hostname.rstrip(".").lower()
+        if hostname == "localhost" or not hostname:
+            raise ValueError("MCP hostname is not allowed")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return value
+        if not address.is_global:
+            raise ValueError("MCP literal IP must be globally routable")
+        return value
+
+
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_candidates: list[ModelCandidateConfig] = Field(min_length=1, max_length=32)
     profiles: dict[str, ExecutionProfileConfig] = Field(min_length=1, max_length=16)
     retrieval: RetrievalConfig | None = None
+    mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict, max_length=32)
 
     @model_validator(mode="after")
     def _consistent(self):
@@ -112,6 +160,10 @@ class RuntimeConfig(BaseModel):
                     f"duplicate model candidate: {candidate.provider}/{candidate.model}"
                 )
             seen.add(key)
+
+        for server_key in self.mcp_servers:
+            if not re.fullmatch(TOOL_NAME, server_key):
+                raise ValueError(f"invalid MCP server key: {server_key}")
 
         configured = {candidate.provider for candidate in self.model_candidates}
         for name, profile in self.profiles.items():

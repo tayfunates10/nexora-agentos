@@ -21,9 +21,9 @@ Nexora introduces a governed MCP gateway with four layers:
 4. Operator-provided MCP adapters selected by a bounded `server_key`.
 
 Workspace users never provide raw transport URLs, process commands or credentials to an agent.
-This prevents the first implementation from becoming a generic SSRF, shell or credential-passing
-escape hatch. A later transport adapter may use the official MCP Python SDK over Streamable HTTP,
-but it must preserve the same policy boundary.
+This prevents the gateway from becoming a generic SSRF, shell or credential-passing escape hatch.
+The production Streamable HTTP adapter is configured only by operators and preserves the same
+policy boundary; see ADR 0015.
 
 ## Tool contract
 
@@ -100,11 +100,13 @@ Credentials are not stored in tool definitions, tool calls, approvals or model-v
 ## Known limits
 
 - No arbitrary workspace-configured MCP URL or stdio command is supported.
-- No production MCP transport adapter is enabled by default.
+- Remote MCP transport is opt-in and operator-configured; no server is enabled by default.
 - Approval expiry is swept by the worker loop and is also checked synchronously when approval
   state is accessed or decided.
 - Tool discovery/synchronization from MCP servers is not automatic yet.
-- Production egress controls and short-lived server credentials belong to deployment hardening.
+- The built-in transport currently supports modern synchronous `tools/call` only; MRTR, Tasks,
+  OAuth discovery and `x-mcp-header` mirroring are follow-up work.
+- Production Kubernetes egress is public TLS only; MCP bearer tokens are injected out of band.
 
 ## References
 

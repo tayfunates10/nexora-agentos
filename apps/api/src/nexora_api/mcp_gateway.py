@@ -23,6 +23,15 @@ class McpToolAdapter(Protocol):
 
 
 @dataclass
+class McpAdapterError(Exception):
+    code: str
+    retryable: bool
+
+    def __str__(self) -> str:
+        return self.code
+
+
+@dataclass
 class ApprovalRequired(Exception):
     tool_call_id: UUID
     approval_id: UUID
@@ -136,6 +145,14 @@ class McpGateway:
                 ),
                 timeout=self.timeout_seconds,
             )
+        except McpAdapterError as exc:
+            await self.repository.complete_failure(
+                execution.call_id, exc.code, retryable=exc.retryable, context=context
+            )
+            record_error(active, exc.code)
+            outcome = "error" if exc.retryable else "denied"
+            metrics.observe_tool_call(execution.server_key, outcome, time.perf_counter() - started)
+            raise McpGatewayError(exc.code, retryable=exc.retryable) from exc
         except TimeoutError as exc:
             await self.repository.complete_failure(
                 execution.call_id, "mcp_timeout", retryable=True, context=context

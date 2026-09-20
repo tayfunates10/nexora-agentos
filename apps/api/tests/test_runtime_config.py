@@ -7,8 +7,10 @@ from nexora_api.config import Settings
 from nexora_api.model_routing import ModelCapability
 from nexora_api.runtime_config import RuntimeConfigError, load_runtime_config
 from nexora_api.worker_service import (
+    build_mcp_adapters,
     build_provider_adapters,
     build_retriever,
+    close_mcp_adapters,
     close_retriever,
     load_worker_config,
 )
@@ -213,3 +215,60 @@ def test_retrieval_is_opt_in_and_uses_operator_configuration(tmp_path):
 def test_invalid_retrieval_configuration_is_refused(tmp_path, retrieval):
     with pytest.raises(RuntimeConfigError):
         load_runtime_config(write(tmp_path, document(retrieval=retrieval)))
+
+
+def test_mcp_servers_are_operator_allowlisted_and_credentials_stay_in_env(tmp_path, monkeypatch):
+    disabled = load_runtime_config(write(tmp_path, document()))
+    assert build_mcp_adapters(disabled) == {}
+
+    configured = load_runtime_config(
+        write(
+            tmp_path,
+            document(
+                mcp_servers={
+                    "ops": {
+                        "transport": "streamable_http",
+                        "url": "https://mcp.example.test/mcp",
+                        "bearer_token_env": "NEXORA_MCP_OPS_TOKEN",
+                        "timeout_seconds": 9,
+                        "max_response_bytes": 65536,
+                    }
+                }
+            ),
+        )
+    )
+
+    with pytest.raises(RuntimeConfigError, match="NEXORA_MCP_OPS_TOKEN"):
+        build_mcp_adapters(configured)
+
+    monkeypatch.setenv("NEXORA_MCP_OPS_TOKEN", "operator-only-secret")
+    adapters = build_mcp_adapters(configured)
+    adapter = adapters["ops"]
+    assert adapter.endpoint.url == "https://mcp.example.test/mcp"
+    assert adapter.endpoint.bearer_token == "operator-only-secret"
+    assert adapter.endpoint.timeout_seconds == 9
+    assert adapter.endpoint.max_response_bytes == 65536
+    asyncio.run(close_mcp_adapters(adapters))
+
+
+@pytest.mark.parametrize(
+    "mcp_servers",
+    [
+        {"Bad Key": {"url": "https://mcp.example.test/mcp"}},
+        {"ops": {"transport": "stdio", "url": "https://mcp.example.test/mcp"}},
+        {"ops": {"url": "http://mcp.example.test/mcp"}},
+        {"ops": {"url": "https://localhost/mcp"}},
+        {"ops": {"url": "https://10.0.0.1/mcp"}},
+        {"ops": {"url": "https://mcp.example.test:8443/mcp"}},
+        {"ops": {"url": "https://mcp.example.test/mcp?token=secret"}},
+        {
+            "ops": {
+                "url": "https://mcp.example.test/mcp",
+                "bearer_token_env": "UNSCOPED_TOKEN",
+            }
+        },
+    ],
+)
+def test_invalid_mcp_server_configuration_is_refused(tmp_path, mcp_servers):
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(write(tmp_path, document(mcp_servers=mcp_servers)))
