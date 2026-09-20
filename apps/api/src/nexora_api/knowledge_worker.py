@@ -88,7 +88,12 @@ class KnowledgeIngestionWorker:
         except Exception:
             await self._fail(job, "knowledge_ingestion_error", retryable=True)
         else:
-            await self._succeed(job, result.source_id, result.chunk_count, result.embedding_input_tokens)
+            await self._succeed(
+                job,
+                result.source_id,
+                result.chunk_count,
+                result.embedding_input_tokens,
+            )
         finally:
             stop.set()
             await heartbeat
