@@ -44,9 +44,15 @@ test("judge contract accepts partial progress and complete baseline deltas", () 
     judge_provider: "openai", judge_model: "judge-model", prompt_version: "nexora-eval-judge-v1",
     error_code: null, quality_milli: 1000, baseline_quality_milli: 250, quality_delta_milli: 750,
     regression_count: 0, improvement_count: 1, input_tokens: 20, output_tokens: 10,
-    latency_ms: 45, created_at: "2026-09-20T13:00:00Z", finished_at: null, results: [caseScore],
+    latency_ms: 45, model_cost_usd_picos: null, model_cost_call_count: 0,
+    model_cost_pricing_complete: false, model_cost_pricing_versions: [],
+    created_at: "2026-09-20T13:00:00Z", finished_at: null, results: [caseScore],
   };
   assert.equal(evalJudgeRunSchema.parse(partial).scored_count, 1);
   assert.equal(evalJudgeRunSchema.safeParse({ ...partial, status: "succeeded" }).success, false);
   assert.equal(evalJudgeRunSchema.safeParse({ ...partial, scored_count: 2 }).success, false);
+  assert.equal(
+    evalJudgeRunSchema.safeParse({ ...partial, model_cost_usd_picos: "1.5" }).success,
+    false,
+  );
 });
