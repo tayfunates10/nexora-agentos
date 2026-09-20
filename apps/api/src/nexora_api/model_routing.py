@@ -66,6 +66,7 @@ class ProviderTool:
 
 @dataclass(frozen=True, slots=True)
 class ProviderRequest:
+    request_id: str
     messages: tuple[ProviderMessage, ...]
     tools: tuple[ProviderTool, ...] = ()
     response_schema: dict[str, Any] | None = None
