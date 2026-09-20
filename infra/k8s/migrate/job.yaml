@@ -31,7 +31,12 @@ spec:
           command: ["python", "-m", "nexora_api.migrate"]
           env:
             - name: NEXORA_DATABASE_URL
-              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_DATABASE_URL}}
+              valueFrom:
+                {secretKeyRef: {name: nexora-secrets, key: NEXORA_MIGRATION_DATABASE_URL}}
+            - name: NEXORA_DATABASE_API_ROLE
+              valueFrom: {configMapKeyRef: {name: nexora-config, key: NEXORA_DATABASE_API_ROLE}}
+            - name: NEXORA_DATABASE_WORKER_ROLE
+              valueFrom: {configMapKeyRef: {name: nexora-config, key: NEXORA_DATABASE_WORKER_ROLE}}
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 500m, memory: 256Mi}
