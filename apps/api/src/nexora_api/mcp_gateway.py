@@ -1,11 +1,14 @@
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from nexora_api import metrics
 from nexora_api.config import Settings
 from nexora_api.run_state import ExecutionContext
+from nexora_api.telemetry import record, record_error, span
 from nexora_api.tool_contracts import ToolContractError
 from nexora_api.tool_repository import ToolGovernanceRepository
 
@@ -64,22 +67,55 @@ class McpGateway:
         arguments: dict[str, Any],
         is_cancelled: Callable[[], Awaitable[bool]] | None = None,
     ) -> Any:
+        # Spans and metrics record the governed decision, never the arguments or result.
+        with span(
+            "tool.invoke",
+            **{
+                "nexora.workspace_id": context.workspace_id,
+                "nexora.run_id": context.run_id,
+                "nexora.attempt": context.attempt_count,
+                "nexora.tool_name": tool_name,
+                "nexora.tool_call_key": call_key,
+            },
+        ) as active:
+            return await self._invoke(context, call_key, tool_name, arguments, is_cancelled, active)
+
+    async def _invoke(self, context, call_key, tool_name, arguments, is_cancelled, active):
+        started = time.perf_counter()
         plan = await self.repository.prepare_call(context, call_key, tool_name, arguments)
+        server_key = plan.tool.server_key
+        record(
+            active,
+            **{
+                "nexora.server_key": server_key,
+                "nexora.side_effect": plan.tool.side_effect,
+                "nexora.policy_action": plan.action,
+            },
+        )
         if plan.action == "replay":
+            metrics.observe_tool_call(server_key, "replayed")
             return plan.result
         if plan.action == "deny":
-            raise McpGatewayError(plan.error_code or "tool_denied", retryable=False)
+            code = plan.error_code or "tool_denied"
+            record_error(active, code)
+            metrics.observe_tool_call(server_key, "denied")
+            raise McpGatewayError(code, retryable=False)
         if plan.action == "approval":
             if plan.approval_id is None:
                 raise RuntimeError("approval plan missing approval_id")
+            record(active, **{"nexora.approval_id": plan.approval_id})
+            metrics.observe_tool_call(server_key, "approval")
             raise ApprovalRequired(plan.call_id, plan.approval_id)
 
         if is_cancelled is not None and await is_cancelled():
+            metrics.observe_tool_call(server_key, "cancelled")
             raise McpGatewayError("cancel_requested", retryable=False)
 
         try:
             execution = await self.repository.mark_running(plan.call_id, context)
         except ToolContractError as exc:
+            record_error(active, exc.code)
+            metrics.observe_tool_call(server_key, "error")
             raise McpGatewayError(exc.code, retryable=False) from exc
 
         adapter = self.adapters.get(execution.server_key)
@@ -87,6 +123,8 @@ class McpGateway:
             await self.repository.complete_failure(
                 execution.call_id, "mcp_server_unavailable", retryable=True, context=context
             )
+            record_error(active, "mcp_server_unavailable")
+            metrics.observe_tool_call(execution.server_key, "error")
             raise McpGatewayError("mcp_server_unavailable", retryable=True)
 
         try:
@@ -102,16 +140,25 @@ class McpGateway:
             await self.repository.complete_failure(
                 execution.call_id, "mcp_timeout", retryable=True, context=context
             )
+            record_error(active, "mcp_timeout")
+            metrics.observe_tool_call(
+                execution.server_key, "timeout", time.perf_counter() - started
+            )
             raise McpGatewayError("mcp_timeout", retryable=True) from exc
         except asyncio.CancelledError:
             await self.repository.complete_failure(
                 execution.call_id, "mcp_cancelled", retryable=True, context=context
+            )
+            metrics.observe_tool_call(
+                execution.server_key, "cancelled", time.perf_counter() - started
             )
             raise
         except Exception as exc:
             await self.repository.complete_failure(
                 execution.call_id, "mcp_call_error", retryable=True, context=context
             )
+            record_error(active, "mcp_call_error")
+            metrics.observe_tool_call(execution.server_key, "error", time.perf_counter() - started)
             raise McpGatewayError("mcp_call_error", retryable=True) from exc
 
         try:
@@ -120,7 +167,12 @@ class McpGateway:
             await self.repository.complete_failure(
                 execution.call_id, "mcp_invalid_result", retryable=False, context=context
             )
+            record_error(active, "mcp_invalid_result")
+            metrics.observe_tool_call(execution.server_key, "error", time.perf_counter() - started)
             raise McpGatewayError("mcp_invalid_result", retryable=False) from exc
         if not completed:
+            record_error(active, "tool_call_fenced")
+            metrics.observe_tool_call(execution.server_key, "error", time.perf_counter() - started)
             raise McpGatewayError("tool_call_fenced", retryable=True)
+        metrics.observe_tool_call(execution.server_key, "success", time.perf_counter() - started)
         return result

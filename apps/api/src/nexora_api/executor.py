@@ -1,9 +1,11 @@
 import asyncio
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import UUID
 
+from nexora_api import metrics
 from nexora_api.auth import Principal
 from nexora_api.model_routing import (
     ModelCapability,
@@ -15,6 +17,7 @@ from nexora_api.model_routing import (
     ProviderTool,
     RoutingRequest,
 )
+from nexora_api.telemetry import record, record_error, span
 from nexora_api.tool_contracts import ToolContractError
 from nexora_api.worker import RetryableExecutionError, TerminalExecutionError
 
@@ -92,9 +95,7 @@ class DurableAgentExecutor:
             ProviderMessage("user", context.input_text),
         ]
         if self.retriever:
-            evidence = await self.retriever.context(
-                principal, context.workspace_id, context.input_text
-            )
+            evidence = await self._retrieve(principal, context)
             if evidence:
                 messages.append(ProviderMessage("user", evidence))
         total_tokens = 0
@@ -126,13 +127,8 @@ class DurableAgentExecutor:
                         profile.max_output_tokens, profile.max_total_tokens - total_tokens
                     ),
                 )
-                response = await self._generate(
-                    adapter,
-                    decision.candidate.model,
-                    request,
-                    profile.timeout_seconds,
-                    context,
-                    is_cancelled,
+                response = await self._observed_generate(
+                    adapter, decision, request, profile.timeout_seconds, context, step, is_cancelled
                 )
                 self._validate(response)
                 await self.store.save(context, step, decision, response)
@@ -165,6 +161,81 @@ class DurableAgentExecutor:
                     )
                 )
         raise TerminalExecutionError("step_limit_exceeded")
+
+    async def _retrieve(self, principal, context):
+        """Retrieval is timed and traced; retrieved text itself is never telemetry."""
+        started = time.perf_counter()
+        with span(
+            "agent.retrieval",
+            **{
+                "nexora.workspace_id": context.workspace_id,
+                "nexora.run_id": context.run_id,
+            },
+        ) as active:
+            try:
+                evidence = await self.retriever.context(
+                    principal, context.workspace_id, context.input_text
+                )
+            except Exception:
+                metrics.observe_retrieval("error", time.perf_counter() - started)
+                raise
+            record(active, **{"nexora.outcome": "hit" if evidence else "miss"})
+            metrics.observe_retrieval("success", time.perf_counter() - started)
+            return evidence
+
+    async def _observed_generate(
+        self, adapter, decision, request, timeout, context, step, is_cancelled
+    ):
+        provider = decision.candidate.provider
+        started = time.perf_counter()
+        with span(
+            "model.generate",
+            **{
+                "nexora.workspace_id": context.workspace_id,
+                "nexora.run_id": context.run_id,
+                "nexora.attempt": context.attempt_count,
+                "nexora.step": step,
+                "nexora.provider": provider,
+                "nexora.model": decision.candidate.model,
+                "nexora.routing_reason": decision.reason,
+            },
+        ) as active:
+            try:
+                response = await self._generate(
+                    adapter, decision.candidate.model, request, timeout, context, is_cancelled
+                )
+            except ProviderError as exc:
+                record_error(active, exc.code)
+                metrics.observe_model_call(provider, "error", time.perf_counter() - started)
+                raise
+            except RetryableExecutionError as exc:
+                record_error(active, exc.code)
+                metrics.observe_model_call(provider, "timeout", time.perf_counter() - started)
+                raise
+            except TerminalExecutionError as exc:
+                outcome = "cancelled" if exc.code == "cancel_requested" else "error"
+                record_error(active, exc.code)
+                metrics.observe_model_call(provider, outcome, time.perf_counter() - started)
+                raise
+            except Exception:
+                metrics.observe_model_call(provider, "error", time.perf_counter() - started)
+                raise
+            record(
+                active,
+                **{
+                    "nexora.finish_reason": response.finish_reason,
+                    "nexora.input_tokens": response.usage.input_tokens,
+                    "nexora.output_tokens": response.usage.output_tokens,
+                },
+            )
+            metrics.observe_model_call(
+                provider,
+                "success",
+                time.perf_counter() - started,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            )
+            return response
 
     @staticmethod
     def _validate(response):
