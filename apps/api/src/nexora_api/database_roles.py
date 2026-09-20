@@ -140,9 +140,9 @@ def apply_runtime_grants(connection, api_role: str, worker_role: str) -> None:
     for role in (api_role, worker_role):
         identifier = sql.Identifier(role)
         connection.execute(
-            sql.SQL(
-                "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM {}"
-            ).format(identifier)
+            sql.SQL("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM {}").format(
+                identifier
+            )
         )
         connection.execute(
             sql.SQL("REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM {}").format(
@@ -242,9 +242,9 @@ def _verify_effective_policy(
     role: str,
     writes: Mapping[str, frozenset[str]],
 ) -> None:
-    if connection.execute(
-        "SELECT has_schema_privilege(%s,'public','CREATE')", (role,)
-    ).fetchone()[0]:
+    if connection.execute("SELECT has_schema_privilege(%s,'public','CREATE')", (role,)).fetchone()[
+        0
+    ]:
         raise RuntimeError(f"Runtime database role {role} can create schema objects")
 
     for table in sorted(RUNTIME_TABLES):
