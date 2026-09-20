@@ -71,10 +71,11 @@ this milestone does not add arbitrary URL fetching or unsafe file parsing.
 
 ## Known limits
 
-Hybrid lexical/vector retrieval is implemented in [ADR 0033](0033-hybrid-retrieval.md) with
-measured exact-identifier regression coverage. Reranking and ANN indexing remain future
-quality/performance work and should be selected from measured retrieval evaluations. Large-file multipart upload and
-object-storage staging are not included in this increment.
+Hybrid lexical/vector retrieval is implemented in [ADR 0033](0033-hybrid-retrieval.md), and
+retrieval-only evaluation plus opt-in model/dimension-scoped HNSW acceleration are implemented in
+[ADR 0034](0034-retrieval-evals-hnsw.md). Cross-encoder reranking remains future
+quality/performance work and should be selected from measured retrieval evaluations. Large-file
+multipart upload and object-storage staging are not included in this increment.
 
 ## Skills applied
 
