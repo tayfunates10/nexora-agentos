@@ -9,10 +9,15 @@ prompts, or provision a production cluster. Run it alongside the existing Compos
 Configure the API, database and worker as described in the root README first. Export a shared
 `NEXORA_METRICS_TOKEN` of at least 32 characters and a strong, private
 `NEXORA_GRAFANA_ADMIN_PASSWORD` in your shell. Both must be present in the environment used by
-Compose. Do not commit their values. The metrics token must match the API and worker setting;
+Compose. Use at least 16 characters for the Grafana password. Do not commit their values. The metrics token must match the API and worker setting;
 Prometheus reads it from a mounted secret file. Grafana reads its password from a separate secret.
+The preparation script writes only to the ignored `.monitoring-secrets` directory (host mode 0700).
+Files are readable by the non-root container UIDs; other host users cannot traverse the parent.
+The directory is excluded from Docker build contexts. It contains plaintext local secrets, not an
+encrypted secret vault. Re-run preparation after rotation and recreate the relevant containers.
 
 ```bash
+python scripts/prepare_monitoring_secrets.py
 docker compose -f compose.yaml -f compose.monitoring.yaml --profile worker up -d --build --wait
 python scripts/check_monitoring.py
 ```

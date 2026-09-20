@@ -12,8 +12,10 @@ alone cannot tell an operator when the platform is failing.
 
 Add a separate Compose overlay with version-pinned, non-root Prometheus and Grafana. Persistent
 volumes hold their data; configuration is read-only, privileges are dropped and host ports bind
-to loopback. Environment-backed Compose secrets supply the scrape and Grafana credentials through
-files. No secret value enters version control or the dashboard. Anonymous dashboard access and
+to loopback. A preparation script validates environment credentials and writes them into a private, ignored
+host directory. File-backed Compose secrets mount them into the read-only services; environment-backed
+Compose secrets cannot be injected into a read-only root filesystem. The host directory is 0700
+and excluded from Docker build contexts. No secret value enters version control or the dashboard. Anonymous dashboard access and
 public signup are disabled. Grafana telemetry/update checks are disabled.
 
 Prometheus scrapes API and worker separately. Four recording rules compute API and terminal-run

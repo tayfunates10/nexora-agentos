@@ -145,6 +145,7 @@ jobs:
             http://localhost:8001/metrics | grep -q '^nexora_slo_objective_ratio'
       - name: Verify opt-in monitoring stack
         run: |
+          python scripts/prepare_monitoring_secrets.py
           docker compose -f compose.yaml -f compose.monitoring.yaml --profile worker config --quiet
           docker compose -f compose.yaml -f compose.monitoring.yaml --profile worker up -d --wait --wait-timeout 180 prometheus grafana
           python scripts/check_monitoring.py

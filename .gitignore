@@ -11,3 +11,5 @@ build/
 .env.*
 !.env.example
 coverage/
+
+.monitoring-secrets/

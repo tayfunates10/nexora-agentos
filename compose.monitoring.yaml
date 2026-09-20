@@ -54,9 +54,9 @@ services:
       retries: 12
 secrets:
   metrics_token:
-    environment: NEXORA_METRICS_TOKEN
+    file: ./.monitoring-secrets/metrics_token
   grafana_admin_password:
-    environment: NEXORA_GRAFANA_ADMIN_PASSWORD
+    file: ./.monitoring-secrets/grafana_admin_password
 volumes:
   prometheus-data:
   grafana-data:
