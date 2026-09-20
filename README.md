@@ -389,8 +389,9 @@ with `POST /api/v1/workspaces/{workspace_id}/eval-runs/{eval_run_id}/judge-runs`
 completion, relevance and clarity from 0-4, with a deterministic 0-1000 aggregate. When the eval run
 has a baseline, candidate and baseline are scored by the same pinned provider/model/prompt and a
 per-case quality delta is stored. Judge results never alter deterministic pass/fail. See
-[ADR 0017](docs/architecture/0017-durable-evaluations.md) and
-[ADR 0022](docs/architecture/0022-llm-judge-evaluations.md).
+[ADR 0017](docs/architecture/0017-durable-evaluations.md),
+[ADR 0022](docs/architecture/0022-llm-judge-evaluations.md), and
+[ADR 0023](docs/architecture/0023-evaluation-judge-console.md).
 
 ## Traces, metrics and structured logs
 
