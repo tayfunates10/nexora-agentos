@@ -319,6 +319,12 @@ untrusted binary formats remain a separate parser/sandbox milestone. See
 
 ## Durable deterministic evaluations
 
+The workspace panel links to **Evaluation suites**. Members can inspect versioned case
+definitions; owners and admins can also browse newest-first result history, open per-case
+failures and retained output, and follow the saved baseline comparison. Empty and unavailable
+states are shown explicitly. This read-only console does not run models automatically.
+See [ADR 0018](docs/architecture/0018-evaluation-history-console.md).
+
 Owners and admins can create immutable, versioned golden evaluation suites and score candidate
 observations without calling a model provider from the API process. Each run must submit exactly one
 observation for every case, so pass/fail rates remain comparable.
@@ -329,12 +335,17 @@ Core endpoints are:
 - `GET /api/v1/workspaces/{workspace_id}/eval-suites`
 - `GET /api/v1/workspaces/{workspace_id}/eval-suites/{suite_id}`
 - `POST /api/v1/workspaces/{workspace_id}/eval-suites/{suite_id}/runs`
+- `GET /api/v1/workspaces/{workspace_id}/eval-suites/{suite_id}/runs` (owner/admin history)
 - `GET /api/v1/workspaces/{workspace_id}/eval-runs/{eval_run_id}`
 
 Creating suites or runs requires an `Idempotency-Key`. A baseline must use the exact same suite
 version. A case is marked as a regression only when the baseline passed and the candidate fails; the
 inverse is recorded as an improvement. Raw output is retained only for failed cases and run details
 require owner/admin evaluation-management permission.
+
+History accepts `limit` (1–100, default 25) and the `next_cursor` returned by the preceding
+page. It orders runs newest first and excludes raw output and case details. Cursors are scoped
+to the selected workspace and suite; an unknown or unrelated cursor returns 404.
 
 The first layer is deterministic: expected tools, forbidden tools and required citation identifiers.
 Judge-model scoring remains a separate future worker capability so deterministic assertions and

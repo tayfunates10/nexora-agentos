@@ -21,6 +21,7 @@ from nexora_api.evaluations import (
     EvalCaseResult,
     EvalRun,
     EvalRunInput,
+    EvalRunSummary,
     EvalSuite,
     EvalSuiteInput,
     EvalSuiteSummary,
@@ -412,6 +413,56 @@ class EvaluationRepository:
                 connection, principal, workspace_id, "eval_run.completed", request_id
             )
             return await self._load_run(connection, workspace_id, run_id), True
+
+    async def list_runs(
+        self,
+        principal,
+        workspace_id: UUID,
+        suite_id: UUID,
+        limit: int,
+        cursor: UUID | None,
+    ) -> list[EvalRunSummary]:
+        async with self.connection() as connection:
+            await self.workspaces.scoped(
+                connection, principal, workspace_id, Permission.MANAGE_EVALS
+            )
+            suite = await connection.execute(
+                "SELECT id FROM eval_suites WHERE workspace_id=%s AND id=%s",
+                (workspace_id, suite_id),
+            )
+            if not await suite.fetchone():
+                raise HTTPException(404)
+
+            boundary = None
+            if cursor is not None:
+                anchor = await connection.execute(
+                    """SELECT created_at,id FROM eval_runs
+                       WHERE workspace_id=%s AND suite_id=%s AND id=%s""",
+                    (workspace_id, suite_id, cursor),
+                )
+                boundary = await anchor.fetchone()
+                if not boundary:
+                    raise HTTPException(404)
+
+            # Immutable creation time plus UUID gives stable, newest-first keyset pagination.
+            result = await connection.execute(
+                """SELECT id,workspace_id,suite_id,candidate_label,baseline_eval_run_id,
+                          case_count,passed_count,failed_count,regression_count,
+                          improvement_count,created_at
+                   FROM eval_runs
+                   WHERE workspace_id=%s AND suite_id=%s
+                     AND (%s::timestamptz IS NULL OR (created_at,id) < (%s,%s::uuid))
+                   ORDER BY created_at DESC,id DESC LIMIT %s""",
+                (
+                    workspace_id,
+                    suite_id,
+                    boundary["created_at"] if boundary else None,
+                    boundary["created_at"] if boundary else None,
+                    boundary["id"] if boundary else None,
+                    limit,
+                ),
+            )
+            return [EvalRunSummary(**row) for row in await result.fetchall()]
 
     async def get_run(self, principal, workspace_id: UUID, eval_run_id: UUID) -> EvalRun:
         async with self.connection() as connection:

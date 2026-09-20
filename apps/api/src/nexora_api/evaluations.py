@@ -158,7 +158,7 @@ class EvalCaseResult(BaseModel):
     improvement: bool
 
 
-class EvalRun(BaseModel):
+class EvalRunSummary(BaseModel):
     id: UUID
     workspace_id: UUID
     suite_id: UUID
@@ -170,7 +170,15 @@ class EvalRun(BaseModel):
     regression_count: int
     improvement_count: int
     created_at: datetime
+
+
+class EvalRun(EvalRunSummary):
     results: list[EvalCaseResult]
+
+
+class EvalRunPage(BaseModel):
+    items: list[EvalRunSummary]
+    next_cursor: UUID | None = None
 
 
 router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}", tags=["evaluations"])
@@ -245,6 +253,24 @@ async def create_eval_run(
     )
     response.status_code = 201 if created else 200
     return run
+
+
+@router.get("/eval-suites/{suite_id}/runs", response_model=EvalRunPage)
+async def list_eval_runs(
+    workspace_id: UUID,
+    suite_id: UUID,
+    principal: Identity,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    cursor: UUID | None = None,
+):
+    rows = await request.app.state.evaluations.list_runs(
+        principal, workspace_id, suite_id, limit + 1, cursor
+    )
+    return EvalRunPage(
+        items=rows[:limit],
+        next_cursor=rows[limit - 1].id if len(rows) > limit else None,
+    )
 
 
 @router.get("/eval-runs/{eval_run_id}", response_model=EvalRun)
