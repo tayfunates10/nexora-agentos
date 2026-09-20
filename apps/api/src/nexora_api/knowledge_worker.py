@@ -73,6 +73,8 @@ class KnowledgeIngestionWorker:
                 metadata=job["metadata"],
                 max_chars=job["max_chars"],
                 overlap_chars=job["overlap_chars"],
+                ingestion_job_id=job["id"],
+                ingestion_worker_id=self.worker_id,
             )
         except HTTPException:
             await self._fail(job, "knowledge_permission_revoked", retryable=False)
