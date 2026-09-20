@@ -213,6 +213,12 @@ spend_denials_total = Counter(
     ("category",),
     registry=REGISTRY,
 )
+spend_alerts_total = Counter(
+    "nexora_spend_alerts_total",
+    "Budget thresholds reached for the first time in an accounting period.",
+    ("threshold",),
+    registry=REGISTRY,
+)
 
 
 def label(value: str | None) -> str:
@@ -300,6 +306,12 @@ def observe_spend(provider: str, category: str, cost_micros: int) -> None:
 
 def observe_spend_denied(category: str) -> None:
     spend_denials_total.labels(_bounded(category, _SPEND_CATEGORIES)).inc()
+
+
+def observe_spend_alert(threshold_percent: int) -> None:
+    """Thresholds are whole percents, so the label set is bounded by definition."""
+    valid = isinstance(threshold_percent, int) and 1 <= threshold_percent <= 100
+    spend_alerts_total.labels(str(threshold_percent) if valid else "other").inc()
 
 
 def observe_tool_call(server_key: str | None, outcome: str, seconds: float | None = None) -> None:

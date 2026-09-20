@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   formatUnits,
   microsToUnits,
+  offeredThresholds,
+  parseThresholds,
   spendPeriod,
   spendRecordPageSchema,
   spendSummarySchema,
@@ -20,6 +22,14 @@ const summary = {
   enforcement: "enforce",
   remaining_micros: 2_500_000,
   exhausted: false,
+  alert_thresholds: [50, 100],
+  alerts: [
+    {
+      threshold_percent: 50, monthly_limit_micros: 10_000_000,
+      consumed_micros: 5_000_000, enforcement: "enforce",
+      created_at: "2026-09-12T09:00:00Z",
+    },
+  ],
   categories: [
     { category: "agent_run", call_count: 3, input_tokens: 300, output_tokens: 90, cost_micros: 5_000_000 },
     { category: "evaluation_judge", call_count: 1, input_tokens: 40, output_tokens: 20, cost_micros: 2_500_000 },
@@ -97,6 +107,34 @@ test("record page contract bounds cursors and category values", () => {
   assert.equal(spendRecordPageSchema.safeParse({
     items: [{ ...record, source_key: "x".repeat(201) }], next_cursor: null,
   }).success, false);
+});
+
+test("alert contracts require sorted thresholds and a crossing that happened", () => {
+  assert.equal(spendSummarySchema.parse(summary).alerts[0].threshold_percent, 50);
+  // Unsorted or duplicated thresholds would alert twice on one crossing.
+  for (const invalid of [[100, 50], [50, 50], [0], [101], [1, 2, 3, 4, 5, 6]]) {
+    assert.equal(spendSummarySchema.safeParse({ ...summary, alert_thresholds: invalid }).success, false);
+  }
+  // An alert whose own numbers do not reach its threshold is not evidence.
+  assert.equal(spendSummarySchema.safeParse({
+    ...summary,
+    alerts: [{ ...summary.alerts[0], consumed_micros: 4_999_999 }],
+  }).success, false);
+});
+
+test("threshold form values are validated and normalized", () => {
+  assert.deepEqual(parseThresholds(["90", "50", "50"]), [50, 90]);
+  assert.deepEqual(parseThresholds([]), []);
+  for (const invalid of [["0"], ["101"], ["-5"], ["50.5"], ["abc"], [""], ["1e2"]]) {
+    assert.throws(() => parseThresholds(invalid));
+  }
+  assert.throws(() => parseThresholds(["10", "20", "30", "40", "50", "60"]));
+});
+
+test("a threshold set outside the console stays on the form", () => {
+  assert.deepEqual(offeredThresholds([]), [50, 75, 90, 100]);
+  assert.deepEqual(offeredThresholds([85]), [50, 75, 85, 90, 100]);
+  assert.deepEqual(offeredThresholds([50, 100]), [50, 75, 90, 100]);
 });
 
 test("units convert to exact micros without floating point drift", () => {

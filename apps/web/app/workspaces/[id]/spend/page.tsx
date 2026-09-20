@@ -5,6 +5,7 @@ import {
   formatMicros,
   formatUnits,
   microsToUnits,
+  offeredThresholds,
   spendCategorySchema,
   spendPeriod,
   spendRecordPageSchema,
@@ -53,6 +54,7 @@ function SpendMeter({ summary }: { summary: SpendSummary }) {
 function Errors({ query }: { query: { budget_error?: string } }) {
   const messages: Record<string, string> = {
     invalid: "Enter an amount between 0 and 1,000,000,000 units with at most six decimals.",
+    thresholds: "Choose at most five alert thresholds between 1 and 100 percent.",
     forbidden: "Only workspace owners and admins can change the budget.",
     failed: "The budget could not be saved. Check your current access and try again.",
   };
@@ -129,6 +131,22 @@ export default async function Spend({ params, searchParams }: {
         {summary.monthly_limit_micros === null && <p className="notice">
           No budget is set. Spend is recorded but nothing stops this workspace from spending more.
         </p>}
+        {summary.alerts.length > 0 && <div className="spend-alerts">
+          <h2>Thresholds reached this period</h2>
+          <ul>{summary.alerts.map(alert => <li key={alert.threshold_percent}>
+            <strong>{alert.threshold_percent}%</strong> reached at{" "}
+            {formatUnits(alert.consumed_micros)} of {formatUnits(alert.monthly_limit_micros)} units
+            {" · "}<time dateTime={alert.created_at}>{spendTimestamp(alert.created_at)}</time>
+          </li>)}</ul>
+          <p className="notice">
+            Each threshold is recorded once per period, when the spend that crossed it was
+            committed. Changing the budget later does not rewrite what was already reached.
+          </p>
+        </div>}
+        {summary.monthly_limit_micros !== null && summary.alert_thresholds.length === 0
+          && <p className="notice">
+            No alert thresholds are set, so this workspace reaches its limit without warning.
+          </p>}
       </div>
 
       <h2 className="eval-section-title">Where it went</h2>
@@ -170,6 +188,27 @@ export default async function Spend({ params, searchParams }: {
             Up to six decimals. A limit of 0 with enforcement stops every model call in this
             workspace, including quality judges.
           </p>
+          <fieldset className="spend-thresholds">
+            <legend>Alert thresholds</legend>
+            <p className="notice">
+              Each selected percentage is recorded once per period when spend reaches it.
+              Alerts never block a call; enforcement does that.
+            </p>
+            {offeredThresholds(summary.alert_thresholds).map(percent => <label
+              key={percent}
+              className="spend-threshold"
+              htmlFor={`threshold-${percent}`}
+            >
+              <input
+                type="checkbox"
+                id={`threshold-${percent}`}
+                name="threshold"
+                value={percent}
+                defaultChecked={summary.alert_thresholds.includes(percent)}
+              />
+              {percent}% of the limit
+            </label>)}
+          </fieldset>
           <label htmlFor="enforcement">Enforcement</label>
           <select id="enforcement" name="enforcement" defaultValue={summary.enforcement ?? "enforce"}>
             <option value="enforce">Enforce · refuse calls once the limit is reached</option>

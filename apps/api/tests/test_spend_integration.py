@@ -35,7 +35,7 @@ from nexora_api.spend import (
     knowledge_source_key,
     run_retrieval_source_key,
 )
-from nexora_api.spend_repository import record_spend
+from nexora_api.spend_repository import observe_write, record_spend
 from nexora_api.worker import AgentWorker
 
 pytestmark = [
@@ -63,6 +63,8 @@ def policy(provider="test", model="test-model"):
 
 
 def seed_record(settings, workspace_id, source_key, cost_micros, category="agent_run"):
+    """Stand in for a worker recording one priced call, telemetry included."""
+
     async def insert():
         async with await psycopg.AsyncConnection.connect(
             settings.database_url.get_secret_value()
@@ -79,7 +81,9 @@ def seed_record(settings, workspace_id, source_key, cost_micros, category="agent
                 cost_micros=cost_micros,
             )
 
-    return asyncio.run(insert())
+    write = asyncio.run(insert())
+    observe_write("test", category, cost_micros, write)
+    return write.recorded
 
 
 def test_spend_api_reports_period_usage_and_guards_budget_changes(keys, auth_settings):
@@ -673,3 +677,149 @@ def test_query_embeddings_are_priced_and_never_run_unattributed(keys, auth_setti
         )
     finally:
         client.__exit__(None, None, None)
+
+
+def test_thresholds_alert_once_per_period_and_survive_a_tighter_budget(keys, auth_settings):
+    migrate(auth_settings)
+    prefix = "spend-alerts-" + str(uuid4())
+    owner, member = prefix + "owner", prefix + "member"
+
+    def headers(subject):
+        return {
+            "Authorization": "Bearer " + token(keys, subject),
+            "x-request-id": "spend-alert-integration",
+        }
+
+    with TestClient(create_app(settings=auth_settings)) as client:
+        workspace_id = client.post(
+            "/api/v1/workspaces", json={"name": "Alert workspace"}, headers=headers(owner)
+        ).json()["id"]
+        base = f"/api/v1/workspaces/{workspace_id}"
+        assert (
+            client.put(
+                base + "/members",
+                json={"subject": member, "role": "member"},
+                headers=headers(owner),
+            ).status_code
+            == 200
+        )
+
+        budget = client.put(
+            base + "/spend/budget",
+            json={
+                "monthly_limit_micros": 10_000,
+                "enforcement": "monitor",
+                # Unsorted duplicates are normalized before they can alert twice.
+                "alert_thresholds": [100, 50, 50],
+            },
+            headers=headers(owner),
+        )
+        assert budget.status_code == 200, budget.text
+        assert budget.json()["alert_thresholds"] == [50, 100]
+        assert client.get(base + "/spend", headers=headers(member)).json()["alerts"] == []
+
+        alerts_before = (
+            metrics.REGISTRY.get_sample_value("nexora_spend_alerts_total", {"threshold": "50"})
+            or 0.0
+        )
+        # One micro short of half the limit raises nothing.
+        assert seed_record(auth_settings, workspace_id, "alert:one", 4_999) is True
+        assert client.get(base + "/spend", headers=headers(member)).json()["alerts"] == []
+
+        assert seed_record(auth_settings, workspace_id, "alert:two", 1) is True
+        summary = client.get(base + "/spend", headers=headers(member)).json()
+        assert [alert["threshold_percent"] for alert in summary["alerts"]] == [50]
+        assert summary["alerts"][0]["consumed_micros"] == 5_000
+        assert summary["alerts"][0]["monthly_limit_micros"] == 10_000
+        assert summary["alerts"][0]["enforcement"] == "monitor"
+        assert (
+            metrics.REGISTRY.get_sample_value("nexora_spend_alerts_total", {"threshold": "50"})
+            == alerts_before + 1
+        )
+
+        # Spending further inside the same band does not repeat the warning.
+        assert seed_record(auth_settings, workspace_id, "alert:three", 1_000) is True
+        raised = client.get(base + "/spend", headers=headers(member)).json()["alerts"]
+        assert [alert["threshold_percent"] for alert in raised] == [50]
+        assert raised[0]["consumed_micros"] == 5_000
+        assert (
+            metrics.REGISTRY.get_sample_value("nexora_spend_alerts_total", {"threshold": "50"})
+            == alerts_before + 1
+        )
+
+        # Lowering the limit can cross a threshold without spending another micro.
+        tightened = client.put(
+            base + "/spend/budget",
+            json={
+                "monthly_limit_micros": 6_000,
+                "enforcement": "enforce",
+                "alert_thresholds": [50, 100],
+            },
+            headers=headers(owner),
+        )
+        assert tightened.status_code == 200, tightened.text
+        summary = client.get(base + "/spend", headers=headers(member)).json()
+        assert [alert["threshold_percent"] for alert in summary["alerts"]] == [50, 100]
+        assert summary["alerts"][1]["consumed_micros"] == 6_000
+        assert summary["alerts"][1]["enforcement"] == "enforce"
+        assert summary["alert_thresholds"] == [50, 100]
+        assert summary["exhausted"] is True
+
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        rows = connection.execute(
+            """SELECT threshold_percent,consumed_micros FROM workspace_spend_alerts
+               WHERE workspace_id=%s ORDER BY threshold_percent""",
+            (UUID(workspace_id),),
+        ).fetchall()
+        # The 50% alert keeps the evidence from when it was raised.
+        assert rows == [(50, 5_000), (100, 6_000)]
+        events = connection.execute(
+            """SELECT alert_thresholds FROM workspace_spend_budget_events
+               WHERE workspace_id=%s ORDER BY created_at,id""",
+            (UUID(workspace_id),),
+        ).fetchall()
+        assert events == [([50, 100],), ([50, 100],)]
+        with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+            connection.execute(
+                "UPDATE workspace_spend_alerts SET consumed_micros=0 WHERE workspace_id=%s",
+                (UUID(workspace_id),),
+            )
+
+
+def test_a_workspace_without_thresholds_never_alerts(keys, auth_settings):
+    migrate(auth_settings)
+    subject = "spend-no-alerts-" + str(uuid4())
+
+    def headers():
+        return {"Authorization": "Bearer " + token(keys, subject)}
+
+    with TestClient(create_app(settings=auth_settings)) as client:
+        workspace_id = client.post(
+            "/api/v1/workspaces", json={"name": "Quiet workspace"}, headers=headers()
+        ).json()["id"]
+        base = f"/api/v1/workspaces/{workspace_id}"
+        assert (
+            client.put(
+                base + "/spend/budget",
+                json={
+                    "monthly_limit_micros": 100,
+                    "enforcement": "enforce",
+                    "alert_thresholds": [],
+                },
+                headers=headers(),
+            ).status_code
+            == 200
+        )
+        assert seed_record(auth_settings, workspace_id, "quiet:one", 500) is True
+        summary = client.get(base + "/spend", headers=headers()).json()
+        assert summary["alerts"] == []
+        assert summary["alert_thresholds"] == []
+        assert summary["exhausted"] is True
+
+    # An unmetered workspace has no limit to measure a threshold against either.
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        count = connection.execute(
+            "SELECT count(*) FROM workspace_spend_alerts WHERE workspace_id=%s",
+            (UUID(workspace_id),),
+        ).fetchone()[0]
+        assert count == 0

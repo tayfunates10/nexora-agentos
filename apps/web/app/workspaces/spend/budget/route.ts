@@ -4,7 +4,12 @@ import { readConfig, validMutation } from "../../../../lib/auth-core";
 import { api, ApiError } from "../../../../lib/server/api";
 import { readForm } from "../../../../lib/server/forms";
 import { currentSession } from "../../../../lib/server/session";
-import { budgetSchema, enforcementSchema, unitsToMicros } from "../../../../lib/spend-contracts";
+import {
+  budgetSchema,
+  enforcementSchema,
+  parseThresholds,
+  unitsToMicros,
+} from "../../../../lib/spend-contracts";
 
 export async function POST(request: NextRequest) {
   let config;
@@ -34,10 +39,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.redirect(new URL(target + "?budget_error=invalid", config.origin), 303);
     }
     const enforcement = enforcementSchema.parse(form.get("enforcement"));
+    let alertThresholds: number[];
+    try {
+      alertThresholds = parseThresholds(form.getAll("threshold"));
+    } catch {
+      return NextResponse.redirect(new URL(target + "?budget_error=thresholds", config.origin), 303);
+    }
 
     await api(session, `/api/v1/workspaces/${workspaceId}/spend/budget`, budgetSchema, {
       method: "PUT",
-      body: JSON.stringify({ monthly_limit_micros: monthlyLimitMicros, enforcement }),
+      body: JSON.stringify({
+        monthly_limit_micros: monthlyLimitMicros,
+        enforcement,
+        alert_thresholds: alertThresholds,
+      }),
     });
     return NextResponse.redirect(new URL(target + "?saved=budget", config.origin), 303);
   } catch (error) {

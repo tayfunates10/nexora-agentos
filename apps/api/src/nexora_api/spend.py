@@ -9,7 +9,7 @@ Cost is computed once, when the provider call is recorded, so a later price chan
 cannot rewrite what an already executed run cost.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -17,7 +17,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from nexora_api.auth import Principal, authenticated
 
@@ -25,6 +25,8 @@ TOKENS_PER_PRICE_UNIT = 1_000_000
 MAX_PRICE_MICROS = 1_000_000_000_000
 MAX_LIMIT_MICROS = 1_000_000_000_000_000
 MAX_SOURCE_KEY_LENGTH = 200
+MAX_ALERT_THRESHOLDS = 5
+DEFAULT_ALERT_THRESHOLDS = (80, 100)
 
 
 class SpendCategory(StrEnum):
@@ -165,17 +167,60 @@ def knowledge_source_key(source_id: UUID) -> str:
     return f"knowledge-source:{source_id}"
 
 
+def normalize_thresholds(values: Sequence[int]) -> tuple[int, ...]:
+    """Duplicate or unordered thresholds would alert twice on one crossing."""
+    thresholds = tuple(sorted(set(values)))
+    if len(thresholds) > MAX_ALERT_THRESHOLDS:
+        raise ValueError(f"at most {MAX_ALERT_THRESHOLDS} alert thresholds are allowed")
+    if any(not 1 <= threshold <= 100 for threshold in thresholds):
+        raise ValueError("alert thresholds must be between 1 and 100 percent")
+    return thresholds
+
+
+def crossed_thresholds(
+    thresholds: Sequence[int],
+    limit_micros: int | None,
+    consumed_micros: int,
+) -> tuple[int, ...]:
+    """Thresholds a period has reached, compared without floating point."""
+    if limit_micros is None:
+        return ()
+    return tuple(
+        threshold
+        for threshold in sorted(set(thresholds))
+        if consumed_micros * 100 >= threshold * limit_micros
+    )
+
+
 class BudgetInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     monthly_limit_micros: int = Field(ge=0, le=MAX_LIMIT_MICROS)
     enforcement: BudgetEnforcement = BudgetEnforcement.ENFORCE
+    alert_thresholds: list[int] = Field(
+        default_factory=lambda: list(DEFAULT_ALERT_THRESHOLDS),
+        max_length=MAX_ALERT_THRESHOLDS,
+    )
+
+    @field_validator("alert_thresholds")
+    @classmethod
+    def _thresholds(cls, value: list[int]) -> list[int]:
+        return list(normalize_thresholds(value))
 
 
 class Budget(BaseModel):
     workspace_id: UUID
     monthly_limit_micros: int
     enforcement: BudgetEnforcement
+    alert_thresholds: list[int]
     updated_at: datetime
+
+
+class SpendAlert(BaseModel):
+    threshold_percent: int
+    monthly_limit_micros: int
+    consumed_micros: int
+    enforcement: BudgetEnforcement
+    created_at: datetime
 
 
 class SpendCategoryTotal(BaseModel):
@@ -195,6 +240,8 @@ class SpendSummary(BaseModel):
     enforcement: BudgetEnforcement | None = None
     remaining_micros: int | None = None
     exhausted: bool = False
+    alert_thresholds: list[int] = Field(default_factory=list)
+    alerts: list[SpendAlert] = Field(default_factory=list)
     categories: list[SpendCategoryTotal] = Field(default_factory=list)
 
 

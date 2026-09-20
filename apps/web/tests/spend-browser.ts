@@ -70,11 +70,16 @@ export async function checkSpend(
   await page.getByRole("link", { name: "All", exact: true }).click();
 
   await page.getByLabel("Monthly limit (accounting units)").fill("100.25");
+  await page.getByLabel("50% of the limit").check();
+  await page.getByLabel("90% of the limit").check();
   await page.getByRole("button", { name: "Save budget" }).click();
   await expect(page.getByRole("status")).toContainText("budget was saved");
   expect(provider.budgets.get(workspace.id)).toEqual({
-    monthly_limit_micros: 100_250_000, enforcement: "enforce",
+    monthly_limit_micros: 100_250_000, enforcement: "enforce", alert_thresholds: [50, 90],
   });
+  // 65.75 of 100.25 units is past 50% but not 90%.
+  await expect(page.locator(".spend-alerts")).toContainText("50% reached at 65.75");
+  await expect(page.locator(".spend-alerts")).not.toContainText("90%");
   await expect(page.getByText("Within budget", { exact: true })).toBeVisible();
   await expect(page.locator(".spend-panel")).toContainText("34.50");
   await expect(page.getByRole("meter")).toHaveAttribute("aria-valuenow", "65750000");
@@ -104,9 +109,15 @@ export async function checkSpend(
   await page.getByRole("button", { name: "Save budget" }).click();
   await expect(page.getByText("Budget exhausted", { exact: true })).toBeVisible();
   await expect(page.locator("p[role=alert]")).toContainText("workspace_budget_exhausted");
+  // A tighter limit crosses 90% without another call, and the 50% alert keeps the
+  // amount it was raised at rather than being rewritten.
+  await expect(page.locator(".spend-alerts")).toContainText("90% reached at 65.75 of 60.00");
+  await expect(page.locator(".spend-alerts")).toContainText("50% reached at 65.75 of 100.25");
 
   await page.getByLabel("Enforcement").selectOption("monitor");
   await page.getByRole("button", { name: "Save budget" }).click();
+  // Thresholds already reached are not raised a second time.
+  expect([...provider.spendAlerts.keys()].filter(key => key.startsWith(workspace.id))).toHaveLength(2);
   await expect(page.getByText("Over limit · monitored, not blocked", { exact: true })).toBeVisible();
   await expect(page.getByText("no call is blocked", { exact: false })).toBeVisible();
 
@@ -122,6 +133,16 @@ export async function checkSpend(
   await expect(page.getByRole("heading", { name: "Invalid spend link" })).toBeVisible();
   await page.goto(root + "?cursor=" + newestId);
   await expect(page.getByRole("link", { name: "Newest calls" })).toBeVisible();
+
+  // Clearing every threshold is allowed, and the console says what that means.
+  await page.getByLabel("50% of the limit").uncheck();
+  await page.getByLabel("90% of the limit").uncheck();
+  await page.getByRole("button", { name: "Save budget" }).click();
+  expect(provider.budgets.get(workspace.id)?.alert_thresholds).toEqual([]);
+  await expect(page.getByText("reaches its limit without warning", { exact: false })).toBeVisible();
+  await page.getByLabel("90% of the limit").check();
+  await page.getByRole("button", { name: "Save budget" }).click();
+  expect(provider.budgets.get(workspace.id)?.alert_thresholds).toEqual([90]);
 
   provider.spendUnavailable(true);
   await page.goto(root);

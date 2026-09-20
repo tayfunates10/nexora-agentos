@@ -22,7 +22,6 @@ from nexora_api.metrics import (
     observe_evaluation_judge_call,
     observe_evaluation_judge_job,
     observe_model_call,
-    observe_spend,
     observe_spend_denied,
 )
 from nexora_api.model_routing import (
@@ -39,7 +38,7 @@ from nexora_api.spend import (
     SpendPricingError,
     judge_case_source_key,
 )
-from nexora_api.spend_repository import evaluate_budget, record_spend
+from nexora_api.spend_repository import evaluate_budget, observe_write, record_spend
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
@@ -548,9 +547,9 @@ class EvaluationJudgeWorker:
                     latency_ms,
                 ),
             )
-            recorded = False
+            write = None
             if cost_micros is not None:
-                recorded = await record_spend(
+                write = await record_spend(
                     connection,
                     workspace_id=job["workspace_id"],
                     source_key=judge_case_source_key(job["id"], case_id),
@@ -586,8 +585,8 @@ class EvaluationJudgeWorker:
                     (job["id"],),
                 )
         # Only a ledger row that this attempt actually wrote is counted.
-        if recorded:
-            observe_spend(self.config.provider, SpendCategory.EVALUATION_JUDGE, cost_micros)
+        if write is not None:
+            observe_write(self.config.provider, SpendCategory.EVALUATION_JUDGE, cost_micros, write)
         if completed:
             observe_evaluation_judge_job("succeeded")
         return True

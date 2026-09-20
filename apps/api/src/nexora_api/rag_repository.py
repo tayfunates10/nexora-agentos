@@ -14,7 +14,7 @@ from psycopg.types.json import Jsonb
 
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
-from nexora_api.metrics import observe_spend, observe_spend_denied
+from nexora_api.metrics import observe_spend_denied
 from nexora_api.rag import (
     AccessScope,
     AclIdentity,
@@ -29,7 +29,7 @@ from nexora_api.spend import (
     SpendLimitExceeded,
     knowledge_source_key,
 )
-from nexora_api.spend_repository import evaluate_budget, record_spend
+from nexora_api.spend_repository import evaluate_budget, observe_write, record_spend
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
@@ -87,7 +87,7 @@ class RagRepository:
     ) -> bool:
         """Append a priced embedding call that has no other durable row of its own."""
         async with self.connection() as connection:
-            recorded = await record_spend(
+            write = await record_spend(
                 connection,
                 workspace_id=workspace_id,
                 source_key=source_key,
@@ -98,9 +98,8 @@ class RagRepository:
                 output_tokens=0,
                 cost_micros=cost_micros,
             )
-        if recorded:
-            observe_spend(provider, SpendCategory.EMBEDDING, cost_micros)
-        return recorded
+        observe_write(provider, SpendCategory.EMBEDDING, cost_micros, write)
+        return write.recorded
 
     async def authorize_retrieve(
         self,
@@ -493,9 +492,10 @@ class RagRepository:
             # The ledger row commits with the indexed version it pays for, so a
             # retried job never charges the same stored embeddings twice.
             recorded_cost = None
+            write = None
             if embedding_spend is not None and embedding_input_tokens is not None:
                 recorded_cost = embedding_spend.cost_micros(embedding_input_tokens)
-                await record_spend(
+                write = await record_spend(
                     connection,
                     workspace_id=workspace_id,
                     source_key=knowledge_source_key(source_id),
@@ -515,8 +515,8 @@ class RagRepository:
                 request_id,
                 source_key,
             )
-        if recorded_cost:
-            observe_spend(embedding_spend.provider, SpendCategory.EMBEDDING, recorded_cost)
+        if write is not None:
+            observe_write(embedding_spend.provider, SpendCategory.EMBEDDING, recorded_cost, write)
         return source_id
 
     async def delete_source(

@@ -6,19 +6,22 @@ the same ledger the worker writes, which keeps enforcement and reporting consist
 """
 
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import psycopg
 from fastapi import HTTPException
-from psycopg.rows import dict_row
+from psycopg.rows import dict_row, tuple_row
 
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
+from nexora_api.metrics import observe_spend, observe_spend_alert
 from nexora_api.spend import (
     Budget,
     BudgetDecision,
     BudgetEnforcement,
     BudgetInput,
+    SpendAlert,
     SpendCategory,
     SpendCategoryTotal,
     SpendRecord,
@@ -33,6 +36,24 @@ from nexora_api.workspaces import Permission
 PERIOD_START = "(date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')"
 PERIOD = f"""occurred_at >= {PERIOD_START}
              AND occurred_at < {PERIOD_START} + interval '1 month'"""
+PERIOD_DAY = "(date_trunc('month', now() AT TIME ZONE 'UTC'))::date"
+
+
+@dataclass(frozen=True, slots=True)
+class SpendWrite:
+    """The result of appending one priced call: was it new, and what did it cross."""
+
+    recorded: bool
+    alerts: tuple[int, ...] = ()
+
+
+def observe_write(provider: str, category: str, cost_micros: int, write: SpendWrite) -> None:
+    """Post-commit telemetry for a ledger write. Never called for a replayed unit of work."""
+    if not write.recorded:
+        return
+    observe_spend(provider, category, cost_micros)
+    for threshold in write.alerts:
+        observe_spend_alert(threshold)
 
 
 async def period_consumption(connection, workspace_id: UUID) -> dict:
@@ -49,11 +70,56 @@ async def period_consumption(connection, workspace_id: UUID) -> dict:
 
 async def load_budget(connection, workspace_id: UUID) -> dict | None:
     result = await connection.execute(
-        """SELECT workspace_id,monthly_limit_micros,enforcement,updated_at
+        """SELECT workspace_id,monthly_limit_micros,enforcement,alert_thresholds,updated_at
            FROM workspace_spend_budgets WHERE workspace_id=%s""",
         (workspace_id,),
     )
     return await result.fetchone()
+
+
+async def period_alerts(connection, workspace_id: UUID) -> list[SpendAlert]:
+    result = await connection.execute(
+        f"""SELECT threshold_percent,monthly_limit_micros,consumed_micros,
+                   enforcement,created_at
+            FROM workspace_spend_alerts
+            WHERE workspace_id=%s AND period_start={PERIOD_DAY}
+            ORDER BY threshold_percent""",
+        (workspace_id,),
+    )
+    return [SpendAlert(**row) for row in await result.fetchall()]
+
+
+async def raise_threshold_alerts(connection, workspace_id: UUID) -> tuple[int, ...]:
+    """Record every budget threshold this period has now reached.
+
+    The unique constraint on (workspace, period, threshold) is what makes an alert
+    happen once: a busy month inserts the same row over and over and keeps one.
+    Comparison is integer arithmetic, so a threshold cannot fire a micro early.
+    """
+    # This helper runs inside whatever transaction is paying for the work, so it
+    # reads its own rows rather than trusting that caller's row factory.
+    async with connection.cursor(row_factory=tuple_row) as cursor:
+        await cursor.execute(
+            f"""WITH budget AS (
+                    SELECT monthly_limit_micros,enforcement,alert_thresholds
+                    FROM workspace_spend_budgets WHERE workspace_id=%s
+                ), consumed AS (
+                    SELECT coalesce(sum(cost_micros),0)::bigint AS micros
+                    FROM workspace_spend_records
+                    WHERE workspace_id=%s AND {PERIOD}
+                )
+                INSERT INTO workspace_spend_alerts
+                    (id,workspace_id,period_start,threshold_percent,
+                     monthly_limit_micros,consumed_micros,enforcement)
+                SELECT gen_random_uuid(),%s,{PERIOD_DAY},threshold,
+                       budget.monthly_limit_micros,consumed.micros,budget.enforcement
+                FROM budget,consumed,unnest(budget.alert_thresholds) AS threshold
+                WHERE consumed.micros * 100 >= threshold::bigint * budget.monthly_limit_micros
+                ON CONFLICT (workspace_id,period_start,threshold_percent) DO NOTHING
+                RETURNING threshold_percent""",
+            (workspace_id, workspace_id, workspace_id),
+        )
+        return tuple(sorted(row[0] for row in await cursor.fetchall()))
 
 
 async def evaluate_budget(connection, workspace_id: UUID) -> BudgetDecision:
@@ -83,8 +149,12 @@ async def record_spend(
     input_tokens: int,
     output_tokens: int,
     cost_micros: int,
-) -> bool:
-    """Append one priced call. Returns False when the same unit of work is already recorded."""
+) -> SpendWrite:
+    """Append one priced call and record any budget threshold it crosses.
+
+    Both writes share the transaction of the work being paid for, so an alert can
+    never exist for spend that was rolled back.
+    """
     inserted = await connection.execute(
         """INSERT INTO workspace_spend_records
            (id,workspace_id,source_key,category,provider,model,
@@ -103,7 +173,10 @@ async def record_spend(
             cost_micros,
         ),
     )
-    return inserted.rowcount == 1
+    if inserted.rowcount != 1:
+        return SpendWrite(False)
+    alerts = await raise_threshold_alerts(connection, workspace_id)
+    return SpendWrite(True, alerts)
 
 
 class SpendRepository:
@@ -139,6 +212,7 @@ class SpendRepository:
                 (workspace_id,),
             )
             categories = [SpendCategoryTotal(**row) for row in await result.fetchall()]
+            alerts = await period_alerts(connection, workspace_id)
         decision = budget_decision(
             budget["monthly_limit_micros"] if budget else None,
             BudgetEnforcement(budget["enforcement"]) if budget else None,
@@ -153,6 +227,8 @@ class SpendRepository:
             enforcement=BudgetEnforcement(budget["enforcement"]) if budget else None,
             remaining_micros=decision.remaining_micros,
             exhausted=not decision.allowed,
+            alert_thresholds=list(budget["alert_thresholds"]) if budget else [],
+            alerts=alerts,
             categories=categories,
         )
 
@@ -169,20 +245,23 @@ class SpendRepository:
             )
             result = await connection.execute(
                 """INSERT INTO workspace_spend_budgets
-                   (workspace_id,monthly_limit_micros,enforcement,
+                   (workspace_id,monthly_limit_micros,enforcement,alert_thresholds,
                     updated_by_issuer,updated_by_subject)
-                   VALUES (%s,%s,%s,%s,%s)
+                   VALUES (%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (workspace_id) DO UPDATE
                    SET monthly_limit_micros=EXCLUDED.monthly_limit_micros,
                        enforcement=EXCLUDED.enforcement,
+                       alert_thresholds=EXCLUDED.alert_thresholds,
                        updated_by_issuer=EXCLUDED.updated_by_issuer,
                        updated_by_subject=EXCLUDED.updated_by_subject,
                        updated_at=now()
-                   RETURNING workspace_id,monthly_limit_micros,enforcement,updated_at""",
+                   RETURNING workspace_id,monthly_limit_micros,enforcement,
+                             alert_thresholds,updated_at""",
                 (
                     workspace_id,
                     body.monthly_limit_micros,
                     str(body.enforcement),
+                    body.alert_thresholds,
                     principal.issuer,
                     principal.subject,
                 ),
@@ -190,23 +269,29 @@ class SpendRepository:
             row = await result.fetchone()
             await connection.execute(
                 """INSERT INTO workspace_spend_budget_events
-                   (id,workspace_id,monthly_limit_micros,enforcement,
+                   (id,workspace_id,monthly_limit_micros,enforcement,alert_thresholds,
                     actor_issuer,actor_subject,request_id)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (
                     uuid4(),
                     workspace_id,
                     body.monthly_limit_micros,
                     str(body.enforcement),
+                    body.alert_thresholds,
                     principal.issuer,
                     principal.subject,
                     request_id,
                 ),
             )
+            # A tighter limit can put a period past a threshold it never crossed by
+            # spending, so the decision is evaluated the moment it is recorded.
+            fired = await raise_threshold_alerts(connection, workspace_id)
             await self.workspaces.audit(
                 connection, principal, workspace_id, "spend.budget.set", request_id
             )
-            return Budget(**row)
+        for threshold in fired:
+            observe_spend_alert(threshold)
+        return Budget(**row)
 
     async def list_records(
         self,

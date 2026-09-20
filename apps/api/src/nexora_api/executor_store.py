@@ -5,7 +5,7 @@ from psycopg.types.json import Jsonb
 
 from nexora_api.config import Settings
 from nexora_api.execution_fence import executable_run
-from nexora_api.metrics import observe_spend, observe_spend_denied
+from nexora_api.metrics import observe_spend_denied
 from nexora_api.model_routing import ProviderResponse, ProviderToolCall, ProviderUsage
 from nexora_api.rag import build_untrusted_context, sha256_text
 from nexora_api.run_state import RunStateStore
@@ -16,7 +16,7 @@ from nexora_api.spend import (
     SpendPricingError,
     agent_step_source_key,
 )
-from nexora_api.spend_repository import evaluate_budget, record_spend
+from nexora_api.spend_repository import evaluate_budget, observe_write, record_spend
 from nexora_api.tool_contracts import ToolContractError
 
 
@@ -298,9 +298,9 @@ class ExecutorStore(RunStateStore):
             )
             # The ledger row commits with the step it prices, so a replayed step is
             # never charged twice and a charged call always has its stored response.
-            recorded = False
+            write = None
             if cost_micros is not None:
-                recorded = await record_spend(
+                write = await record_spend(
                     connection,
                     workspace_id=context.workspace_id,
                     source_key=agent_step_source_key(context.run_id, step_no),
@@ -328,5 +328,5 @@ class ExecutorStore(RunStateStore):
                 },
             )
         # Only a ledger row that this attempt actually wrote is counted.
-        if recorded:
-            observe_spend(decision.candidate.provider, SpendCategory.AGENT_RUN, cost_micros)
+        if write is not None:
+            observe_write(decision.candidate.provider, SpendCategory.AGENT_RUN, cost_micros, write)

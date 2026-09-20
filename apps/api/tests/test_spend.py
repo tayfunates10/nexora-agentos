@@ -6,8 +6,10 @@ import pytest
 from nexora_api import metrics
 from nexora_api.runtime_config import RuntimeConfig, RuntimeConfigError, load_runtime_config
 from nexora_api.spend import (
+    DEFAULT_ALERT_THRESHOLDS,
     MAX_SOURCE_KEY_LENGTH,
     BudgetEnforcement,
+    BudgetInput,
     EmbeddingSpend,
     ModelPrice,
     SpendCategory,
@@ -16,8 +18,10 @@ from nexora_api.spend import (
     adhoc_retrieval_source_key,
     agent_step_source_key,
     budget_decision,
+    crossed_thresholds,
     judge_case_source_key,
     knowledge_source_key,
+    normalize_thresholds,
     run_retrieval_source_key,
 )
 
@@ -90,6 +94,64 @@ def test_budget_decisions(limit, enforcement, consumed, allowed, reason, remaini
     assert (decision.allowed, decision.reason) == (allowed, reason)
     assert decision.remaining_micros == remaining
     assert decision.limit_micros == limit
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([80, 100], (80, 100)),
+        ([100, 80], (80, 100)),
+        # A duplicate would alert twice on one crossing.
+        ([80, 80, 50], (50, 80)),
+        ([], ()),
+    ],
+)
+def test_thresholds_are_normalized_before_storage(values, expected):
+    assert normalize_thresholds(values) == expected
+
+
+@pytest.mark.parametrize("values", [[0], [101], [-5], [1, 2, 3, 4, 5, 6]])
+def test_invalid_thresholds_are_rejected(values):
+    with pytest.raises(ValueError):
+        normalize_thresholds(values)
+    with pytest.raises(ValueError):
+        BudgetInput(monthly_limit_micros=1000, alert_thresholds=values)
+
+
+def test_budget_input_defaults_to_warning_and_exhaustion_alerts():
+    assert tuple(BudgetInput(monthly_limit_micros=1000).alert_thresholds) == (
+        DEFAULT_ALERT_THRESHOLDS
+    )
+    assert BudgetInput(monthly_limit_micros=1000, alert_thresholds=[]).alert_thresholds == []
+
+
+@pytest.mark.parametrize(
+    ("limit", "consumed", "expected"),
+    [
+        (10_000, 0, ()),
+        (10_000, 7_999, ()),
+        # Exactly at the threshold counts as reached; a micro below does not.
+        (10_000, 8_000, (80,)),
+        (10_000, 9_999, (80,)),
+        (10_000, 10_000, (80, 100)),
+        (10_000, 25_000, (80, 100)),
+        (None, 10_000, ()),
+        # A zero limit is fully consumed from the first micro onwards.
+        (0, 0, (80, 100)),
+    ],
+)
+def test_crossed_thresholds_use_integer_comparison(limit, consumed, expected):
+    assert crossed_thresholds([80, 100], limit, consumed) == expected
+
+
+def test_crossing_is_exact_where_a_float_comparison_would_alert_early():
+    # consumed * 100 is one micro short of 81% of this limit, but
+    # consumed / limit * 100 >= 81 is True in float64.
+    limit, consumed = 252_345_555_427_421, 204_399_899_896_211
+    assert consumed / limit * 100 >= 81
+    assert consumed * 100 == 81 * limit - 1
+    assert crossed_thresholds([81], limit, consumed) == ()
+    assert crossed_thresholds([81], limit, consumed + 1) == (81,)
 
 
 def test_negative_consumption_is_rejected():

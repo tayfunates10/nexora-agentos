@@ -37,8 +37,9 @@ deterministic pass/fail.
 Provider spend is now metered per workspace: operator-declared prices are converted to an
 append-only cost ledger inside the transaction that commits each model step, judge case or indexed
 knowledge version, and per-workspace monthly budgets are enforced before any provider egress,
-generation and embeddings alike. The web console reports that spend per period and lets owners and
-admins set the cap.
+generation and embeddings alike. Budget thresholds record an append-only alert the first time a
+period reaches them. The web console reports that spend per period and lets owners and admins set
+the cap and its thresholds.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
@@ -61,7 +62,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [LLM judge evaluations](docs/architecture/0022-llm-judge-evaluations.md), and
 [judge observability](docs/architecture/0024-evaluation-judge-observability.md), and
 [spend governance](docs/architecture/0025-spend-governance.md), and
-[spend console](docs/architecture/0026-spend-console.md).
+[spend console](docs/architecture/0026-spend-console.md), and
+[spend alerts](docs/architecture/0027-spend-alerts.md).
 
 ## Run locally with Docker Compose
 
@@ -412,9 +414,9 @@ per-case quality delta is stored. Judge results never alter deterministic pass/f
 
 The workspace panel links to **Spend and budget**. Members can read the current UTC month: consumed
 and remaining amounts, the budget state, the per-category breakdown and the priced-call ledger with
-cursor pagination and a category filter across agent runs, quality judging and embeddings. Owners
-and admins can also set the monthly limit and
-enforcement mode through a CSRF-protected form; the browser never receives the API token. Amounts
+cursor pagination and a category filter across agent runs, quality judging and embeddings, plus the
+thresholds reached this period. Owners and admins can also set the monthly limit, enforcement mode
+and alert thresholds through a CSRF-protected form; the browser never receives the API token. Amounts
 are converted between units and exact micros with integer arithmetic, and an amount that cannot be
 represented exactly is refused by both the input pattern and the server route. See
 [ADR 0026](docs/architecture/0026-spend-console.md).
@@ -439,8 +441,9 @@ under its run's retrieval key; a retrieval that cannot name a key to charge is r
 
 - `GET /api/v1/workspaces/{workspace_id}/spend` — current UTC month: consumed micros, limit,
   enforcement, remaining micros and per-category totals (members and above).
-- `PUT /api/v1/workspaces/{workspace_id}/spend/budget` — set `monthly_limit_micros` and
-  `enforcement` (`enforce` or `monitor`); owners and admins only.
+- `PUT /api/v1/workspaces/{workspace_id}/spend/budget` — set `monthly_limit_micros`,
+  `enforcement` (`enforce` or `monitor`) and up to five `alert_thresholds` percentages (default
+  80 and 100, empty list to disable); owners and admins only.
 - `GET /api/v1/workspaces/{workspace_id}/spend/records` — the priced calls themselves, newest first,
   with `limit` (1–100, default 25), `next_cursor` and an optional `category` filter.
 
@@ -452,6 +455,15 @@ leaves the process. In `monitor` mode the overage is reported and execution cont
 check is a gate rather than a hard cap: the call that crosses the limit is the last one allowed, and
 concurrent runs can overshoot by the cost of the calls already in flight, bounded by the profile
 token limits. A workspace without a budget is metered but unlimited.
+
+Alert thresholds warn before the backstop. The first time a period's spend reaches a configured
+percentage of the limit, an append-only alert row records the threshold with the limit, consumed
+amount and enforcement mode as they stood at that moment; a unique key per workspace, period and
+threshold is what keeps a busy month from repeating one warning. Crossing is compared with integer
+arithmetic, and writing a tighter budget re-evaluates thresholds because a lower limit can cross one
+without new spend. Alerts never block a call — enforcement does that — and they are recorded and
+surfaced, not delivered by email or webhook. See
+[ADR 0027](docs/architecture/0027-spend-alerts.md).
 
 Budget changes are recorded twice — in an append-only budget event with actor and request identity,
 and in the workspace security audit trail. Ledger rows and budget events reject update, delete and
@@ -494,8 +506,9 @@ Exposed series include `nexora_http_requests_total`,
 `nexora_evaluation_judge_call_duration_seconds`,
 `nexora_evaluation_judge_tokens_total`,
 `nexora_evaluation_judge_jobs_total`,
-`nexora_model_cost_micros_total` and
-`nexora_spend_denials_total`.
+`nexora_model_cost_micros_total`,
+`nexora_spend_denials_total` and
+`nexora_spend_alerts_total`.
 
 Two user-facing objectives are declared in code and exported alongside them, so alert
 rules read the stated goal rather than a hardcoded number: API availability at 99.9% and
@@ -506,7 +519,7 @@ targets, not contractual guarantees.
 Metric labels stay bounded deliberately: workspace, user, run, approval and tool names
 are tenant data and remain on spans, while metrics carry only HTTP method, matched route
 template, status, outcome, provider, MCP server key, token kind, approval decision and fixed
-evaluation-judge target/outcome and spend-category values.
+evaluation-judge target/outcome, spend-category and whole-percent threshold values.
 Unmatched paths collapse to `unmatched` and unexpected label values to `other`, so no
 request can grow the series count. Metrics are per-process, so each replica is scraped
 separately. See [ADR 0010](docs/architecture/0010-observability.md) for trace identity,
