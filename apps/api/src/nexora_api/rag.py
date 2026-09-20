@@ -122,8 +122,7 @@ def build_untrusted_context(chunks: tuple[RetrievedChunk, ...]) -> str:
     parts = [header]
     for chunk in chunks:
         citation = (
-            f"source={chunk.source_key} version={chunk.source_version} "
-            f"chunk={chunk.chunk_index}"
+            f"source={chunk.source_key} version={chunk.source_version} chunk={chunk.chunk_index}"
         )
         parts.append(f"--- BEGIN RETRIEVED EVIDENCE ({citation}) ---\n")
         parts.append(chunk.content)
