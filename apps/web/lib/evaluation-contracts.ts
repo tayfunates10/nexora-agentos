@@ -42,6 +42,7 @@ export const evalRunSchema = z.object({
 
 const judgeScore = z.number().int().min(0).max(4);
 const judgeMilli = z.number().int().min(-1000).max(1000);
+const usdPicos = z.string().regex(/^(0|[1-9]\d*)$/).nullable();
 export const evalJudgeRunSchema = z.object({
   id: z.uuid(), workspace_id: z.uuid(), eval_run_id: z.uuid(),
   status: z.enum(["queued", "running", "succeeded", "failed"]),
@@ -53,6 +54,9 @@ export const evalJudgeRunSchema = z.object({
   quality_delta_milli: judgeMilli.nullable(),
   regression_count: count, improvement_count: count,
   input_tokens: count, output_tokens: count, latency_ms: count,
+  model_cost_usd_picos: usdPicos, model_cost_call_count: count,
+  model_cost_pricing_complete: z.boolean(),
+  model_cost_pricing_versions: z.array(z.string()),
   created_at: z.iso.datetime({ offset: true }), finished_at: z.iso.datetime({ offset: true }).nullable(),
   results: z.array(z.object({
     case_id: z.uuid(), case_key: z.string(),
