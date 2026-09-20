@@ -37,7 +37,7 @@ _VALUE_SCHEMA_KEYS = {
 _JSON_TYPES = {"object", "array", "string", "integer", "number", "boolean", "null"}
 
 
-@dataclass(frozen=True)
+@dataclass
 class ToolContractError(ValueError):
     code: str
 

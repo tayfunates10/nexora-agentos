@@ -55,6 +55,8 @@ class RoutingDecision:
 class ProviderMessage:
     role: str
     content: str
+    tool_call: ProviderToolCall | None = None
+    tool_call_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

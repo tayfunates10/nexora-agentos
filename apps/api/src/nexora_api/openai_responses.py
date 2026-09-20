@@ -134,9 +134,7 @@ class OpenAIResponsesAdapter:
     def _payload(self, model: str, request: ProviderRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
-            "input": [
-                {"role": message.role, "content": message.content} for message in request.messages
-            ],
+            "input": [self._message_payload(message) for message in request.messages],
             "store": False,
         }
         if request.tools:
@@ -162,6 +160,26 @@ class OpenAIResponsesAdapter:
         if request.max_output_tokens is not None:
             payload["max_output_tokens"] = request.max_output_tokens
         return payload
+
+    @staticmethod
+    def _message_payload(message):
+        if message.tool_call is not None:
+            call = message.tool_call
+            return {
+                "type": "function_call",
+                "call_id": call.id,
+                "name": call.name,
+                "arguments": json.dumps(call.arguments),
+            }
+        if message.role == "tool":
+            if not message.tool_call_id:
+                raise ProviderError("provider_tool_call_id_required")
+            return {
+                "type": "function_call_output",
+                "call_id": message.tool_call_id,
+                "output": message.content,
+            }
+        return {"role": message.role, "content": message.content}
 
     def _require_capabilities(
         self,
