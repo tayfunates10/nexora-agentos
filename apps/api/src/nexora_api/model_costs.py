@@ -7,6 +7,13 @@ SOURCE_KINDS = frozenset(
 )
 
 
+class ModelCostError(RuntimeError):
+    def __init__(self, code: str, *, retryable: bool):
+        super().__init__(code)
+        self.code = code
+        self.retryable = retryable
+
+
 @dataclass(frozen=True, slots=True)
 class ModelCostSummary:
     call_count: int
@@ -105,7 +112,7 @@ async def record_model_usage_cost(
     )
     existing = await existing_result.fetchone()
     if existing is None:
-        raise RuntimeError("model_cost_snapshot_unavailable")
+        raise ModelCostError("model_cost_snapshot_unavailable", retryable=True)
 
     actual = (
         str(existing["workspace_id"]),
@@ -126,7 +133,7 @@ async def record_model_usage_cost(
         existing["output_usd_micros_per_million_tokens"],
     )
     if actual != expected:
-        raise RuntimeError("model_cost_snapshot_conflict")
+        raise ModelCostError("model_cost_snapshot_conflict", retryable=False)
     value = existing["total_usd_picos"]
     return int(value) if value is not None else None
 
