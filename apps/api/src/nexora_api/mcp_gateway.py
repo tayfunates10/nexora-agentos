@@ -151,9 +151,7 @@ class McpGateway:
             )
             record_error(active, exc.code)
             outcome = "error" if exc.retryable else "denied"
-            metrics.observe_tool_call(
-                execution.server_key, outcome, time.perf_counter() - started
-            )
+            metrics.observe_tool_call(execution.server_key, outcome, time.perf_counter() - started)
             raise McpGatewayError(exc.code, retryable=exc.retryable) from exc
         except TimeoutError as exc:
             await self.repository.complete_failure(
