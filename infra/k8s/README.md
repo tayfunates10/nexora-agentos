@@ -94,8 +94,10 @@ Set the digests in `overlays/production/kustomization.yaml` to the images CI bui
 verified. A moving tag cannot be the artifact that passed CI, so images are pinned by
 digest and never by tag.
 
-The Release workflow publishes each image on every push to `main` and prints the exact
-promotion command in its job summary:
+The Release workflow publishes each image on every push to `main`, scans the immutable
+digest, creates a short-lived OIDC/Sigstore signed GitHub provenance attestation, verifies
+that attestation against the release workflow and source commit, and only then prints the
+exact promotion command in its job summary:
 
 ```bash
 python scripts/promote_release.py   --image nexora/api   --new-name ghcr.io/<owner>/nexora-api   --digest sha256:<digest from the release summary>
@@ -104,6 +106,20 @@ python scripts/promote_release.py   --image nexora/api   --new-name ghcr.io/<own
 Commit that edit and merge it: promotion is reviewable history, not a side effect of a
 build. The script refuses a malformed digest, an image the overlay does not declare, or
 a tag left beside a digest.
+
+Operators can independently repeat the provenance check before applying the overlay:
+
+```bash
+docker login ghcr.io
+gh attestation verify oci://ghcr.io/<owner>/<image>@sha256:<digest> \
+  --repo <owner>/<repo> \
+  --signer-workflow <owner>/<repo>/.github/workflows/release.yml \
+  --source-digest <release-commit-sha>
+```
+
+The release gate reports every HIGH/CRITICAL image vulnerability and fails when one has a
+published fix. Findings without a published fix stay visible for operator risk review but
+do not automatically block promotion. See ADR 0035.
 
 ## Rollback
 

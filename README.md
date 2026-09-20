@@ -70,7 +70,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [PostgreSQL role separation](docs/architecture/0031-postgres-role-separation.md), and
 [spend alert delivery](docs/architecture/0032-spend-alert-delivery.md), and
 [hybrid RAG retrieval](docs/architecture/0033-hybrid-retrieval.md), and
-[retrieval evals and HNSW](docs/architecture/0034-retrieval-evals-hnsw.md).
+[retrieval evals and HNSW](docs/architecture/0034-retrieval-evals-hnsw.md), and
+[release supply-chain verification](docs/architecture/0035-release-supply-chain-verification.md).
 
 ## Run locally with Docker Compose
 
@@ -124,11 +125,14 @@ rollback sequence and [ADR 0012](docs/architecture/0012-kubernetes-deployment.md
 boundaries these manifests enforce.
 
 Pushing to `main` builds each image once, publishes it tagged by commit SHA with
-provenance and SBOM attestations, and prints the command that pins its digest into the
-production overlay. Promotion is that explicit edit, reviewed and merged like any other
-change; there is no `latest` tag to drift. CI also refuses a change that modifies or
-deletes a migration a deployed database has already applied, which is what makes
-`kubectl rollout undo` safe. See [ADR 0013](docs/architecture/0013-release-pipeline.md).
+BuildKit provenance and SBOM attestations, scans that immutable digest for HIGH/CRITICAL
+vulnerabilities, then creates and verifies a GitHub/Sigstore signed provenance attestation.
+Fixable HIGH/CRITICAL findings stop the release before a promotion command is emitted.
+Promotion is an explicit digest edit, reviewed and merged like any other change; there is
+no `latest` tag to drift. CI also refuses a change that modifies or deletes a migration a
+deployed database has already applied, which is what makes `kubectl rollout undo` safe.
+See [ADR 0013](docs/architecture/0013-release-pipeline.md) and
+[ADR 0035](docs/architecture/0035-release-supply-chain-verification.md).
 
 ## Quality checks
 

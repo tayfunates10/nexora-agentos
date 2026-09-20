@@ -17,6 +17,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -54,6 +57,64 @@ jobs:
           test -n "$digest" && [ "$digest" != "null" ]
           echo "repository=$repository" >> "$GITHUB_OUTPUT"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Scan immutable image digest
+        env:
+          REPOSITORY: ${{ steps.build.outputs.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TRIVY_VERSION: 0.74.0
+          TRIVY_CHECKSUMS_SHA256: bc701c3c3ee8b9acbea2c23257e41381e3854888f51281616a6ba5dc96963821
+        run: |
+          set -euo pipefail
+          base_url="https://github.com/aquasecurity/trivy/releases/download/v$TRIVY_VERSION"
+          checksums="/tmp/trivy_${TRIVY_VERSION}_checksums.txt"
+          archive="/tmp/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+
+          curl --fail --silent --show-error --location \
+            "$base_url/trivy_${TRIVY_VERSION}_checksums.txt" \
+            --output "$checksums"
+          echo "$TRIVY_CHECKSUMS_SHA256  $checksums" | sha256sum --check --strict
+
+          curl --fail --silent --show-error --location \
+            "$base_url/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            --output "$archive"
+          grep " trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz$" "$checksums" \
+            | sed "s#  trivy_#  /tmp/trivy_#" \
+            | sha256sum --check --strict
+
+          tar -xzf "$archive" -C /tmp trivy
+          docker pull "$REPOSITORY@$DIGEST" >/dev/null
+
+          # Always surface every severe finding in the log for operator review.
+          /tmp/trivy image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            "$REPOSITORY@$DIGEST"
+
+          # Promotion is blocked for HIGH/CRITICAL findings that have a published fix.
+          /tmp/trivy image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "$REPOSITORY@$DIGEST"
+      - name: Sign GitHub provenance attestation
+        id: attest
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ steps.build.outputs.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Verify signed provenance before promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ steps.build.outputs.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          gh attestation verify "oci://$REPOSITORY@$DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-digest "$GITHUB_SHA"
       - name: Record how to promote this artifact
         env:
           IMAGE: ${{ matrix.image }}
@@ -65,12 +126,14 @@ jobs:
             echo ""
             echo "\`$REPOSITORY@$DIGEST\`"
             echo ""
+            echo "Release gates: immutable-digest CVE scan passed and signed provenance verified."
+            echo ""
             echo "Promote with:"
             echo ""
-            echo '```bash'
+            printf '%s\n' '```bash'
             echo "python scripts/promote_release.py \\"
             echo "  --image nexora/${IMAGE#nexora-} \\"
             echo "  --new-name $REPOSITORY \\"
             echo "  --digest $DIGEST"
-            echo '```'
+            printf '%s\n' '```'
           } >> "$GITHUB_STEP_SUMMARY"
