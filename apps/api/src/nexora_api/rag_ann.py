@@ -36,6 +36,35 @@ def hnsw_index_name(embedding_model: str, dimensions: int) -> str:
     return f"rag_chunks_hnsw_{dimensions}_{digest}"
 
 
+def verify_hnsw_index(
+    connection,
+    *,
+    embedding_model: str,
+    dimensions: int,
+) -> str:
+    model, dimensions = validate_ann_target(embedding_model, dimensions)
+    name = hnsw_index_name(model, dimensions)
+    row = connection.execute(
+        """SELECT am.amname,i.indisvalid,i.indisready,pg_get_indexdef(i.indexrelid)
+           FROM pg_class idx
+           JOIN pg_index i ON i.indexrelid=idx.oid
+           JOIN pg_class tbl ON tbl.oid=i.indrelid
+           JOIN pg_namespace n ON n.oid=tbl.relnamespace
+           JOIN pg_am am ON am.oid=idx.relam
+           WHERE n.nspname='public' AND tbl.relname='rag_chunks'
+             AND idx.relname=%s""",
+        (name,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"RAG HNSW index was not created: {name}")
+    amname, valid, ready, definition = row
+    if amname != "hnsw" or not valid or not ready:
+        raise RuntimeError(f"RAG HNSW index is not usable: {name}")
+    if f"vector({dimensions})" not in definition or "vector_cosine_ops" not in definition:
+        raise RuntimeError(f"RAG HNSW index has an unexpected definition: {name}")
+    return name
+
+
 def ensure_hnsw_index(
     connection,
     *,
@@ -71,7 +100,11 @@ def ensure_hnsw_index(
             model=sql.Literal(model),
         )
     )
-    return name
+    return verify_hnsw_index(
+        connection,
+        embedding_model=model,
+        dimensions=dimensions,
+    )
 
 
 def drop_hnsw_index(
