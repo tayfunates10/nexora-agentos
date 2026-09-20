@@ -17,8 +17,10 @@ from nexora_api.evaluation import (
     evaluate_case,
 )
 from nexora_api.evaluations import (
+    AgentRunEvalInput,
     EvalCaseDefinition,
     EvalCaseResult,
+    EvalObservationInput,
     EvalRun,
     EvalRunInput,
     EvalRunSummary,
@@ -26,6 +28,7 @@ from nexora_api.evaluations import (
     EvalSuiteInput,
     EvalSuiteSummary,
 )
+from nexora_api.run_results import summarize_result
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
@@ -223,6 +226,22 @@ class EvaluationRepository:
             "observations": observations,
         }
 
+    @staticmethod
+    def _canonical_agent_run_import(suite_id: UUID, body: AgentRunEvalInput) -> dict[str, object]:
+        cases = [
+            {"case_key": item.case_key, "agent_run_id": str(item.agent_run_id)}
+            for item in sorted(body.cases, key=lambda item: item.case_key)
+        ]
+        return {
+            "kind": "agent_run_import",
+            "suite_id": str(suite_id),
+            "candidate_label": body.candidate_label,
+            "baseline_eval_run_id": (
+                str(body.baseline_eval_run_id) if body.baseline_eval_run_id else None
+            ),
+            "cases": cases,
+        }
+
     async def _load_run(self, connection, workspace_id: UUID, eval_run_id: UUID) -> EvalRun:
         result = await connection.execute(
             """SELECT id,workspace_id,suite_id,candidate_label,baseline_eval_run_id,
@@ -236,10 +255,15 @@ class EvaluationRepository:
             raise HTTPException(404)
         results_query = await connection.execute(
             """SELECT r.case_id,c.case_key,r.passed,r.failures,r.selected_tools,
-                      r.citations,r.raw_output,r.baseline_passed,r.regression,r.improvement
+                      r.citations,r.raw_output,s.agent_run_id AS source_agent_run_id,
+                      r.baseline_passed,r.regression,r.improvement
                FROM eval_case_results r
                JOIN eval_cases c
                  ON c.id=r.case_id AND c.workspace_id=r.workspace_id
+               LEFT JOIN eval_agent_run_sources s
+                 ON s.eval_run_id=r.eval_run_id
+                AND s.case_id=r.case_id
+                AND s.workspace_id=r.workspace_id
                WHERE r.workspace_id=%s AND r.eval_run_id=%s
                ORDER BY c.case_no""",
             (workspace_id, eval_run_id),
@@ -253,6 +277,7 @@ class EvaluationRepository:
                 selected_tools=list(item["selected_tools"]),
                 citations=list(item["citations"]),
                 raw_output=item["raw_output"],
+                source_agent_run_id=item["source_agent_run_id"],
                 baseline_passed=item["baseline_passed"],
                 regression=item["regression"],
                 improvement=item["improvement"],
@@ -414,6 +439,204 @@ class EvaluationRepository:
             )
             return await self._load_run(connection, workspace_id, run_id), True
 
+    async def create_run_from_agent_runs(
+        self,
+        principal,
+        workspace_id: UUID,
+        suite_id: UUID,
+        body: AgentRunEvalInput,
+        idempotency_key: str,
+        request_id: str,
+    ) -> tuple[EvalRun, bool]:
+        request_hash = _fingerprint(self._canonical_agent_run_import(suite_id, body))
+        async with self.connection() as connection:
+            await self.workspaces.scoped(
+                connection, principal, workspace_id, Permission.MANAGE_EVALS
+            )
+            existing_result = await connection.execute(
+                """SELECT id,request_hash FROM eval_runs
+                   WHERE workspace_id=%s AND created_by_issuer=%s
+                     AND created_by_subject=%s AND idempotency_key=%s
+                   FOR UPDATE""",
+                (workspace_id, principal.issuer, principal.subject, idempotency_key),
+            )
+            existing = await existing_result.fetchone()
+            if existing:
+                if existing["request_hash"] != request_hash:
+                    raise HTTPException(409)
+                return await self._load_run(connection, workspace_id, existing["id"]), False
+
+            cases_result = await connection.execute(
+                """SELECT id,case_key,input_text,expected_tools,forbidden_tools,
+                          expected_citations
+                   FROM eval_cases
+                   WHERE workspace_id=%s AND suite_id=%s
+                   ORDER BY case_no""",
+                (workspace_id, suite_id),
+            )
+            cases = await cases_result.fetchall()
+            if not cases:
+                raise HTTPException(404)
+
+            mappings = {item.case_key: item for item in body.cases}
+            expected_keys = {case["case_key"] for case in cases}
+            if set(mappings) != expected_keys:
+                raise HTTPException(422, "eval_cases_must_be_complete")
+            if any(case["expected_citations"] for case in cases):
+                raise HTTPException(422, "verified_retrieval_provenance_required")
+
+            observations: dict[str, EvalObservationInput] = {}
+            source_run_ids: dict[UUID, UUID] = {}
+            for case in cases:
+                mapping = mappings[case["case_key"]]
+                run_result = await connection.execute(
+                    """SELECT id,workspace_id,agent_id,trace_id,status,failure_code,input_text
+                       FROM agent_runs
+                       WHERE workspace_id=%s AND id=%s
+                         AND requested_by_issuer=%s AND requested_by_subject=%s
+                       FOR SHARE""",
+                    (
+                        workspace_id,
+                        mapping.agent_run_id,
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                source_run = await run_result.fetchone()
+                if not source_run:
+                    raise HTTPException(404)
+                if source_run["status"] != "succeeded":
+                    raise HTTPException(409, "agent_run_not_evaluable")
+                if source_run["input_text"] != case["input_text"]:
+                    raise HTTPException(422, "agent_run_input_mismatch")
+
+                steps_result = await connection.execute(
+                    """SELECT step_no,provider,model,response
+                       FROM agent_model_steps
+                       WHERE workspace_id=%s AND run_id=%s
+                       ORDER BY step_no LIMIT 33""",
+                    (workspace_id, mapping.agent_run_id),
+                )
+                try:
+                    terminal = summarize_result(source_run, await steps_result.fetchall())
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise HTTPException(409, "agent_run_result_unavailable") from exc
+
+                if len(terminal.selected_tools) > 32:
+                    raise HTTPException(422, "agent_run_tool_set_exceeds_eval_limit")
+                if terminal.output_text is None or len(terminal.output_text) > 50000:
+                    raise HTTPException(422, "agent_run_output_exceeds_eval_limit")
+                observations[case["case_key"]] = EvalObservationInput(
+                    case_key=case["case_key"],
+                    selected_tools=terminal.selected_tools,
+                    citations=[],
+                    raw_output=terminal.output_text,
+                )
+                source_run_ids[case["id"]] = mapping.agent_run_id
+
+            baseline: dict[UUID, EvalResult] = {}
+            if body.baseline_eval_run_id:
+                baseline_run = await connection.execute(
+                    """SELECT id FROM eval_runs
+                       WHERE workspace_id=%s AND id=%s AND suite_id=%s""",
+                    (workspace_id, body.baseline_eval_run_id, suite_id),
+                )
+                if not await baseline_run.fetchone():
+                    raise HTTPException(404)
+                baseline_results = await connection.execute(
+                    """SELECT r.case_id,c.case_key,r.passed,r.failures
+                       FROM eval_case_results r
+                       JOIN eval_cases c
+                         ON c.id=r.case_id AND c.workspace_id=r.workspace_id
+                       WHERE r.workspace_id=%s AND r.eval_run_id=%s""",
+                    (workspace_id, body.baseline_eval_run_id),
+                )
+                for item in await baseline_results.fetchall():
+                    baseline[item["case_id"]] = EvalResult(
+                        case_id=item["case_key"],
+                        passed=item["passed"],
+                        failures=tuple(item["failures"]),
+                    )
+                if len(baseline) != len(cases):
+                    raise HTTPException(409)
+
+            evaluated = []
+            for case in cases:
+                observation_input = observations[case["case_key"]]
+                candidate = evaluate_case(
+                    EvalCase(
+                        id=case["case_key"],
+                        expected_tools=frozenset(case["expected_tools"]),
+                        forbidden_tools=frozenset(case["forbidden_tools"]),
+                        expected_citations=frozenset(),
+                    ),
+                    EvalObservation(
+                        selected_tools=frozenset(observation_input.selected_tools),
+                        citations=frozenset(),
+                    ),
+                )
+                comparison = compare_result(candidate, baseline.get(case["id"]))
+                evaluated.append((case, observation_input, candidate, comparison))
+
+            passed_count = sum(candidate.passed for _, _, candidate, _ in evaluated)
+            regression_count = sum(comparison.regression for _, _, _, comparison in evaluated)
+            improvement_count = sum(comparison.improvement for _, _, _, comparison in evaluated)
+            run_id = uuid4()
+            await connection.execute(
+                """INSERT INTO eval_runs
+                   (id,workspace_id,suite_id,candidate_label,baseline_eval_run_id,
+                    created_by_issuer,created_by_subject,request_hash,idempotency_key,
+                    case_count,passed_count,failed_count,regression_count,improvement_count)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    run_id,
+                    workspace_id,
+                    suite_id,
+                    body.candidate_label,
+                    body.baseline_eval_run_id,
+                    principal.issuer,
+                    principal.subject,
+                    request_hash,
+                    idempotency_key,
+                    len(evaluated),
+                    passed_count,
+                    len(evaluated) - passed_count,
+                    regression_count,
+                    improvement_count,
+                ),
+            )
+            for case, observation_input, candidate, comparison in evaluated:
+                baseline_result = baseline.get(case["id"])
+                await connection.execute(
+                    """INSERT INTO eval_case_results
+                       (eval_run_id,workspace_id,case_id,passed,failures,selected_tools,
+                        citations,raw_output,baseline_passed,regression,improvement)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (
+                        run_id,
+                        workspace_id,
+                        case["id"],
+                        candidate.passed,
+                        Jsonb(list(candidate.failures)),
+                        sorted(observation_input.selected_tools),
+                        [],
+                        observation_input.raw_output if not candidate.passed else None,
+                        baseline_result.passed if baseline_result else None,
+                        comparison.regression,
+                        comparison.improvement,
+                    ),
+                )
+                await connection.execute(
+                    """INSERT INTO eval_agent_run_sources
+                       (eval_run_id,workspace_id,case_id,agent_run_id)
+                       VALUES (%s,%s,%s,%s)""",
+                    (run_id, workspace_id, case["id"], source_run_ids[case["id"]]),
+                )
+            await self.workspaces.audit(
+                connection, principal, workspace_id, "eval_run.imported", request_id
+            )
+            return await self._load_run(connection, workspace_id, run_id), True
+
     async def list_runs(
         self,
         principal,
@@ -469,4 +692,23 @@ class EvaluationRepository:
             await self.workspaces.scoped(
                 connection, principal, workspace_id, Permission.MANAGE_EVALS
             )
+            ownership_result = await connection.execute(
+                """SELECT r.created_by_issuer,r.created_by_subject,
+                          EXISTS (
+                              SELECT 1 FROM eval_agent_run_sources s
+                              WHERE s.workspace_id=r.workspace_id
+                                AND s.eval_run_id=r.id
+                          ) AS has_agent_run_sources
+                   FROM eval_runs r
+                   WHERE r.workspace_id=%s AND r.id=%s""",
+                (workspace_id, eval_run_id),
+            )
+            ownership = await ownership_result.fetchone()
+            if not ownership:
+                raise HTTPException(404)
+            if ownership["has_agent_run_sources"] and (
+                ownership["created_by_issuer"] != principal.issuer
+                or ownership["created_by_subject"] != principal.subject
+            ):
+                raise HTTPException(404)
             return await self._load_run(connection, workspace_id, eval_run_id)

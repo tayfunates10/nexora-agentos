@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from nexora_api.evaluation import (
     EvalCase,
@@ -7,6 +8,7 @@ from nexora_api.evaluation import (
     evaluate_case,
     regression_rate,
 )
+from nexora_api.evaluations import AgentRunEvalInput
 
 
 def test_eval_passes_expected_tool_and_citation():
@@ -90,3 +92,26 @@ def test_comparison_rejects_mismatched_cases():
 
     with pytest.raises(ValueError, match="case ids"):
         compare_result(candidate, baseline)
+
+
+def test_agent_run_eval_input_rejects_duplicate_case_or_run_mapping():
+    run_id = "11111111-1111-1111-1111-111111111111"
+    other_run_id = "22222222-2222-2222-2222-222222222222"
+
+    with pytest.raises(ValidationError, match="case_key"):
+        AgentRunEvalInput(
+            candidate_label="candidate",
+            cases=[
+                {"case_key": "case-a", "agent_run_id": run_id},
+                {"case_key": "case-a", "agent_run_id": other_run_id},
+            ],
+        )
+
+    with pytest.raises(ValidationError, match="agent_run_id"):
+        AgentRunEvalInput(
+            candidate_label="candidate",
+            cases=[
+                {"case_key": "case-a", "agent_run_id": run_id},
+                {"case_key": "case-b", "agent_run_id": run_id},
+            ],
+        )
