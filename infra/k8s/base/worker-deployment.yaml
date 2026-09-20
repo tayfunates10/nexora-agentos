@@ -56,7 +56,7 @@ spec:
             - name: NEXORA_SERVICE_NAME
               value: nexora-worker
             - name: NEXORA_DATABASE_URL
-              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_DATABASE_URL}}
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_WORKER_DATABASE_URL}}
             - name: NEXORA_REDIS_URL
               valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_REDIS_URL}}
             - name: NEXORA_METRICS_TOKEN
