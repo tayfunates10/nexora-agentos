@@ -61,6 +61,12 @@ class ModelCandidateConfig(BaseModel):
             raise ValueError("a model price must declare both input and output rates")
         return self
 
+    @model_validator(mode="after")
+    def _ann_dimensions(self):
+        if self.ann is not None and self.dimensions > 2000:
+            raise ValueError("HNSW vector indexing supports at most 2000 dimensions")
+        return self
+
     @property
     def priced(self) -> bool:
         return self.input_micros_per_million_tokens is not None
@@ -120,6 +126,12 @@ class ExecutionProfileConfig(BaseModel):
         )
 
 
+class RetrievalAnnConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ef_search: int = Field(default=100, ge=1, le=1000)
+
+
 class RetrievalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -127,6 +139,7 @@ class RetrievalConfig(BaseModel):
     model: str = Field(min_length=1, max_length=128)
     dimensions: int = Field(default=1536, ge=1, le=4096)
     strategy: Literal["vector", "hybrid"] = "hybrid"
+    ann: RetrievalAnnConfig | None = None
     limit: int = Field(default=8, ge=1, le=50)
     batch_size: int = Field(default=128, ge=1, le=256)
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
