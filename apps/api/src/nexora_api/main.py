@@ -17,6 +17,7 @@ from nexora_api.agent_repository import AgentRuntimeRepository
 from nexora_api.agents import router as agent_router
 from nexora_api.config import Settings
 from nexora_api.health import DependencyProbe, HealthResponse, Probe
+from nexora_api.knowledge import router as knowledge_router
 from nexora_api.logs import configure_logging, context, logger
 from nexora_api.mcp_gateway import McpGateway
 from nexora_api.rag_repository import RagRepository
@@ -160,6 +161,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
     app.include_router(workspace_router)
     app.include_router(agent_router)
     app.include_router(tool_router)
+    app.include_router(knowledge_router)
     return app
 
 
