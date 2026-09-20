@@ -8,6 +8,7 @@ CREATE TABLE eval_agent_run_sources (
     UNIQUE (eval_run_id, agent_run_id),
     FOREIGN KEY (eval_run_id, workspace_id) REFERENCES eval_runs(id, workspace_id),
     FOREIGN KEY (case_id, workspace_id) REFERENCES eval_cases(id, workspace_id),
+    FOREIGN KEY (eval_run_id, case_id) REFERENCES eval_case_results(eval_run_id, case_id),
     FOREIGN KEY (agent_run_id, workspace_id) REFERENCES agent_runs(id, workspace_id)
 );
 CREATE INDEX eval_agent_run_sources_agent
