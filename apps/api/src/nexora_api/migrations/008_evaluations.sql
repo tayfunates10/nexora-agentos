@@ -25,9 +25,9 @@ CREATE TABLE eval_cases (
     case_no integer NOT NULL CHECK (case_no > 0),
     case_key text NOT NULL CHECK (length(btrim(case_key)) BETWEEN 1 AND 100),
     input_text text NOT NULL CHECK (length(btrim(input_text)) BETWEEN 1 AND 20000),
-    expected_tools text[] NOT NULL DEFAULT '{}',
-    forbidden_tools text[] NOT NULL DEFAULT '{}',
-    expected_citations text[] NOT NULL DEFAULT '{}',
+    expected_tools text[] NOT NULL DEFAULT '{}' CHECK (cardinality(expected_tools) <= 32),
+    forbidden_tools text[] NOT NULL DEFAULT '{}' CHECK (cardinality(forbidden_tools) <= 32),
+    expected_citations text[] NOT NULL DEFAULT '{}' CHECK (cardinality(expected_citations) <= 64),
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (id, workspace_id),
     UNIQUE (suite_id, case_no),
@@ -68,8 +68,8 @@ CREATE TABLE eval_case_results (
     case_id uuid NOT NULL,
     passed boolean NOT NULL,
     failures jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(failures) = 'array'),
-    selected_tools text[] NOT NULL DEFAULT '{}',
-    citations text[] NOT NULL DEFAULT '{}',
+    selected_tools text[] NOT NULL DEFAULT '{}' CHECK (cardinality(selected_tools) <= 32),
+    citations text[] NOT NULL DEFAULT '{}' CHECK (cardinality(citations) <= 64),
     raw_output text CHECK (raw_output IS NULL OR length(raw_output) <= 50000),
     baseline_passed boolean,
     regression boolean NOT NULL DEFAULT false,
@@ -82,3 +82,22 @@ CREATE TABLE eval_case_results (
     CHECK (NOT (regression AND improvement))
 );
 CREATE INDEX eval_case_results_case ON eval_case_results(case_id, created_at DESC);
+
+CREATE FUNCTION reject_evaluation_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'evaluation records are append-only';
+END;
+$$;
+
+CREATE TRIGGER eval_suites_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON eval_suites
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_evaluation_mutation();
+CREATE TRIGGER eval_cases_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON eval_cases
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_evaluation_mutation();
+CREATE TRIGGER eval_runs_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON eval_runs
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_evaluation_mutation();
+CREATE TRIGGER eval_case_results_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON eval_case_results
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_evaluation_mutation();
