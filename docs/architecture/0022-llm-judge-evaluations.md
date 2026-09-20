@@ -110,7 +110,8 @@ integrity failures fail closed.
 
 Each case score stores normalized provider input/output token counts and measured provider latency.
 These are kept separate from deterministic evaluation results and can be converted to monetary cost
-using operator pricing without changing historical judge scores.
+using operator pricing without changing historical judge scores. The worker also exports bounded
+provider-call, token, latency and terminal-job Prometheus signals as defined in ADR 0024.
 
 ## Limits
 
