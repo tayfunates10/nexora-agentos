@@ -4,8 +4,8 @@ import asyncio
 import json
 
 import httpx
-import pytest
 from pydantic import SecretStr
+import pytest
 
 from nexora_api.model_routing import (
     ModelCapability,
