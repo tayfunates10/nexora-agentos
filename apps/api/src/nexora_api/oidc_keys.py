@@ -168,9 +168,7 @@ class OidcKeyResolver:
             raise OidcKeyUnavailable("OIDC discovery did not provide jwks_uri")
         jwks_url = _require_https_url(jwks_url, "OIDC discovery jwks_uri")
         if _origin(jwks_url) != _origin(issuer):
-            raise OidcKeyUnavailable(
-                "Cross-origin jwks_uri requires explicit NEXORA_AUTH_JWKS_URL"
-            )
+            raise OidcKeyUnavailable("Cross-origin jwks_uri requires explicit NEXORA_AUTH_JWKS_URL")
         return jwks_url
 
     async def _get_json(self, url: str, max_bytes: int, label: str) -> dict:
