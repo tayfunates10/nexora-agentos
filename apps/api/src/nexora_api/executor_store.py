@@ -50,9 +50,7 @@ class ExecutorStore(RunStateStore):
                 return None
             if row["context_text"] is None:
                 raise ToolContractError("retrieval_snapshot_unavailable")
-            expected_query_hash = hashlib.sha256(
-                context.input_text.encode("utf-8")
-            ).hexdigest()
+            expected_query_hash = hashlib.sha256(context.input_text.encode("utf-8")).hexdigest()
             if row["query_hash"] != expected_query_hash:
                 raise RuntimeError("retrieval snapshot query mismatch")
             if (
