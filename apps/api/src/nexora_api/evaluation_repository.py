@@ -28,6 +28,7 @@ from nexora_api.evaluations import (
     EvalSuiteInput,
     EvalSuiteSummary,
 )
+from nexora_api.rag import retrieval_citation_id
 from nexora_api.run_results import summarize_result
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
@@ -482,9 +483,6 @@ class EvaluationRepository:
             expected_keys = {case["case_key"] for case in cases}
             if set(mappings) != expected_keys:
                 raise HTTPException(422, "eval_cases_must_be_complete")
-            if any(case["expected_citations"] for case in cases):
-                raise HTTPException(422, "verified_retrieval_provenance_required")
-
             observations: dict[str, EvalObservationInput] = {}
             source_run_ids: dict[UUID, UUID] = {}
             for case in cases:
@@ -510,6 +508,30 @@ class EvaluationRepository:
                 if source_run["input_text"] != case["input_text"]:
                     raise HTTPException(422, "agent_run_input_mismatch")
 
+                retrieval_result = await connection.execute(
+                    """SELECT run_id FROM agent_run_retrievals
+                       WHERE workspace_id=%s AND run_id=%s""",
+                    (workspace_id, mapping.agent_run_id),
+                )
+                retrieval = await retrieval_result.fetchone()
+                citations: list[str] = []
+                if retrieval is not None:
+                    chunks_result = await connection.execute(
+                        """SELECT source_key,source_version
+                           FROM agent_run_retrieval_chunks
+                           WHERE workspace_id=%s AND run_id=%s
+                           ORDER BY position""",
+                        (workspace_id, mapping.agent_run_id),
+                    )
+                    citations = sorted(
+                        {
+                            retrieval_citation_id(item["source_key"], item["source_version"])
+                            for item in await chunks_result.fetchall()
+                        }
+                    )
+                elif case["expected_citations"]:
+                    raise HTTPException(422, "verified_retrieval_provenance_required")
+
                 steps_result = await connection.execute(
                     """SELECT step_no,provider,model,response
                        FROM agent_model_steps
@@ -529,7 +551,7 @@ class EvaluationRepository:
                 observations[case["case_key"]] = EvalObservationInput(
                     case_key=case["case_key"],
                     selected_tools=terminal.selected_tools,
-                    citations=[],
+                    citations=citations,
                     raw_output=terminal.output_text,
                 )
                 source_run_ids[case["id"]] = mapping.agent_run_id
@@ -568,11 +590,11 @@ class EvaluationRepository:
                         id=case["case_key"],
                         expected_tools=frozenset(case["expected_tools"]),
                         forbidden_tools=frozenset(case["forbidden_tools"]),
-                        expected_citations=frozenset(),
+                        expected_citations=frozenset(case["expected_citations"]),
                     ),
                     EvalObservation(
                         selected_tools=frozenset(observation_input.selected_tools),
-                        citations=frozenset(),
+                        citations=frozenset(observation_input.citations),
                     ),
                 )
                 comparison = compare_result(candidate, baseline.get(case["id"]))
@@ -619,7 +641,7 @@ class EvaluationRepository:
                         candidate.passed,
                         Jsonb(list(candidate.failures)),
                         sorted(observation_input.selected_tools),
-                        [],
+                        sorted(observation_input.citations),
                         observation_input.raw_output if not candidate.passed else None,
                         baseline_result.passed if baseline_result else None,
                         comparison.regression,
