@@ -123,6 +123,7 @@ def build_retriever(
         batch_size=retrieval.batch_size,
         timeout_seconds=retrieval.timeout_seconds,
         retrieval_limit=retrieval.limit,
+        retrieval_strategy=retrieval.strategy,
         spend=config.embedding_spend(),
     )
 

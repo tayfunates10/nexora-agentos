@@ -259,3 +259,92 @@ def test_rag_reindex_switches_current_version_and_deletion_is_idempotent(keys, a
             ).fetchone()[0]
             == 0
         )
+
+
+def test_hybrid_retrieval_recovers_exact_identifier_without_acl_leak(keys, auth_settings):
+    migrate(auth_settings)
+    prefix = "rag-hybrid-" + str(uuid4())
+    owner = prefix + "-owner"
+    member = prefix + "-member"
+    issuer = auth_settings.auth_issuer or ""
+
+    def headers(subject):
+        return {"Authorization": "Bearer " + token(keys, subject)}
+
+    with TestClient(create_app(settings=auth_settings)) as client:
+        workspace_id = client.post(
+            "/api/v1/workspaces",
+            json={"name": "Hybrid retrieval workspace"},
+            headers=headers(owner),
+        ).json()["id"]
+        granted = client.put(
+            f"/api/v1/workspaces/{workspace_id}/members",
+            json={"subject": member, "role": "member"},
+            headers=headers(owner),
+        )
+        assert granted.status_code == 200, granted.text
+
+    repository = RagRepository(auth_settings)
+    owner_principal = Principal(issuer, owner)
+    member_principal = Principal(issuer, member)
+
+    async def exercise():
+        await repository.index_source(
+            owner_principal,
+            UUID(workspace_id),
+            source_key="semantic-guide",
+            version="v1",
+            title="General guide",
+            text="General service troubleshooting and recovery guidance.",
+            embedding_model="test-embed-v1",
+            embeddings=((1.0, 0.0, 0.0),),
+            request_id="hybrid-semantic",
+        )
+        await repository.index_source(
+            owner_principal,
+            UUID(workspace_id),
+            source_key="incident-code",
+            version="v1",
+            title="Incident code",
+            text="Incident ZXQ-9147 requires rotating the gateway credential.",
+            embedding_model="test-embed-v1",
+            embeddings=((0.0, 1.0, 0.0),),
+            request_id="hybrid-identifier",
+        )
+        await repository.index_source(
+            owner_principal,
+            UUID(workspace_id),
+            source_key="restricted-incident",
+            version="v1",
+            title="Restricted incident",
+            text="ZXQ-9147 internal root cause is restricted to the owner.",
+            embedding_model="test-embed-v1",
+            embeddings=((0.0, 0.0, 1.0),),
+            request_id="hybrid-restricted",
+            access_scope=AccessScope.RESTRICTED,
+            acl=(AclIdentity(issuer=issuer, subject=owner),),
+        )
+
+        vector_only = await repository.retrieve(
+            member_principal,
+            UUID(workspace_id),
+            embedding_model="test-embed-v1",
+            query_embedding=(1.0, 0.0, 0.0),
+            limit=3,
+        )
+        hybrid = await repository.retrieve(
+            member_principal,
+            UUID(workspace_id),
+            embedding_model="test-embed-v1",
+            query_embedding=(1.0, 0.0, 0.0),
+            query_text="ZXQ-9147",
+            limit=3,
+        )
+        return vector_only, hybrid
+
+    vector_only, hybrid = asyncio.run(exercise())
+
+    assert vector_only[0].source_key == "semantic-guide"
+    assert hybrid[0].source_key == "incident-code"
+    assert "restricted-incident" not in {item.source_key for item in hybrid}
+    assert {item.source_key for item in hybrid} == {"semantic-guide", "incident-code"}

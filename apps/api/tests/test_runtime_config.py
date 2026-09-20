@@ -185,6 +185,7 @@ def test_retrieval_is_opt_in_and_uses_operator_configuration(tmp_path):
             "provider": "openai",
             "model": "text-embedding-3-small",
             "dimensions": 768,
+            "strategy": "hybrid",
             "limit": 6,
             "batch_size": 64,
             "timeout_seconds": 9,
@@ -199,6 +200,7 @@ def test_retrieval_is_opt_in_and_uses_operator_configuration(tmp_path):
     assert retriever is not None
     assert retriever.embedding_model == "text-embedding-3-small"
     assert retriever.dimensions == 768
+    assert retriever.retrieval_strategy == "hybrid"
     assert retriever.retrieval_limit == 6
     assert retriever.batch_size == 64
     assert retriever.timeout_seconds == 9
@@ -289,6 +291,7 @@ def test_evaluation_judge_rejects_unknown_prompt_or_duplicate_workspace(tmp_path
         {"provider": "openai", "model": "embed", "dimensions": 0},
         {"provider": "openai", "model": "embed", "limit": 51},
         {"provider": "openai", "model": "embed", "batch_size": 0},
+        {"provider": "openai", "model": "embed", "strategy": "bm25"},
     ],
 )
 def test_invalid_retrieval_configuration_is_refused(tmp_path, retrieval):

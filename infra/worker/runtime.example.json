@@ -35,6 +35,7 @@
     "provider": "openai",
     "model": "text-embedding-3-small",
     "dimensions": 1536,
+    "strategy": "hybrid",
     "limit": 8,
     "batch_size": 128,
     "timeout_seconds": 15,

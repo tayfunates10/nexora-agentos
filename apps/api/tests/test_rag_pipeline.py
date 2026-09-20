@@ -34,6 +34,7 @@ class StubRepository:
         self.reject = reject
         self.chunks = chunks
         self.indexed_embeddings = None
+        self.retrieve_kwargs = None
 
     async def authorize_manage(self, principal, workspace_id):
         self.events.append("authorize_manage")
@@ -47,6 +48,7 @@ class StubRepository:
 
     async def retrieve(self, principal, workspace_id, **kwargs):
         self.events.append("retrieve")
+        self.retrieve_kwargs = kwargs
         return self.chunks
 
     async def index_source(self, principal, workspace_id, **kwargs):
@@ -93,6 +95,46 @@ def test_context_authorizes_before_provider_and_preserves_citation_boundary():
     assert "UNTRUSTED RETRIEVED EVIDENCE" in result
     assert "source=handbook version=v1 chunk=2" in result
     assert "approved evidence" in result
+
+
+def test_hybrid_pipeline_passes_query_text_and_vector_mode_does_not():
+    events = []
+    hybrid_repository = StubRepository(events, chunks=(chunk(),))
+    hybrid = RagEmbeddingPipeline(
+        hybrid_repository,
+        StubAdapter(events),
+        embedding_model="embed-test",
+        dimensions=3,
+        retrieval_strategy="hybrid",
+    )
+    asyncio.run(
+        hybrid.retrieve(
+            principal(),
+            uuid4(),
+            query="ERR-42 service failure",
+            request_id="hybrid-query",
+        )
+    )
+    assert hybrid_repository.retrieve_kwargs["query_text"] == "ERR-42 service failure"
+
+    vector_events = []
+    vector_repository = StubRepository(vector_events, chunks=(chunk(),))
+    vector = RagEmbeddingPipeline(
+        vector_repository,
+        StubAdapter(vector_events),
+        embedding_model="embed-test",
+        dimensions=3,
+        retrieval_strategy="vector",
+    )
+    asyncio.run(
+        vector.retrieve(
+            principal(),
+            uuid4(),
+            query="ERR-42 service failure",
+            request_id="vector-query",
+        )
+    )
+    assert vector_repository.retrieve_kwargs["query_text"] is None
 
 
 def test_unauthorized_retrieval_cannot_trigger_paid_embedding():
