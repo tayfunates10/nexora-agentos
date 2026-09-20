@@ -667,6 +667,12 @@ class RagRepository:
                 f"hybrid retrieval query must be at most {HYBRID_QUERY_MAX_CHARS} characters"
             )
         distance = self._distance_expression(dimensions, ann=ann)
+        model_filter = sql.SQL(
+            "c.embedding_model={} AND c.embedding_dimensions={}"
+        ).format(
+            sql.Literal(embedding_model),
+            sql.Literal(dimensions),
+        )
 
         async with self.connection() as connection:
             await self.workspaces.scoped(
@@ -701,8 +707,7 @@ class RagRepository:
                              ON s.id=c.source_id AND s.workspace_id=c.workspace_id
                            WHERE c.workspace_id=%s
                              AND s.is_current
-                             AND c.embedding_model=%s
-                             AND c.embedding_dimensions=%s
+                             AND {model_filter}
                              AND (
                                  c.access_scope='workspace'
                                  OR EXISTS (
@@ -775,22 +780,18 @@ class RagRepository:
                          ON s.id=c.source_id AND s.workspace_id=c.workspace_id
                        ORDER BY score DESC,c.source_id,c.chunk_index
                        LIMIT %s"""
-                ).format(distance=distance)
+                ).format(distance=distance, model_filter=model_filter)
                 result = await connection.execute(
                     query,
                     (
                         lexical_query,
                         vector_literal,
                         workspace_id,
-                        embedding_model,
-                        dimensions,
                         principal.issuer,
                         principal.subject,
                         vector_literal,
                         candidate_limit,
                         workspace_id,
-                        embedding_model,
-                        dimensions,
                         principal.issuer,
                         principal.subject,
                         candidate_limit,
@@ -808,8 +809,7 @@ class RagRepository:
                              ON s.id=c.source_id AND s.workspace_id=c.workspace_id
                            WHERE c.workspace_id=%s
                              AND s.is_current
-                             AND c.embedding_model=%s
-                             AND c.embedding_dimensions=%s
+                             AND {model_filter}
                              AND (
                                  c.access_scope='workspace'
                                  OR EXISTS (
@@ -831,14 +831,12 @@ class RagRepository:
                        JOIN rag_sources s
                          ON s.id=c.source_id AND s.workspace_id=c.workspace_id
                        ORDER BY vector_pool.vector_distance,c.source_id,c.chunk_index"""
-                ).format(distance=distance)
+                ).format(distance=distance, model_filter=model_filter)
                 result = await connection.execute(
                     query,
                     (
                         vector_literal,
                         workspace_id,
-                        embedding_model,
-                        dimensions,
                         principal.issuer,
                         principal.subject,
                         vector_literal,
