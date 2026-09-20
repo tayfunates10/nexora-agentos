@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
+from fastapi import HTTPException
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -63,6 +66,192 @@ class RagRepository:
                 workspace_id,
                 Permission.READ,
             )
+
+    @staticmethod
+    def _ingestion_view(row):
+        return {
+            "id": row["id"],
+            "workspace_id": row["workspace_id"],
+            "source_key": row["source_key"],
+            "version": row["version"],
+            "title": row["title"],
+            "access_scope": row["access_scope"],
+            "status": row["status"],
+            "attempt_count": row["attempt_count"],
+            "source_id": row["source_id"],
+            "chunk_count": row["chunk_count"],
+            "embedding_input_tokens": row["embedding_input_tokens"],
+            "error_code": row["error_code"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "finished_at": row["finished_at"],
+        }
+
+    async def enqueue_ingestion(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        *,
+        body,
+        idempotency_key: str,
+        request_id: str,
+    ):
+        normalized_text = normalize_document(body.text)
+        acl = sorted(
+            {(item.issuer, item.subject) for item in body.acl},
+            key=lambda item: (item[0], item[1]),
+        )
+        normalized = {
+            "source_key": body.source_key,
+            "version": body.version,
+            "title": body.title.strip(),
+            "text": normalized_text,
+            "access_scope": body.access_scope.value,
+            "acl": [{"issuer": issuer, "subject": subject} for issuer, subject in acl],
+            "metadata": body.metadata,
+            "max_chars": body.max_chars,
+            "overlap_chars": body.overlap_chars,
+        }
+        request_hash = hashlib.sha256(
+            json.dumps(
+                normalized,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        job_id = uuid4()
+        async with self.connection() as connection:
+            await self.workspaces.scoped(
+                connection,
+                principal,
+                workspace_id,
+                Permission.MANAGE_KNOWLEDGE,
+            )
+            inserted = await connection.execute(
+                """INSERT INTO knowledge_ingestion_jobs
+                   (id,workspace_id,source_key,version,title,text_content,access_scope,
+                    acl,metadata,max_chars,overlap_chars,request_hash,idempotency_key,
+                    requested_by_issuer,requested_by_subject)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (
+                       workspace_id,requested_by_issuer,requested_by_subject,idempotency_key
+                   ) DO NOTHING
+                   RETURNING *""",
+                (
+                    job_id,
+                    workspace_id,
+                    normalized["source_key"],
+                    normalized["version"],
+                    normalized["title"],
+                    normalized["text"],
+                    normalized["access_scope"],
+                    Jsonb(normalized["acl"]),
+                    Jsonb(normalized["metadata"]),
+                    normalized["max_chars"],
+                    normalized["overlap_chars"],
+                    request_hash,
+                    idempotency_key,
+                    principal.issuer,
+                    principal.subject,
+                ),
+            )
+            row = await inserted.fetchone()
+            if row is not None:
+                await self.workspaces.audit(
+                    connection,
+                    principal,
+                    workspace_id,
+                    "knowledge.ingestion.queued",
+                    request_id,
+                    body.source_key,
+                )
+                return self._ingestion_view(row), True
+
+            existing_result = await connection.execute(
+                """SELECT * FROM knowledge_ingestion_jobs
+                   WHERE workspace_id=%s AND requested_by_issuer=%s
+                     AND requested_by_subject=%s AND idempotency_key=%s
+                   FOR UPDATE""",
+                (workspace_id, principal.issuer, principal.subject, idempotency_key),
+            )
+            existing = await existing_result.fetchone()
+            if existing is None:
+                raise RuntimeError("idempotency row disappeared")
+            if existing["request_hash"] != request_hash:
+                raise HTTPException(409)
+            return self._ingestion_view(existing), False
+
+    async def get_ingestion(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        job_id: UUID,
+    ):
+        async with self.connection() as connection:
+            await self.workspaces.scoped(
+                connection,
+                principal,
+                workspace_id,
+                Permission.MANAGE_KNOWLEDGE,
+            )
+            result = await connection.execute(
+                """SELECT * FROM knowledge_ingestion_jobs
+                   WHERE workspace_id=%s AND id=%s""",
+                (workspace_id, job_id),
+            )
+            row = await result.fetchone()
+            if row is None:
+                raise HTTPException(404)
+            return self._ingestion_view(row)
+
+    async def list_sources(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        limit: int,
+        cursor: UUID | None,
+    ):
+        async with self.connection() as connection:
+            await self.workspaces.scoped(
+                connection,
+                principal,
+                workspace_id,
+                Permission.READ,
+            )
+            result = await connection.execute(
+                """SELECT s.id,s.source_key,s.version,s.title,s.access_scope,
+                          s.content_hash,s.created_at,s.updated_at,
+                          count(c.id)::integer AS chunk_count
+                   FROM rag_sources s
+                   LEFT JOIN rag_chunks c
+                     ON c.source_id=s.id AND c.workspace_id=s.workspace_id
+                   WHERE s.workspace_id=%s
+                     AND s.is_current
+                     AND (%s::uuid IS NULL OR s.id > %s::uuid)
+                     AND (
+                         s.access_scope='workspace'
+                         OR EXISTS (
+                             SELECT 1 FROM rag_source_acl a
+                             WHERE a.workspace_id=s.workspace_id
+                               AND a.source_id=s.id
+                               AND a.issuer=%s
+                               AND a.subject=%s
+                         )
+                     )
+                   GROUP BY s.id
+                   ORDER BY s.id
+                   LIMIT %s""",
+                (
+                    workspace_id,
+                    cursor,
+                    cursor,
+                    principal.issuer,
+                    principal.subject,
+                    limit,
+                ),
+            )
+            return [dict(row) for row in await result.fetchall()]
 
     async def index_source(
         self,
@@ -230,12 +419,27 @@ class RagRepository:
                 workspace_id,
                 Permission.MANAGE_KNOWLEDGE,
             )
+            running = await connection.execute(
+                """SELECT id FROM knowledge_ingestion_jobs
+                   WHERE workspace_id=%s AND source_key=%s AND status='running'
+                   FOR UPDATE""",
+                (workspace_id, source_key),
+            )
+            if await running.fetchone():
+                raise HTTPException(409)
+
+            cancelled = await connection.execute(
+                """UPDATE knowledge_ingestion_jobs
+                   SET status='cancelled',finished_at=now(),updated_at=now()
+                   WHERE workspace_id=%s AND source_key=%s AND status='queued'""",
+                (workspace_id, source_key),
+            )
             deleted = await connection.execute(
                 "DELETE FROM rag_sources WHERE workspace_id=%s AND source_key=%s",
                 (workspace_id, source_key),
             )
             count = deleted.rowcount or 0
-            if count:
+            if count or (cancelled.rowcount or 0):
                 await self.workspaces.audit(
                     connection,
                     principal,
