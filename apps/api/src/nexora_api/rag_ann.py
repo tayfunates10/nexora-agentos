@@ -114,9 +114,7 @@ def drop_hnsw_index(
     dimensions: int,
 ) -> str:
     name = hnsw_index_name(embedding_model, dimensions)
-    connection.execute(
-        sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(sql.Identifier(name))
-    )
+    connection.execute(sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(sql.Identifier(name)))
     return name
 
 
