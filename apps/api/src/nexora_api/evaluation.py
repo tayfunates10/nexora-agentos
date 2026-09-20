@@ -23,6 +23,23 @@ class EvalResult:
     failures: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class EvalComparison:
+    regression: bool
+    improvement: bool
+
+
+def compare_result(candidate: EvalResult, baseline: EvalResult | None) -> EvalComparison:
+    if baseline is None:
+        return EvalComparison(regression=False, improvement=False)
+    if baseline.case_id != candidate.case_id:
+        raise ValueError("candidate and baseline case ids must match")
+    return EvalComparison(
+        regression=baseline.passed and not candidate.passed,
+        improvement=not baseline.passed and candidate.passed,
+    )
+
+
 def evaluate_case(case: EvalCase, observation: EvalObservation) -> EvalResult:
     """Score deterministic safety/tool/citation invariants without a judge model."""
     failures: list[str] = []
