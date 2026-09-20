@@ -19,5 +19,13 @@
       "timeout_seconds": 60,
       "max_context_chars": 100000
     }
+  },
+  "retrieval": {
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "dimensions": 1536,
+    "limit": 8,
+    "batch_size": 128,
+    "timeout_seconds": 15
   }
 }
