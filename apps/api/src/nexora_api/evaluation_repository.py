@@ -692,4 +692,23 @@ class EvaluationRepository:
             await self.workspaces.scoped(
                 connection, principal, workspace_id, Permission.MANAGE_EVALS
             )
+            ownership_result = await connection.execute(
+                """SELECT r.created_by_issuer,r.created_by_subject,
+                          EXISTS (
+                              SELECT 1 FROM eval_agent_run_sources s
+                              WHERE s.workspace_id=r.workspace_id
+                                AND s.eval_run_id=r.id
+                          ) AS has_agent_run_sources
+                   FROM eval_runs r
+                   WHERE r.workspace_id=%s AND r.id=%s""",
+                (workspace_id, eval_run_id),
+            )
+            ownership = await ownership_result.fetchone()
+            if not ownership:
+                raise HTTPException(404)
+            if ownership["has_agent_run_sources"] and (
+                ownership["created_by_issuer"] != principal.issuer
+                or ownership["created_by_subject"] != principal.subject
+            ):
+                raise HTTPException(404)
             return await self._load_run(connection, workspace_id, eval_run_id)
