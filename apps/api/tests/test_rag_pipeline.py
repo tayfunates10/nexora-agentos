@@ -29,9 +29,10 @@ class StubAdapter:
 
 
 class StubRepository:
-    def __init__(self, events, *, reject=False, chunks=()):
+    def __init__(self, events, *, reject=False, reject_ann=False, chunks=()):
         self.events = events
         self.reject = reject
+        self.reject_ann = reject_ann
         self.chunks = chunks
         self.indexed_embeddings = None
         self.retrieve_kwargs = None
@@ -48,7 +49,7 @@ class StubRepository:
 
     async def authorize_ann_index(self, embedding_model, dimensions):
         self.events.append("authorize_ann_index")
-        if self.reject:
+        if self.reject_ann:
             raise RuntimeError("missing ann index")
 
     async def retrieve(self, principal, workspace_id, **kwargs):
@@ -146,7 +147,7 @@ def test_missing_ann_index_fails_before_paid_embedding():
     events = []
     adapter = StubAdapter(events)
     pipeline = RagEmbeddingPipeline(
-        StubRepository(events, reject=True),
+        StubRepository(events, reject_ann=True),
         adapter,
         embedding_model="embed-test",
         dimensions=3,
