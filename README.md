@@ -69,7 +69,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [OIDC JWKS rotation](docs/architecture/0030-oidc-jwks-rotation.md), and
 [PostgreSQL role separation](docs/architecture/0031-postgres-role-separation.md), and
 [spend alert delivery](docs/architecture/0032-spend-alert-delivery.md), and
-[hybrid RAG retrieval](docs/architecture/0033-hybrid-retrieval.md).
+[hybrid RAG retrieval](docs/architecture/0033-hybrid-retrieval.md), and
+[retrieval evals and HNSW](docs/architecture/0034-retrieval-evals-hnsw.md).
 
 ## Run locally with Docker Compose
 
@@ -243,6 +244,9 @@ nothing runs unless a deployment explicitly allows it.
     "model": "text-embedding-3-small",
     "dimensions": 1536,
     "strategy": "hybrid",
+    "ann": {
+      "ef_search": 100
+    },
     "limit": 8,
     "input_micros_per_million_tokens": 20000
   },
@@ -276,8 +280,22 @@ membership before embedding the query, applies source ACLs in SQL, and injects o
 untrusted evidence with citation provenance. Retrieval defaults to `hybrid`: vector and
 language-neutral PostgreSQL full-text candidates are fused with deterministic RRF so exact
 identifiers can recover from a weak embedding match. Operators can set `strategy: "vector"`
-to retain vector-only ranking. See [ADR 0011](docs/architecture/0011-worker-service.md)
-and [ADR 0014](docs/architecture/0014-rag-embedding-runtime.md).
+to retain vector-only ranking.
+
+ANN is optional. Before adding an `ann` block, provision the exact model/dimension HNSW index
+with the migration-owner database credential:
+
+```bash
+python -m nexora_api.rag_ann ensure --model text-embedding-3-small --dimensions 1536
+```
+
+With `ann.ef_search` configured, the worker verifies that index before calling the embedding
+provider, enables filtered iterative HNSW scans, and fails closed instead of silently falling back
+to a full scan. Retrieval quality can be evaluated independently with the deterministic
+`nexora_api.retrieval_eval` hit@K, recall@K and MRR helpers. See
+[ADR 0034](docs/architecture/0034-retrieval-evals-hnsw.md), in addition to
+[ADR 0011](docs/architecture/0011-worker-service.md) and
+[ADR 0014](docs/architecture/0014-rag-embedding-runtime.md).
 
 Use `/docs` for the full schema. Core endpoints are:
 
