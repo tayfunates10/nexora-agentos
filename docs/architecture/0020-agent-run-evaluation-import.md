@@ -32,7 +32,9 @@ For every mapped run the API requires:
 - exact equality between the suite case input and the persisted agent-run input.
 
 Owner or admin status does not bypass requester ownership. Missing, foreign-workspace and
-other-requester source runs return 404.
+other-requester source runs return 404. Evaluation history summaries remain available to users with
+evaluation-management permission, but detailed imported results are also requester-scoped because
+failed-case raw output can contain the same requester-specific RAG data as the source run.
 
 The importer derives selected tool names and final output only from the persisted model journal by
 using the same terminal-result summarizer as the public result endpoint. It never accepts
