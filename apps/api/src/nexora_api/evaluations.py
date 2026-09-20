@@ -145,6 +145,29 @@ class EvalRunInput(BaseModel):
         return self
 
 
+class AgentRunEvalCaseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    case_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$")
+    agent_run_id: UUID
+
+
+class AgentRunEvalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    candidate_label: str = Field(min_length=1, max_length=128)
+    baseline_eval_run_id: UUID | None = None
+    cases: list[AgentRunEvalCaseInput] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_cases(self):
+        case_keys = [item.case_key for item in self.cases]
+        run_ids = [item.agent_run_id for item in self.cases]
+        if len(case_keys) != len(set(case_keys)):
+            raise ValueError("each case_key may appear only once")
+        if len(run_ids) != len(set(run_ids)):
+            raise ValueError("each agent_run_id may appear only once")
+        return self
+
+
 class EvalCaseResult(BaseModel):
     case_id: UUID
     case_key: str
@@ -153,6 +176,7 @@ class EvalCaseResult(BaseModel):
     selected_tools: list[str]
     citations: list[str]
     raw_output: str | None = None
+    source_agent_run_id: UUID | None = None
     baseline_passed: bool | None = None
     regression: bool
     improvement: bool
@@ -244,6 +268,32 @@ async def create_eval_run(
     idempotency_key: IdempotencyKey,
 ):
     run, created = await request.app.state.evaluations.create_run(
+        principal,
+        workspace_id,
+        suite_id,
+        body,
+        idempotency_key,
+        request.state.request_id,
+    )
+    response.status_code = 201 if created else 200
+    return run
+
+
+@router.post(
+    "/eval-suites/{suite_id}/run-imports",
+    response_model=EvalRun,
+    status_code=201,
+)
+async def import_agent_runs_to_eval(
+    workspace_id: UUID,
+    suite_id: UUID,
+    body: AgentRunEvalInput,
+    principal: Identity,
+    request: Request,
+    response: Response,
+    idempotency_key: IdempotencyKey,
+):
+    run, created = await request.app.state.evaluations.create_run_from_agent_runs(
         principal,
         workspace_id,
         suite_id,
