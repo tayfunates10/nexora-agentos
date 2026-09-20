@@ -5,6 +5,7 @@ from nexora_api.model_routing import (
     ModelCapability,
     ModelRouter,
     ProviderError,
+    ProviderHealth,
     RoutingRequest,
 )
 
@@ -93,4 +94,88 @@ def test_router_prefers_quality_then_cost_deterministically():
     )
 
     assert decision.candidate.provider == "alpha"
-    assert decision.reason == "capabilities_policy_quality_cost"
+    assert decision.reason == "capabilities_policy_health_quality_cost"
+
+
+def test_router_circuit_breaks_unhealthy_provider_without_relaxing_capabilities():
+    router = ModelRouter(
+        [
+            candidate(
+                "alpha",
+                "best-tool-model",
+                [ModelCapability.TEXT, ModelCapability.TOOLS],
+                quality=3,
+            ),
+            candidate(
+                "beta",
+                "fallback-tool-model",
+                [ModelCapability.TEXT, ModelCapability.TOOLS],
+                quality=2,
+            ),
+        ],
+        provider_health={"alpha": ProviderHealth.UNHEALTHY},
+    )
+
+    decision = router.route(
+        RoutingRequest(
+            required_capabilities=frozenset([ModelCapability.TEXT, ModelCapability.TOOLS]),
+            allowed_providers=frozenset(["alpha", "beta"]),
+        )
+    )
+
+    assert decision.candidate.provider == "beta"
+    assert decision.candidate.model == "fallback-tool-model"
+
+
+def test_router_prefers_healthy_provider_over_higher_quality_degraded_provider():
+    router = ModelRouter(
+        [
+            candidate("alpha", "degraded-high", [ModelCapability.TEXT], quality=3),
+            candidate("beta", "healthy-lower", [ModelCapability.TEXT], quality=2),
+        ],
+        provider_health={"alpha": ProviderHealth.DEGRADED},
+    )
+
+    decision = router.route(
+        RoutingRequest(
+            required_capabilities=frozenset([ModelCapability.TEXT]),
+            allowed_providers=frozenset(["alpha", "beta"]),
+        )
+    )
+
+    assert decision.candidate.provider == "beta"
+
+
+def test_router_returns_retryable_error_when_all_policy_eligible_providers_are_unhealthy():
+    router = ModelRouter(
+        [candidate("alpha", "tool-model", [ModelCapability.TEXT, ModelCapability.TOOLS])],
+        provider_health={"alpha": ProviderHealth.UNHEALTHY},
+    )
+
+    with pytest.raises(ProviderError) as error:
+        router.route(
+            RoutingRequest(
+                required_capabilities=frozenset([ModelCapability.TEXT, ModelCapability.TOOLS]),
+                allowed_providers=frozenset(["alpha"]),
+            )
+        )
+
+    assert error.value.code == "no_healthy_provider"
+    assert error.value.retryable is True
+
+
+def test_provider_health_can_recover_without_rebuilding_router():
+    router = ModelRouter(
+        [candidate("alpha", "model", [ModelCapability.TEXT])],
+        provider_health={"alpha": ProviderHealth.UNHEALTHY},
+    )
+    request = RoutingRequest(
+        required_capabilities=frozenset([ModelCapability.TEXT]),
+        allowed_providers=frozenset(["alpha"]),
+    )
+
+    with pytest.raises(ProviderError):
+        router.route(request)
+
+    router.set_provider_health("alpha", ProviderHealth.HEALTHY)
+    assert router.route(request).candidate.provider == "alpha"
