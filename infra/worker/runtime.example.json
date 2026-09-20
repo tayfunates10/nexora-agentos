@@ -20,6 +20,7 @@
       "max_context_chars": 100000
     }
   },
+  "mcp_servers": {},
   "retrieval": {
     "provider": "openai",
     "model": "text-embedding-3-small",
