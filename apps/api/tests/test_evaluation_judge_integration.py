@@ -216,7 +216,10 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
         assert replay.json()["id"] == judge_run_id
 
         assert (
-            client.get(base + f"/eval-judge-runs/{judge_run_id}", headers=headers(owner)).status_code
+            client.get(
+                base + f"/eval-judge-runs/{judge_run_id}",
+                headers=headers(owner),
+            ).status_code
             == 404
         )
 
