@@ -61,8 +61,6 @@ spec:
               valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_DATABASE_URL}}
             - name: NEXORA_REDIS_URL
               valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_REDIS_URL}}
-            - name: NEXORA_AUTH_PUBLIC_KEY
-              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_AUTH_PUBLIC_KEY}}
             - name: NEXORA_METRICS_TOKEN
               valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_METRICS_TOKEN}}
           # Readiness depends on PostgreSQL and Redis; liveness deliberately does not,
