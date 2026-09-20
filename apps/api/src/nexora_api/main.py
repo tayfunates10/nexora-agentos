@@ -16,6 +16,8 @@ from nexora_api import metrics
 from nexora_api.agent_repository import AgentRuntimeRepository
 from nexora_api.agents import router as agent_router
 from nexora_api.config import Settings
+from nexora_api.evaluation_judge_repository import EvaluationJudgeRepository
+from nexora_api.evaluation_judges import router as evaluation_judge_router
 from nexora_api.evaluation_repository import EvaluationRepository
 from nexora_api.evaluations import router as evaluation_router
 from nexora_api.health import DependencyProbe, HealthResponse, Probe
@@ -53,6 +55,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         app.state.workspaces = WorkspaceRepository(settings)
         app.state.agent_runtime = AgentRuntimeRepository(settings)
         app.state.evaluations = EvaluationRepository(settings)
+        app.state.eval_judges = EvaluationJudgeRepository(settings)
         app.state.mcp_gateway = McpGateway(settings)
         app.state.rag = RagRepository(settings)
         app.state.tool_governance = app.state.mcp_gateway.repository
@@ -164,6 +167,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
     app.include_router(workspace_router)
     app.include_router(agent_router)
     app.include_router(evaluation_router)
+    app.include_router(evaluation_judge_router)
     app.include_router(tool_router)
     app.include_router(knowledge_router)
     return app
