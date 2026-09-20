@@ -1,6 +1,6 @@
 import asyncio
 import os
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -63,7 +63,7 @@ def test_rag_retrieval_filters_acl_before_context_and_hides_cross_tenant(keys, a
     async def exercise():
         await repository.index_source(
             owner_principal,
-            uuid4() if False else _uuid(workspace_id),
+            UUID(workspace_id),
             source_key="workspace-handbook",
             version="v1",
             title="Workspace handbook",
@@ -74,7 +74,7 @@ def test_rag_retrieval_filters_acl_before_context_and_hides_cross_tenant(keys, a
         )
         restricted_id = await repository.index_source(
             owner_principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             source_key="restricted-plan",
             version="v1",
             title="Restricted plan",
@@ -87,14 +87,14 @@ def test_rag_retrieval_filters_acl_before_context_and_hides_cross_tenant(keys, a
         )
         allowed_results = await repository.retrieve(
             allowed_principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             embedding_model="test-embed-v1",
             query_embedding=(1.0, 0.0, 0.0),
             limit=5,
         )
         denied_results = await repository.retrieve(
             denied_principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             embedding_model="test-embed-v1",
             query_embedding=(1.0, 0.0, 0.0),
             limit=5,
@@ -103,7 +103,7 @@ def test_rag_retrieval_filters_acl_before_context_and_hides_cross_tenant(keys, a
         with pytest.raises(HTTPException) as manage_error:
             await repository.index_source(
                 denied_principal,
-                _uuid(workspace_id),
+                UUID(workspace_id),
                 source_key="member-write",
                 version="v1",
                 title="Denied write",
@@ -116,7 +116,7 @@ def test_rag_retrieval_filters_acl_before_context_and_hides_cross_tenant(keys, a
         with pytest.raises(HTTPException) as tenant_error:
             await repository.retrieve(
                 denied_principal,
-                _uuid(other_workspace_id),
+                UUID(other_workspace_id),
                 embedding_model="test-embed-v1",
                 query_embedding=(1.0, 0.0, 0.0),
             )
@@ -168,7 +168,7 @@ def test_rag_reindex_switches_current_version_and_deletion_is_idempotent(keys, a
     async def exercise():
         await repository.index_source(
             principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             source_key="policy",
             version="v1",
             title="Policy",
@@ -179,7 +179,7 @@ def test_rag_reindex_switches_current_version_and_deletion_is_idempotent(keys, a
         )
         v2_id = await repository.index_source(
             principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             source_key="policy",
             version="v2",
             title="Policy",
@@ -190,14 +190,14 @@ def test_rag_reindex_switches_current_version_and_deletion_is_idempotent(keys, a
         )
         first = await repository.retrieve(
             principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             embedding_model="test-embed-v1",
             query_embedding=(1.0, 0.0, 0.0),
         )
 
         same_v2_id = await repository.index_source(
             principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             source_key="policy",
             version="v2",
             title="Policy updated",
@@ -208,25 +208,25 @@ def test_rag_reindex_switches_current_version_and_deletion_is_idempotent(keys, a
         )
         second = await repository.retrieve(
             principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             embedding_model="test-embed-v1",
             query_embedding=(1.0, 0.0, 0.0),
         )
         deleted = await repository.delete_source(
             principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             source_key="policy",
             request_id="rag-delete",
         )
         deleted_again = await repository.delete_source(
             principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             source_key="policy",
             request_id="rag-delete-replay",
         )
         empty = await repository.retrieve(
             principal,
-            _uuid(workspace_id),
+            UUID(workspace_id),
             embedding_model="test-embed-v1",
             query_embedding=(1.0, 0.0, 0.0),
         )
@@ -251,9 +251,3 @@ def test_rag_reindex_switches_current_version_and_deletion_is_idempotent(keys, a
             ).fetchone()[0]
             == 0
         )
-
-
-def _uuid(value):
-    from uuid import UUID
-
-    return UUID(value)
