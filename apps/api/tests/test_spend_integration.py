@@ -1077,11 +1077,12 @@ def test_a_raised_alert_is_delivered_once_with_a_verifiable_signature(keys, auth
             "nexora_spend_alert_deliveries_total", {"outcome": "delivered"}
         ) == delivered_before + len(served)
 
-        # A delivered notification is terminal at the database, not just in code.
+        # A delivered notification is fully terminal at the database, not just
+        # unclaimable in code: even unrelated delivery-state mutation is refused.
         with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
             with pytest.raises(psycopg.errors.RaiseException, match="already delivered"):
                 connection.execute(
-                    """UPDATE workspace_spend_alert_outbox SET delivered_at=now()
+                    """UPDATE workspace_spend_alert_outbox SET attempts=attempts+1
                        WHERE workspace_id=%s""",
                     (UUID(workspace_id),),
                 )
@@ -1123,6 +1124,13 @@ def test_a_rejected_or_redirected_notification_is_abandoned_without_retrying(key
             )
             == abandoned_before + 1
         )
+        with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+            with pytest.raises(psycopg.errors.RaiseException, match="already abandoned"):
+                connection.execute(
+                    """UPDATE workspace_spend_alert_outbox SET last_error='changed'
+                       WHERE workspace_id=%s""",
+                    (UUID(workspace_id),),
+                )
     finally:
         client.__exit__(None, None, None)
 
