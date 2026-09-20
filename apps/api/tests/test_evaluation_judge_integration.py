@@ -339,6 +339,41 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
         assert deterministic.status_code == 200
         assert deterministic.json()["passed_count"] == 2
 
+        expired = client.post(
+            base + f"/eval-runs/{candidate_id}/judge-runs",
+            headers=headers(admin, "judge-job-expired"),
+        )
+        assert expired.status_code == 202
+        expired_id = expired.json()["id"]
+        with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+            connection.execute(
+                """UPDATE eval_judge_runs
+                   SET status='running',attempt_count=2,lease_owner='dead-worker',
+                       lease_expires_at=now()-interval '1 second',
+                       judge_provider='test',judge_model='judge-model-v1',
+                       prompt_version='nexora-eval-judge-v1'
+                   WHERE id=%s""",
+                (expired_id,),
+            )
+
+        failed_before = metrics.REGISTRY.get_sample_value(
+            "nexora_evaluation_judge_jobs_total",
+            {"outcome": "failed"},
+        ) or 0.0
+        calls_before = len(adapter.calls)
+        assert asyncio.run(worker.process_once()) is False
+        assert len(adapter.calls) == calls_before
+        assert metrics.REGISTRY.get_sample_value(
+            "nexora_evaluation_judge_jobs_total",
+            {"outcome": "failed"},
+        ) == failed_before + 1
+        with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+            expired_row = connection.execute(
+                "SELECT status,error_code,attempt_count FROM eval_judge_runs WHERE id=%s",
+                (expired_id,),
+            ).fetchone()
+        assert expired_row == ("failed", "lease_expired", 3)
+
     with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
         with pytest.raises(psycopg.errors.RaiseException):
             connection.execute(
