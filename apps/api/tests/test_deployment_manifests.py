@@ -210,6 +210,49 @@ def test_worker_shutdown_window_covers_its_configured_grace():
     assert worker["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] > grace
 
 
+def test_database_credentials_are_split_by_workload():
+    deployments = {
+        document["metadata"]["name"]: document
+        for document in by_kind("Deployment")
+    }
+    migrate = by_kind("Job")[0]
+
+    def database_secret_key(document):
+        env = document["spec"]["template"]["spec"]["containers"][0]["env"]
+        variable = next(item for item in env if item["name"] == "NEXORA_DATABASE_URL")
+        return variable["valueFrom"]["secretKeyRef"]
+
+    assert database_secret_key(deployments["nexora-api"]) == {
+        "name": "nexora-secrets",
+        "key": "NEXORA_API_DATABASE_URL",
+    }
+    assert database_secret_key(deployments["nexora-worker"]) == {
+        "name": "nexora-secrets",
+        "key": "NEXORA_WORKER_DATABASE_URL",
+    }
+    assert database_secret_key(migrate) == {
+        "name": "nexora-secrets",
+        "key": "NEXORA_MIGRATION_DATABASE_URL",
+    }
+
+    migration_env = migrate["spec"]["template"]["spec"]["containers"][0]["env"]
+    role_refs = {
+        item["name"]: item["valueFrom"]["configMapKeyRef"]
+        for item in migration_env
+        if item["name"] in {"NEXORA_DATABASE_API_ROLE", "NEXORA_DATABASE_WORKER_ROLE"}
+    }
+    assert role_refs == {
+        "NEXORA_DATABASE_API_ROLE": {
+            "name": "nexora-database-roles",
+            "key": "NEXORA_DATABASE_API_ROLE",
+        },
+        "NEXORA_DATABASE_WORKER_ROLE": {
+            "name": "nexora-database-roles",
+            "key": "NEXORA_DATABASE_WORKER_ROLE",
+        },
+    }
+
+
 def test_worker_accepts_mcp_credentials_only_from_an_optional_secret():
     worker = next(
         document
