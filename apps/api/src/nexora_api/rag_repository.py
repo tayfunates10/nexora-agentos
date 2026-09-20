@@ -677,9 +677,7 @@ class RagRepository:
                 f"hybrid retrieval query must be at most {HYBRID_QUERY_MAX_CHARS} characters"
             )
         distance = self._distance_expression(dimensions, ann=ann)
-        model_filter = sql.SQL(
-            "c.embedding_model={} AND c.embedding_dimensions={}"
-        ).format(
+        model_filter = sql.SQL("c.embedding_model={} AND c.embedding_dimensions={}").format(
             sql.Literal(embedding_model),
             sql.Literal(dimensions),
         )
