@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 from nexora_api.agents import AgentDefinition, AgentInput, AgentRun, RunEvent, RunInput
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
+from nexora_api.model_costs import load_model_cost_summary
 from nexora_api.run_results import summarize_result
 from nexora_api.runtime_events import append_run_event
 from nexora_api.workspace_repository import WorkspaceRepository
@@ -245,8 +246,15 @@ class AgentRuntimeRepository:
                    WHERE workspace_id=%s AND run_id=%s ORDER BY step_no LIMIT 33""",
                 (workspace_id, run_id),
             )
+            step_rows = await steps.fetchall()
+            cost_summary = await load_model_cost_summary(
+                connection,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                minimum_expected_calls=len(step_rows),
+            )
             try:
-                return summarize_result(run, await steps.fetchall())
+                return summarize_result(run, step_rows, cost_summary)
             except (ValueError, KeyError, TypeError) as exc:
                 raise HTTPException(409, "run_result_unavailable") from exc
 
