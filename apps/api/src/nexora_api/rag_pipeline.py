@@ -72,6 +72,8 @@ class RagEmbeddingPipeline:
         metadata: dict[str, Any] | None = None,
         max_chars: int = 1200,
         overlap_chars: int = 120,
+        ingestion_job_id: UUID | None = None,
+        ingestion_worker_id: str | None = None,
     ) -> RagIndexResult:
         # Do not trigger paid provider work for an unauthorized caller.
         # The repository rechecks permission inside the write transaction.
@@ -97,6 +99,9 @@ class RagEmbeddingPipeline:
             metadata=metadata,
             max_chars=max_chars,
             overlap_chars=overlap_chars,
+            ingestion_job_id=ingestion_job_id,
+            ingestion_worker_id=ingestion_worker_id,
+            embedding_input_tokens=input_tokens,
         )
         return RagIndexResult(
             source_id=source_id,
