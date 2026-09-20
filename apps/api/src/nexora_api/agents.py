@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
@@ -69,6 +69,30 @@ class RunEvent(BaseModel):
     created_at: datetime
 
 
+class RecordedModelStep(BaseModel):
+    step_no: int
+    provider: str
+    model: str
+    finish_reason: str
+    input_tokens: int
+    output_tokens: int
+
+
+class AgentRunResult(BaseModel):
+    run_id: UUID
+    workspace_id: UUID
+    agent_id: UUID
+    trace_id: UUID
+    status: Literal["succeeded", "failed", "cancelled"]
+    output_text: str | None
+    finish_reason: Literal["stop", "refusal"] | None
+    failure_code: str | None
+    recorded_input_tokens: int
+    recorded_output_tokens: int
+    selected_tools: list[str]
+    model_steps: list[RecordedModelStep]
+
+
 class RunEventPage(BaseModel):
     items: list[RunEvent]
     next_cursor: int | None = None
@@ -134,6 +158,14 @@ async def cancel_run(workspace_id: UUID, run_id: UUID, principal: Identity, requ
     return await repository(request).cancel_run(
         principal, workspace_id, run_id, request.state.request_id
     )
+
+
+@router.get("/workspaces/{workspace_id}/runs/{run_id}/result", response_model=AgentRunResult)
+async def get_run_result(
+    workspace_id: UUID, run_id: UUID, principal: Identity, request: Request, response: Response
+):
+    response.headers["Cache-Control"] = "no-store"
+    return await repository(request).get_result(principal, workspace_id, run_id)
 
 
 @router.get(
