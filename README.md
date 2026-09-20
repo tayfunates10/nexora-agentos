@@ -525,6 +525,14 @@ request can grow the series count. Metrics are per-process, so each replica is s
 separately. See [ADR 0010](docs/architecture/0010-observability.md) for trace identity,
 sampling, egress boundaries and the starting SLOs.
 
+### Operations dashboard and alert rules
+
+An opt-in [Prometheus/Grafana stack](infra/monitoring/README.md) now includes authenticated
+API/worker scraping, ten operator panels, target-down and SLO fast-burn rules, tested alert
+scenarios and response runbooks. It binds to loopback and requires operator credentials.
+The rules surface alerts in Prometheus; notification delivery and production monitoring
+infrastructure remain operator setup. See [ADR 0028](docs/architecture/0028-operations-monitoring.md).
+
 ## Browser sign-in and workspace management
 
 The web now includes `/login`, `/workspaces`, workspace settings and team access forms.
