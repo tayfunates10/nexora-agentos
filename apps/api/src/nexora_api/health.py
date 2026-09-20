@@ -15,7 +15,8 @@ class DependencyStatus(BaseModel):
 
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
-    service: Literal["nexora-api"] = "nexora-api"
+    # The worker serves its own probes; a probe must not claim to be the API.
+    service: Literal["nexora-api", "nexora-worker"] = "nexora-api"
     version: str = "0.1.0"
     dependencies: DependencyStatus | None = None
 

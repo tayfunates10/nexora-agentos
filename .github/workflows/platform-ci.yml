@@ -96,6 +96,16 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/metrics)" = 401
           curl --fail -H "Authorization: Bearer $NEXORA_METRICS_TOKEN" \
             http://localhost:8000/metrics | grep -q '^nexora_http_requests_total'
+      - name: Verify opt-in worker service
+        env:
+          NEXORA_OPENAI_API_KEY: ci-only-placeholder-not-a-real-key
+        run: |
+          docker compose --profile worker up --build --wait --wait-timeout 180 worker
+          curl --fail --retry 10 --retry-delay 2 --retry-connrefused \
+            http://localhost:8001/api/v1/health/ready
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8001/metrics)" = 401
+          curl --fail -H "Authorization: Bearer $NEXORA_METRICS_TOKEN" \
+            http://localhost:8001/metrics | grep -q '^nexora_slo_objective_ratio'
       - name: Stop containers
         if: always()
-        run: docker compose down
+        run: docker compose --profile worker down

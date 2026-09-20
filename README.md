@@ -28,8 +28,8 @@ normalized adapter contract plus an OpenAI Responses API adapter with fixed egre
 errors/streaming and cancellation. The RAG foundation now adds versioned tenant-scoped sources,
 ACL-filtered pgvector retrieval, deterministic chunking and citation provenance.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
-logs. The durable model executor ships as a library behind operator-managed profiles; no
-worker service runs in Compose and no production MCP transport adapter is enabled yet.
+logs. The durable model executor now runs as an opt-in worker service configured by
+operator-managed model profiles. No production MCP transport adapter is enabled yet.
 See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [agent run architecture](docs/architecture/0004-agent-runs-outbox.md),
 [worker architecture](docs/architecture/0005-worker-state-machine.md), and
@@ -37,7 +37,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [OpenAI provider adapter](docs/architecture/0007-openai-responses-adapter.md), and
 [RAG foundation](docs/architecture/0008-rag-foundation.md), and
 [durable executor](docs/architecture/0009-durable-executor.md), and
-[observability](docs/architecture/0010-observability.md).
+[observability](docs/architecture/0010-observability.md), and
+[worker service](docs/architecture/0011-worker-service.md).
 
 ## Run locally with Docker Compose
 
@@ -148,11 +149,49 @@ the queue. The worker library uses consumer-group delivery, durable job receipts
 heartbeats, fencing, bounded retries with jitter, cancellation and stale-run recovery. A worker
 that has lost its lease cannot finalize a run.
 
-The durable model executor is available as a library behind operator-managed model profiles
+The durable model executor runs behind operator-managed model profiles
 (see [ADR 0009](docs/architecture/0009-durable-executor.md)); there is no autonomous loop.
 Governed tool execution is available behind an MCP adapter boundary, but no arbitrary URL/stdio
-transport is enabled by default and no worker service is added to Compose until production
-provider and MCP adapters are configured.
+transport is enabled by default. The worker runs as an opt-in Compose profile (below); it is
+never started by the default stack.
+
+## Running the agent worker
+
+The worker executes queued runs. It refuses to start without operator configuration, so
+nothing runs unless a deployment explicitly allows it.
+
+1. Copy `infra/worker/runtime.example.json`, set the workspace IDs, provider and model your
+   deployment allows, and point `NEXORA_WORKER_RUNTIME_CONFIG` at it.
+2. Put the provider credential in the environment (`NEXORA_OPENAI_API_KEY`), never in the
+   configuration file — an unknown key there is rejected.
+3. Start it: `docker compose --profile worker up --build -d`, or run
+   `python -m nexora_api.worker_main` with the same variables exported.
+
+```json
+{
+  "model_candidates": [
+    {"provider": "openai", "model": "your-model", "capabilities": ["text", "tools"]}
+  ],
+  "profiles": {
+    "default": {
+      "allowed_workspaces": ["<workspace-uuid>"],
+      "allowed_providers": ["openai"],
+      "allowed_tools": [],
+      "max_steps": 8
+    }
+  }
+}
+```
+
+A run selects a profile only through the `model_profile` on its agent definition; it cannot
+name a model, provider, endpoint or tool the profile does not list. A run whose workspace is
+not in the profile fails with `model_profile_not_authorized` without reaching a provider.
+
+The worker serves liveness, readiness and token-guarded metrics on port 8001
+(`NEXORA_WORKER_ADMIN_PORT`), using the same scrape token as the API. SIGTERM stops it between
+jobs so an in-flight attempt finishes under its own lease. Retrieval is not wired into the
+worker yet; see [ADR 0011](docs/architecture/0011-worker-service.md) for configuration,
+shutdown and failure boundaries.
 
 Use `/docs` for the full schema. Core endpoints are:
 
