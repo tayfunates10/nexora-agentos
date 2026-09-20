@@ -149,6 +149,7 @@ def build_worker(
         lease_seconds=settings.worker_lease_seconds,
     )
 
+
 async def close_mcp_adapters(adapters: dict[str, McpToolAdapter]) -> None:
     for server_key, adapter in adapters.items():
         closer = getattr(adapter, "aclose", None)
