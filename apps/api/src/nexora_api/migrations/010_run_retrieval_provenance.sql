@@ -53,7 +53,17 @@ CREATE TRIGGER agent_run_retrieval_chunks_immutable
     BEFORE UPDATE OR DELETE OR TRUNCATE ON agent_run_retrieval_chunks
     FOR EACH STATEMENT EXECUTE FUNCTION reject_agent_run_retrieval_mutation();
 
-CREATE FUNCTION clear_terminal_agent_run_retrieval_context() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION reject_agent_run_retrieval_context_update() RETURNS trigger LANGUAGE plpgsql AS $
+BEGIN
+    RAISE EXCEPTION 'agent run retrieval context is immutable until terminal cleanup';
+END;
+$;
+
+CREATE TRIGGER agent_run_retrieval_context_no_update
+    BEFORE UPDATE OR TRUNCATE ON agent_run_retrieval_context
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_agent_run_retrieval_context_update();
+
+CREATE FUNCTION clear_terminal_agent_run_retrieval_context() RETURNS trigger LANGUAGE plpgsql AS $
 BEGIN
     IF NEW.status IN ('succeeded','failed','cancelled') AND NEW.status <> OLD.status THEN
         DELETE FROM agent_run_retrieval_context
