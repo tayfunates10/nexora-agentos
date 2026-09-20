@@ -31,6 +31,9 @@ _CALL_OUTCOMES = frozenset(
     {"success", "error", "timeout", "cancelled", "denied", "replayed", "approval"}
 )
 _DECISIONS = frozenset({"approved", "rejected", "expired", "cancelled"})
+_JUDGE_TARGETS = frozenset({"candidate", "baseline"})
+_JUDGE_CALL_OUTCOMES = frozenset({"success", "provider_error", "timeout", "invalid_response"})
+_JUDGE_JOB_OUTCOMES = frozenset({"succeeded", "failed"})
 
 _LATENCY_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
 _RUN_BUCKETS = (0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0)
@@ -170,6 +173,31 @@ outbox_published_total = Counter(
     "Outbox jobs published to the job stream.",
     registry=REGISTRY,
 )
+evaluation_judge_calls_total = Counter(
+    "nexora_evaluation_judge_calls_total",
+    "Pinned evaluation judge model calls.",
+    ("provider", "target", "outcome"),
+    registry=REGISTRY,
+)
+evaluation_judge_call_duration_seconds = Histogram(
+    "nexora_evaluation_judge_call_duration_seconds",
+    "Pinned evaluation judge model-call latency in seconds.",
+    ("provider", "target"),
+    buckets=_LATENCY_BUCKETS,
+    registry=REGISTRY,
+)
+evaluation_judge_tokens_total = Counter(
+    "nexora_evaluation_judge_tokens_total",
+    "Tokens reported by evaluation judge model calls.",
+    ("provider", "target", "kind"),
+    registry=REGISTRY,
+)
+evaluation_judge_jobs_total = Counter(
+    "nexora_evaluation_judge_jobs_total",
+    "Evaluation judge jobs reaching a terminal state.",
+    ("outcome",),
+    registry=REGISTRY,
+)
 
 
 def label(value: str | None) -> str:
@@ -217,6 +245,29 @@ def observe_model_call(
         model_tokens_total.labels(value, "input").inc(input_tokens)
     if output_tokens > 0:
         model_tokens_total.labels(value, "output").inc(output_tokens)
+
+
+def observe_evaluation_judge_call(
+    provider: str,
+    target: str,
+    outcome: str,
+    seconds: float,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> None:
+    provider_value = label(provider)
+    target_value = _bounded(target, _JUDGE_TARGETS)
+    outcome_value = _bounded(outcome, _JUDGE_CALL_OUTCOMES)
+    evaluation_judge_calls_total.labels(provider_value, target_value, outcome_value).inc()
+    evaluation_judge_call_duration_seconds.labels(provider_value, target_value).observe(seconds)
+    if input_tokens > 0:
+        evaluation_judge_tokens_total.labels(provider_value, target_value, "input").inc(input_tokens)
+    if output_tokens > 0:
+        evaluation_judge_tokens_total.labels(provider_value, target_value, "output").inc(output_tokens)
+
+
+def observe_evaluation_judge_job(outcome: str) -> None:
+    evaluation_judge_jobs_total.labels(_bounded(outcome, _JUDGE_JOB_OUTCOMES)).inc()
 
 
 def observe_tool_call(server_key: str | None, outcome: str, seconds: float | None = None) -> None:
