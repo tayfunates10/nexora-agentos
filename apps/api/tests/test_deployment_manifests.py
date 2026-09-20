@@ -211,10 +211,7 @@ def test_worker_shutdown_window_covers_its_configured_grace():
 
 
 def test_database_credentials_are_split_by_workload():
-    deployments = {
-        document["metadata"]["name"]: document
-        for document in by_kind("Deployment")
-    }
+    deployments = {document["metadata"]["name"]: document for document in by_kind("Deployment")}
     migrate = by_kind("Job")[0]
 
     def database_secret_key(document):
