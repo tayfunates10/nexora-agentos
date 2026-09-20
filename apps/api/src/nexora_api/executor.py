@@ -7,7 +7,6 @@ from uuid import UUID
 
 from nexora_api import metrics
 from nexora_api.auth import Principal
-from nexora_api.rag import build_untrusted_context
 from nexora_api.model_routing import (
     ModelCapability,
     ModelRouter,
