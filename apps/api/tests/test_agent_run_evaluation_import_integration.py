@@ -166,7 +166,9 @@ def test_agent_run_eval_import_is_requester_scoped_and_fail_closed(keys, auth_se
 
         search_run = insert_run(admin, "Find the account record.", selected_tool="search")
         no_lookup_run = insert_run(admin, "Inspect the account safely.")
-        foreign_requester_run = insert_run(owner, "Find the account record.", selected_tool="search")
+        foreign_requester_run = insert_run(
+            owner, "Find the account record.", selected_tool="search"
+        )
         mismatched_run = insert_run(admin, "Different input.")
         queued_run = insert_run(admin, "Find the account record.", status="queued")
 
