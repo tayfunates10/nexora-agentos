@@ -8,6 +8,7 @@ from nexora_api.model_routing import ProviderResponse, ProviderToolCall, Provide
 from nexora_api.rag import build_untrusted_context, sha256_text
 from nexora_api.run_state import RunStateStore
 from nexora_api.runtime_events import append_run_event
+from nexora_api.tool_contracts import ToolContractError
 
 
 def decode_response(value):
@@ -34,7 +35,7 @@ class ExecutorStore(RunStateStore):
 
     async def load_retrieval(self, context):
         async with self.connection() as connection:
-            await executable_run(connection, context)
+            run = await executable_run(connection, context)
             result = await connection.execute(
                 """SELECT query_hash,context_text,context_hash,
                           embedding_input_tokens,chunk_count
@@ -55,6 +56,42 @@ class ExecutorStore(RunStateStore):
                 != row["context_hash"]
             ):
                 raise RuntimeError("retrieval snapshot context hash mismatch")
+            if row["chunk_count"]:
+                visible = await connection.execute(
+                    """SELECT p.position
+                       FROM agent_run_retrieval_chunks p
+                       JOIN rag_chunks c
+                         ON c.id=p.chunk_id AND c.workspace_id=p.workspace_id
+                       JOIN rag_sources s
+                         ON s.id=c.source_id AND s.workspace_id=c.workspace_id
+                       WHERE p.workspace_id=%s AND p.run_id=%s
+                         AND s.is_current
+                         AND c.source_id=p.source_id
+                         AND s.source_key=p.source_key
+                         AND c.source_version=p.source_version
+                         AND c.chunk_index=p.chunk_index
+                         AND c.content_hash=p.content_hash
+                         AND (
+                             c.access_scope='workspace'
+                             OR EXISTS (
+                                 SELECT 1 FROM rag_source_acl a
+                                 WHERE a.workspace_id=c.workspace_id
+                                   AND a.source_id=c.source_id
+                                   AND a.issuer=%s AND a.subject=%s
+                             )
+                         )
+                       ORDER BY p.position
+                       FOR SHARE OF c,s""",
+                    (
+                        context.workspace_id,
+                        context.run_id,
+                        run["requested_by_issuer"],
+                        run["requested_by_subject"],
+                    ),
+                )
+                visible_rows = await visible.fetchall()
+                if len(visible_rows) != row["chunk_count"]:
+                    raise ToolContractError("retrieval_snapshot_unavailable")
             return RunRetrievalSnapshot(
                 context_text=row["context_text"],
                 embedding_input_tokens=row["embedding_input_tokens"],
@@ -66,7 +103,47 @@ class ExecutorStore(RunStateStore):
         query_hash = hashlib.sha256(context.input_text.encode("utf-8")).hexdigest()
         context_hash = hashlib.sha256(context_text.encode("utf-8")).hexdigest()
         async with self.connection() as connection:
-            await executable_run(connection, context)
+            run = await executable_run(connection, context)
+            if result.chunks:
+                chunk_ids = [chunk.id for chunk in result.chunks]
+                visible = await connection.execute(
+                    """SELECT c.id,c.source_id,s.source_key,c.source_version,
+                              c.chunk_index,c.content_hash
+                       FROM rag_chunks c
+                       JOIN rag_sources s
+                         ON s.id=c.source_id AND s.workspace_id=c.workspace_id
+                       WHERE c.workspace_id=%s
+                         AND c.id=ANY(%s::uuid[])
+                         AND s.is_current
+                         AND (
+                             c.access_scope='workspace'
+                             OR EXISTS (
+                                 SELECT 1 FROM rag_source_acl a
+                                 WHERE a.workspace_id=c.workspace_id
+                                   AND a.source_id=c.source_id
+                                   AND a.issuer=%s AND a.subject=%s
+                             )
+                         )
+                       FOR SHARE OF c,s""",
+                    (
+                        context.workspace_id,
+                        chunk_ids,
+                        run["requested_by_issuer"],
+                        run["requested_by_subject"],
+                    ),
+                )
+                current = {item["id"]: item for item in await visible.fetchall()}
+                for chunk in result.chunks:
+                    row = current.get(chunk.id)
+                    if (
+                        row is None
+                        or row["source_id"] != chunk.source_id
+                        or row["source_key"] != chunk.source_key
+                        or row["source_version"] != chunk.source_version
+                        or row["chunk_index"] != chunk.chunk_index
+                        or row["content_hash"] != sha256_text(chunk.content)
+                    ):
+                        raise ToolContractError("retrieval_snapshot_unavailable")
             inserted = await connection.execute(
                 """INSERT INTO agent_run_retrievals
                    (run_id,workspace_id,query_hash,context_text,context_hash,
