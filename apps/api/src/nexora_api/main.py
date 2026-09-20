@@ -1,4 +1,6 @@
+import hmac
 import re
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import uuid4
@@ -6,18 +8,26 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from opentelemetry.propagate import extract
+from opentelemetry.trace import SpanKind
 from redis.asyncio import Redis
 from starlette.exceptions import HTTPException
 
+from nexora_api import metrics
 from nexora_api.agent_repository import AgentRuntimeRepository
 from nexora_api.agents import router as agent_router
 from nexora_api.config import Settings
 from nexora_api.health import DependencyProbe, HealthResponse, Probe
+from nexora_api.logs import configure_logging, context, logger
 from nexora_api.mcp_gateway import McpGateway
 from nexora_api.rag_repository import RagRepository
+from nexora_api.telemetry import configure_telemetry, record, record_error, span
 from nexora_api.tooling import router as tool_router
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import router as workspace_router
+
+METRICS_PATH = "/metrics"
+access_log = logger("api.access")
 
 
 def get_probe(request: Request) -> Probe:
@@ -26,6 +36,8 @@ def get_probe(request: Request) -> Probe:
 
 def create_app(settings: Settings | None = None, probe: Probe | None = None) -> FastAPI:
     settings = settings or Settings()
+    configure_logging(settings)
+    configure_telemetry(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -49,17 +61,52 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
     app = FastAPI(title="Nexora AgentOS API", version="0.1.0", lifespan=lifespan)
 
     @app.middleware("http")
-    async def request_id(request: Request, call_next):
+    async def observed_request(request: Request, call_next):
         supplied = request.headers.get("x-request-id", "")
         request.state.request_id = (
             supplied if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", supplied) else str(uuid4())
         )
-        try:
-            response = await call_next(request)
-        except Exception:
-            response = error(request, 500, "internal_error", "An unexpected error occurred")
-        response.headers["x-request-id"] = request.state.request_id
-        return response
+        # Inbound trace context is accepted for correlation only; it never grants access.
+        parent = extract(dict(request.headers))
+        started = time.perf_counter()
+        with span(
+            f"HTTP {request.method}",
+            context=parent,
+            kind=SpanKind.SERVER,
+            **{
+                "http.request.method": request.method,
+                "nexora.request_id": request.state.request_id,
+            },
+        ) as active:
+            try:
+                response = await call_next(request)
+            except Exception:
+                response = error(request, 500, "internal_error", "An unexpected error occurred")
+            elapsed = time.perf_counter() - started
+            route = getattr(request.scope.get("route"), "path", None)
+            response.headers["x-request-id"] = request.state.request_id
+            record(
+                active,
+                **{
+                    "http.response.status_code": response.status_code,
+                    "http.route": route or "unmatched",
+                },
+            )
+            if response.status_code >= 500:
+                record_error(active, f"http_{response.status_code}")
+            if route != METRICS_PATH:
+                metrics.observe_http(request.method, route, response.status_code, elapsed)
+                access_log.info(
+                    "request",
+                    extra=context(
+                        method=request.method,
+                        route=metrics.route_label(route),
+                        status=response.status_code,
+                        duration_ms=round(elapsed * 1000, 3),
+                        request_id=request.state.request_id,
+                    ),
+                )
+            return response
 
     def error(request: Request, status: int, code: str, message: str):
         return JSONResponse(
@@ -95,6 +142,22 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         healthy = dependencies.postgres == dependencies.redis == "up"
         response.status_code = 200 if healthy else 503
         return HealthResponse(status="ok" if healthy else "degraded", dependencies=dependencies)
+
+    @app.get(METRICS_PATH, include_in_schema=False)
+    async def scrape(request: Request):
+        # Operational data is not public: no token means the endpoint does not exist.
+        token = settings.metrics_token
+        if token is None:
+            return error(request, 404, "not_found", "Request failed")
+        # Compare bytes: a non-ASCII header must fail, not raise.
+        presented = request.headers.get("authorization", "").encode("utf-8", "replace")
+        expected = f"Bearer {token.get_secret_value()}".encode()
+        if not hmac.compare_digest(presented, expected):
+            response = error(request, 401, "unauthorized", "Request failed")
+            response.headers["www-authenticate"] = "Bearer"
+            return response
+        body, content_type = metrics.render()
+        return Response(content=body, media_type=content_type)
 
     app.include_router(workspace_router)
     app.include_router(agent_router)

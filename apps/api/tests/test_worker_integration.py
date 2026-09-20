@@ -1,14 +1,19 @@
 import asyncio
 import json
 import os
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 from redis.asyncio import Redis
 from test_auth import token
 
+from nexora_api import metrics, telemetry
 from nexora_api.main import create_app
 from nexora_api.migrate import migrate
 from nexora_api.outbox import QUEUE_STREAM
@@ -289,4 +294,68 @@ def test_expired_worker_cannot_renew_or_finalize(keys, auth_settings):
             "SELECT status FROM agent_runs WHERE id=%s", (run_id,)
         ).fetchone()[0]
     assert status == "running"
+    client.__exit__(None, None, None)
+
+
+def test_run_telemetry_joins_the_durable_trace_and_reports_outcome(
+    keys, auth_settings, monkeypatch
+):
+    migrate(auth_settings)
+    client, headers, workspace_id, run_id = make_runtime(keys, auth_settings, "worker-telemetry")
+    base = f"/api/v1/workspaces/{workspace_id}"
+    trace_id = UUID(client.get(base + "/runs/" + run_id, headers=headers()).json()["trace_id"])
+    provider = TracerProvider(sampler=ALWAYS_ON)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(telemetry, "tracer", lambda: provider.get_tracer("test"))
+    before = (
+        metrics.REGISTRY.get_sample_value("nexora_agent_runs_total", {"outcome": "succeeded"})
+        or 0.0
+    )
+
+    def traced_run():
+        return next(
+            (
+                finished
+                for finished in exporter.get_finished_spans()
+                if finished.attributes.get("nexora.run_id") == run_id
+            ),
+            None,
+        )
+
+    async def exercise():
+        redis = Redis.from_url(auth_settings.redis_url.get_secret_value())
+        try:
+            await redis.delete(QUEUE_STREAM)
+            worker = AgentWorker(
+                auth_settings,
+                redis,
+                CountingExecutor(),
+                worker_id="telemetry-worker",
+                lease_seconds=6,
+            )
+            # Recovered work from earlier runs can be delivered first, so keep
+            # processing until this run's own attempt has been traced.
+            for _ in range(10):
+                await worker.process_once(50)
+                if traced_run() is not None:
+                    return
+            raise AssertionError("run was never executed")
+        finally:
+            await redis.aclose()
+
+    asyncio.run(exercise())
+
+    span = traced_run()
+    assert span.name == "agent.run"
+    assert span.context.trace_id == int.from_bytes(trace_id.bytes, "big")
+    assert span.attributes["nexora.run_id"] == run_id
+    assert span.attributes["nexora.workspace_id"] == workspace_id
+    assert span.attributes["nexora.outcome"] == "succeeded"
+    assert "nexora.error_code" not in span.attributes
+    assert (
+        metrics.REGISTRY.get_sample_value("nexora_agent_runs_total", {"outcome": "succeeded"})
+        >= before + 1
+    )
+    assert metrics.REGISTRY.get_sample_value("nexora_queue_depth") is not None
     client.__exit__(None, None, None)

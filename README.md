@@ -26,14 +26,18 @@ and crash recovery. Tool governance now adds a typed MCP tool registry, default-
 evaluation, idempotent call records and durable human approvals. Provider routing now has a
 normalized adapter contract plus an OpenAI Responses API adapter with fixed egress, normalized
 errors/streaming and cancellation. The RAG foundation now adds versioned tenant-scoped sources,
-ACL-filtered pgvector retrieval, deterministic chunking and citation provenance. A production
-model executor and production MCP transport adapter are not enabled yet.
+ACL-filtered pgvector retrieval, deterministic chunking and citation provenance.
+Observability now adds durable run traces, guarded Prometheus exposition and structured
+logs. The durable model executor ships as a library behind operator-managed profiles; no
+worker service runs in Compose and no production MCP transport adapter is enabled yet.
 See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [agent run architecture](docs/architecture/0004-agent-runs-outbox.md),
 [worker architecture](docs/architecture/0005-worker-state-machine.md), and
 [MCP tool governance](docs/architecture/0006-mcp-tool-governance.md), and
 [OpenAI provider adapter](docs/architecture/0007-openai-responses-adapter.md), and
-[RAG foundation](docs/architecture/0008-rag-foundation.md).
+[RAG foundation](docs/architecture/0008-rag-foundation.md), and
+[durable executor](docs/architecture/0009-durable-executor.md), and
+[observability](docs/architecture/0010-observability.md).
 
 ## Run locally with Docker Compose
 
@@ -144,10 +148,11 @@ the queue. The worker library uses consumer-group delivery, durable job receipts
 heartbeats, fencing, bounded retries with jitter, cancellation and stale-run recovery. A worker
 that has lost its lease cannot finalize a run.
 
-The runtime still has no production model executor or autonomous loop. Governed tool execution
-is available behind an MCP adapter boundary, but no arbitrary URL/stdio transport is enabled by
-default and no worker service is added to Compose until production provider and MCP adapters are
-configured.
+The durable model executor is available as a library behind operator-managed model profiles
+(see [ADR 0009](docs/architecture/0009-durable-executor.md)); there is no autonomous loop.
+Governed tool execution is available behind an MCP adapter boundary, but no arbitrary URL/stdio
+transport is enabled by default and no worker service is added to Compose until production
+provider and MCP adapters are configured.
 
 Use `/docs` for the full schema. Core endpoints are:
 
@@ -185,6 +190,52 @@ outbox; rejection, expiry or run cancellation closes the workflow without callin
 Workspace users cannot register raw MCP URLs, stdio commands or credentials. This keeps network
 egress and service credentials outside model-visible configuration. See
 [ADR 0006](docs/architecture/0006-mcp-tool-governance.md).
+
+## Traces, metrics and structured logs
+
+Every run carries a durable `trace_id`, and that UUID is used directly as the
+OpenTelemetry trace id. API, worker, retrieval, model and tool spans therefore join one
+trace across processes, retries and approval resumes, without putting trace context into
+the job queue. Spans and logs record identifiers, counts, policy actions and error codes
+through an allowlist; prompts, tool arguments, tool results and retrieved context are
+never sent to telemetry.
+
+Telemetry is operator-owned and off by default:
+
+- `NEXORA_OTEL_EXPORTER_ENDPOINT` — OTLP/HTTP collector URL. Unset means no span leaves
+  the process.
+- `NEXORA_OTEL_SAMPLE_RATIO` — head sampling between 0.0 and 1.0 (default 1.0). The
+  decision is derived from the run trace id, so every process agrees on it.
+- `NEXORA_METRICS_TOKEN` — scrape credential of at least 32 characters. Unset means
+  `/metrics` returns 404; a wrong token returns 401.
+- `NEXORA_LOG_LEVEL` — level for the JSON stdout logger (default `INFO`).
+
+Scrape the API with the operator token:
+
+```bash
+curl -H "Authorization: Bearer $NEXORA_METRICS_TOKEN" http://localhost:8000/metrics
+```
+
+Exposed series include `nexora_http_requests_total`,
+`nexora_http_request_duration_seconds`, `nexora_agent_runs_total`,
+`nexora_agent_run_duration_seconds`, `nexora_model_calls_total`,
+`nexora_model_tokens_total`, `nexora_tool_calls_total`,
+`nexora_retrieval_queries_total`, `nexora_approval_wait_seconds`,
+`nexora_queue_depth` and `nexora_outbox_published_total`.
+
+Two user-facing objectives are declared in code and exported alongside them, so alert
+rules read the stated goal rather than a hardcoded number: API availability at 99.9% and
+agent run reliability at 99%, both over a rolling 30-day window
+(`nexora_slo_objective_ratio`, `nexora_slo_window_days`). They are initial engineering
+targets, not contractual guarantees.
+
+Metric labels stay bounded deliberately: workspace, user, run, approval and tool names
+are tenant data and remain on spans, while metrics carry only HTTP method, matched route
+template, status, outcome, provider, MCP server key, token kind and approval decision.
+Unmatched paths collapse to `unmatched` and unexpected label values to `other`, so no
+request can grow the series count. Metrics are per-process, so each replica is scraped
+separately. See [ADR 0010](docs/architecture/0010-observability.md) for trace identity,
+sampling, egress boundaries and the starting SLOs.
 
 ## Browser sign-in and workspace management
 

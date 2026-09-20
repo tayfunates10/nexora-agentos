@@ -1,6 +1,7 @@
 import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -9,6 +10,7 @@ from fastapi import HTTPException
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from nexora_api import metrics
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.execution_fence import executable_run
@@ -322,6 +324,7 @@ class ToolGovernanceRepository:
                        WHERE id=%s""",
                     (principal.issuer, principal.subject, approval_id),
                 )
+                self._observe_decision(approval, "rejected", now)
                 await connection.execute(
                     """UPDATE tool_calls
                        SET status='denied',updated_at=now(),finished_at=now()
@@ -405,6 +408,7 @@ class ToolGovernanceRepository:
                    WHERE id=%s""",
                 (principal.issuer, principal.subject, approval_id),
             )
+            self._observe_decision(approval, "approved", now)
             await connection.execute(
                 "UPDATE tool_calls SET status='approved',updated_at=now() WHERE id=%s",
                 (approval["tool_call_id"],),
@@ -951,6 +955,13 @@ class ToolGovernanceRepository:
         )
         return ToolCallPlan("deny", call_id, tool, error_code=error_code)
 
+    @staticmethod
+    def _observe_decision(approval, decision: str, decided_at) -> None:
+        """Approval latency is a human-in-the-loop SLO, counted once per transition."""
+        created_at = approval["created_at"]
+        decided = decided_at or datetime.now(tz=UTC)
+        metrics.observe_approval(decision, (decided - created_at).total_seconds())
+
     async def _approval_for_call(self, connection, call_id: UUID):
         result = await connection.execute(
             "SELECT * FROM tool_approvals WHERE tool_call_id=%s FOR UPDATE",
@@ -1013,12 +1024,14 @@ class ToolGovernanceRepository:
         approval_status: str,
         event_type: str,
     ) -> None:
-        await connection.execute(
+        cursor = await connection.execute(
             """UPDATE tool_approvals
                SET status=%s,decided_at=now()
                WHERE id=%s AND status='pending'""",
             (approval_status, approval["id"]),
         )
+        if cursor.rowcount:
+            self._observe_decision(approval, approval_status, None)
         await connection.execute(
             """UPDATE tool_calls
                SET status='cancelled',error_code=%s,finished_at=now(),updated_at=now()

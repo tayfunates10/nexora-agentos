@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from nexora_api import metrics
 from nexora_api.executor import DurableAgentExecutor, ExecutionProfile
 from nexora_api.mcp_gateway import ApprovalRequired
 from nexora_api.model_routing import (
@@ -179,3 +180,30 @@ def test_cancellation_interrupts_provider_and_persists_nothing():
     with pytest.raises(TerminalExecutionError, match="cancel_requested"):
         asyncio.run(executor.execute(context, cancellation))
     assert cancelled_task and not store.steps
+
+
+def sample(name, **labels):
+    return metrics.REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def test_model_usage_and_failures_are_measured():
+    executor, context, _, _, _ = setup([response(tokens=7)])
+    tokens_before = sample("nexora_model_tokens_total", provider="test", kind="input")
+    calls_before = sample("nexora_model_calls_total", provider="test", outcome="success")
+
+    asyncio.run(executor.execute(context, not_cancelled))
+
+    assert sample("nexora_model_tokens_total", provider="test", kind="input") == tokens_before + 7
+    assert sample("nexora_model_calls_total", provider="test", outcome="success") == (
+        calls_before + 1
+    )
+
+    failing, failing_context, _, _, _ = setup([ProviderError("provider_error", retryable=True)])
+    errors_before = sample("nexora_model_calls_total", provider="test", outcome="error")
+
+    with pytest.raises(RetryableExecutionError):
+        asyncio.run(failing.execute(failing_context, not_cancelled))
+
+    assert sample("nexora_model_calls_total", provider="test", outcome="error") == (
+        errors_before + 1
+    )
