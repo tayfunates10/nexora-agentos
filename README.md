@@ -26,7 +26,8 @@ and crash recovery. Tool governance now adds a typed MCP tool registry, default-
 evaluation, idempotent call records and durable human approvals. Provider routing now has a
 normalized adapter contract plus an OpenAI Responses API adapter with fixed egress, normalized
 errors/streaming and cancellation. The RAG foundation now adds versioned tenant-scoped sources,
-ACL-filtered pgvector retrieval, deterministic chunking and citation provenance.
+ACL-filtered pgvector retrieval, deterministic chunking and citation provenance. The worker can now
+opt into fixed-egress OpenAI embeddings and permission-aware retrieval through operator configuration.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. No production MCP transport adapter is enabled yet.
@@ -40,7 +41,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [observability](docs/architecture/0010-observability.md), and
 [worker service](docs/architecture/0011-worker-service.md), and
 [Kubernetes deployment](docs/architecture/0012-kubernetes-deployment.md), and
-[release pipeline](docs/architecture/0013-release-pipeline.md).
+[release pipeline](docs/architecture/0013-release-pipeline.md), and
+[RAG embedding runtime](docs/architecture/0014-rag-embedding-runtime.md).
 
 ## Run locally with Docker Compose
 
@@ -197,6 +199,12 @@ nothing runs unless a deployment explicitly allows it.
       "allowed_tools": [],
       "max_steps": 8
     }
+  },
+  "retrieval": {
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "dimensions": 1536,
+    "limit": 8
   }
 }
 ```
@@ -207,9 +215,11 @@ not in the profile fails with `model_profile_not_authorized` without reaching a 
 
 The worker serves liveness, readiness and token-guarded metrics on port 8001
 (`NEXORA_WORKER_ADMIN_PORT`), using the same scrape token as the API. SIGTERM stops it between
-jobs so an in-flight attempt finishes under its own lease. Retrieval is not wired into the
-worker yet; see [ADR 0011](docs/architecture/0011-worker-service.md) for configuration,
-shutdown and failure boundaries.
+jobs so an in-flight attempt finishes under its own lease. Retrieval remains off unless the
+operator supplies a `retrieval` block. When enabled, the worker checks current workspace
+membership before embedding the query, applies source ACLs in SQL, and injects only delimited
+untrusted evidence with citation provenance. See [ADR 0011](docs/architecture/0011-worker-service.md)
+and [ADR 0014](docs/architecture/0014-rag-embedding-runtime.md).
 
 Use `/docs` for the full schema. Core endpoints are:
 
