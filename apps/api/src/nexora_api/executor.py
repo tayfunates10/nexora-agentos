@@ -17,6 +17,7 @@ from nexora_api.model_routing import (
     ProviderTool,
     RoutingRequest,
 )
+from nexora_api.rag import build_untrusted_context
 from nexora_api.telemetry import record, record_error, span
 from nexora_api.tool_contracts import ToolContractError
 from nexora_api.worker import RetryableExecutionError, TerminalExecutionError
