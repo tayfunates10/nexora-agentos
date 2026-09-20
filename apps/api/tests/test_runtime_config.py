@@ -217,7 +217,6 @@ def test_invalid_retrieval_configuration_is_refused(tmp_path, retrieval):
         load_runtime_config(write(tmp_path, document(retrieval=retrieval)))
 
 
-
 def test_mcp_servers_are_operator_allowlisted_and_credentials_stay_in_env(tmp_path, monkeypatch):
     disabled = load_runtime_config(write(tmp_path, document()))
     assert build_mcp_adapters(disabled) == {}
