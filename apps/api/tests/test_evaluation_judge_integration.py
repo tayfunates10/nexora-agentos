@@ -13,7 +13,7 @@ from nexora_api import metrics
 from nexora_api.evaluation_judge_worker import EvaluationJudgeWorker
 from nexora_api.main import create_app
 from nexora_api.migrate import migrate
-from nexora_api.model_routing import ProviderResponse, ProviderUsage
+from nexora_api.model_routing import ModelPricing, ProviderResponse, ProviderUsage
 from nexora_api.runtime_config import EvaluationJudgeConfig
 
 pytestmark = [
@@ -286,6 +286,7 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
                 max_input_chars=10000,
             ),
             worker_id="judge-worker",
+            pricing=ModelPricing("judge-pricing-v1", 1000000, 2000000),
             lease_seconds=6,
         )
         assert asyncio.run(worker.process_once()) is True
@@ -316,6 +317,10 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
         assert payload["improvement_count"] == 2
         assert payload["input_tokens"] == 40
         assert payload["output_tokens"] == 20
+        assert payload["model_cost_usd_picos"] == "80000000"
+        assert payload["model_cost_call_count"] == 4
+        assert payload["model_cost_pricing_complete"] is True
+        assert payload["model_cost_pricing_versions"] == ["judge-pricing-v1"]
         assert len(adapter.calls) == 4
         assert all(call[2]["additionalProperties"] is False for call in adapter.calls)
         assert all(result["quality_delta_milli"] == 750 for result in payload["results"])
@@ -409,6 +414,13 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
             connection.execute(
                 """UPDATE eval_judge_case_scores
                    SET rationale='tampered' WHERE judge_run_id=%s""",
+                (judge_run_id,),
+            )
+        connection.rollback()
+        with pytest.raises(psycopg.errors.RaiseException):
+            connection.execute(
+                """UPDATE model_usage_costs
+                   SET pricing_version='tampered' WHERE judge_run_id=%s""",
                 (judge_run_id,),
             )
         connection.rollback()
