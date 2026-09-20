@@ -154,11 +154,22 @@ def build_evaluation_judge_worker(
     adapter = adapters.get(judge.provider)
     if adapter is None:
         raise RuntimeConfigError("evaluation judge provider adapter is unavailable")
+    judge_candidate = next(
+        (
+            candidate
+            for candidate in config.candidates()
+            if candidate.provider == judge.provider and candidate.model == judge.model
+        ),
+        None,
+    )
+    if judge_candidate is None:
+        raise RuntimeConfigError("evaluation judge model candidate is unavailable")
     return EvaluationJudgeWorker(
         settings,
         adapter,
         judge,
         worker_id=worker_id,
+        pricing=judge_candidate.pricing,
         lease_seconds=settings.worker_lease_seconds,
     )
 
