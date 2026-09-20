@@ -59,10 +59,7 @@ class KnowledgeIngestionWorker:
         heartbeat = asyncio.create_task(self._heartbeat(job["id"], stop))
         try:
             principal = Principal(job["requested_by_issuer"], job["requested_by_subject"])
-            acl = tuple(
-                AclIdentity(item["issuer"], item["subject"])
-                for item in job["acl"]
-            )
+            acl = tuple(AclIdentity(item["issuer"], item["subject"]) for item in job["acl"])
             result = await self.pipeline.index_source(
                 principal,
                 job["workspace_id"],
