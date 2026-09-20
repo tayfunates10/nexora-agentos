@@ -43,7 +43,6 @@ def test_loop_processes_until_stopped():
     assert worker.calls == 3
 
 
-
 class FakeAuxWorker:
     def __init__(self, result=True):
         self.result = result
