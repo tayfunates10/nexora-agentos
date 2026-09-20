@@ -121,9 +121,17 @@ def test_rag_retrieval_filters_acl_before_context_and_hides_cross_tenant(keys, a
                 query_embedding=(1.0, 0.0, 0.0),
             )
 
-        return restricted_id, allowed_results, denied_results, manage_error.value, tenant_error.value
+        return (
+            restricted_id,
+            allowed_results,
+            denied_results,
+            manage_error.value,
+            tenant_error.value,
+        )
 
-    restricted_id, allowed_results, denied_results, manage_error, tenant_error = asyncio.run(exercise())
+    restricted_id, allowed_results, denied_results, manage_error, tenant_error = asyncio.run(
+        exercise()
+    )
 
     assert allowed_results[0].source_key == "restricted-plan"
     assert allowed_results[0].source_version == "v1"
