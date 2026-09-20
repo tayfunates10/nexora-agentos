@@ -40,12 +40,12 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'spend alert notification identity is immutable';
     END IF;
-    -- A delivered notification is terminal: no retry may resend it.
-    IF OLD.delivered_at IS NOT NULL AND NEW.delivered_at IS DISTINCT FROM OLD.delivered_at THEN
+    -- Terminal rows are immutable, not merely unclaimable. This keeps the durable
+    -- delivery record trustworthy even though the worker role needs UPDATE while pending.
+    IF OLD.delivered_at IS NOT NULL THEN
         RAISE EXCEPTION 'spend alert notification was already delivered';
     END IF;
-    IF OLD.dead_lettered_at IS NOT NULL
-        AND NEW.dead_lettered_at IS DISTINCT FROM OLD.dead_lettered_at THEN
+    IF OLD.dead_lettered_at IS NOT NULL THEN
         RAISE EXCEPTION 'spend alert notification was already abandoned';
     END IF;
     RETURN NEW;
