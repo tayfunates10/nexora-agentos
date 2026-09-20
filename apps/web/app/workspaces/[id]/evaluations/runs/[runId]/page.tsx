@@ -75,15 +75,15 @@ export default async function RunDetail({
         evalJudgeRunSchema,
       );
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        redirect("/login?error=session_expired");
-      }
+      if (error instanceof ApiError && error.status === 401) throw error;
       if (!(error instanceof ApiError && error.status === 404)) judgeUnavailable = true;
     }
 
     const judgeEligible = run.results.every(result => result.source_agent_run_id !== null);
     const judgeScores = new Map((judge?.results ?? []).map(result => [result.case_id, result]));
-    const canQueue = judgeEligible && (judge === null || judge.status === "failed");
+    const canQueue = !judgeUnavailable
+      && judgeEligible
+      && (judge === null || judge.status === "failed");
 
     return <section className="workspace-content evaluation-content">
       <a href={root + "/suites/" + run.suite_id}>← Suite and history</a>
