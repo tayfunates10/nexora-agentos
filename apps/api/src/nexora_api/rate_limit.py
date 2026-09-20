@@ -51,9 +51,7 @@ class IdentityRateLimiter:
             return RateLimitDecision(allowed=True, remaining=0, retry_after_seconds=0)
         key = self.identity_key(issuer, subject)
         try:
-            current, ttl = await self.redis.eval(
-                _RATE_LIMIT_SCRIPT, 1, key, self.window_seconds
-            )
+            current, ttl = await self.redis.eval(_RATE_LIMIT_SCRIPT, 1, key, self.window_seconds)
         except RedisError as exc:
             raise RateLimitUnavailable("Shared rate limiter is unavailable") from exc
         count = int(current)
