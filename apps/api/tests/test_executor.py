@@ -7,6 +7,7 @@ import pytest
 
 from nexora_api import metrics
 from nexora_api.executor import DurableAgentExecutor, ExecutionProfile
+from nexora_api.executor_store import RunRetrievalSnapshot
 from nexora_api.mcp_gateway import ApprovalRequired
 from nexora_api.model_routing import (
     ModelCandidate,
@@ -17,6 +18,8 @@ from nexora_api.model_routing import (
     ProviderToolCall,
     ProviderUsage,
 )
+from nexora_api.rag import RetrievedChunk, build_untrusted_context
+from nexora_api.rag_pipeline import RagSearchResult
 from nexora_api.run_state import ExecutionContext
 from nexora_api.worker import RetryableExecutionError, TerminalExecutionError
 
@@ -25,10 +28,19 @@ class Store:
     def __init__(self):
         self.steps = {}
         self.checks = 0
+        self.retrieval = None
 
     async def check(self, context):
         self.checks += 1
         return {"requested_by_issuer": "issuer", "requested_by_subject": "subject"}
+
+    async def load_retrieval(self, context):
+        return self.retrieval
+
+    async def save_retrieval(self, context, result):
+        text = build_untrusted_context(result.chunks) if result.chunks else ""
+        self.retrieval = RunRetrievalSnapshot(text, result.embedding_input_tokens, len(result.chunks))
+        return self.retrieval
 
     async def load(self, context, step):
         return self.steps.get(step)
@@ -49,6 +61,16 @@ class Adapter:
         if isinstance(response, Exception):
             raise response
         return response
+
+
+class Retriever:
+    def __init__(self, result):
+        self.result = result
+        self.calls = 0
+
+    async def retrieve(self, *args, **kwargs):
+        self.calls += 1
+        return self.result
 
 
 class Gateway:
@@ -104,6 +126,33 @@ def test_text_response_is_persisted_and_replayed():
     asyncio.run(executor.execute(context, not_cancelled))
     assert len(adapter.requests) == 1
     assert store.steps[0].text == "Done"
+
+
+def test_retrieval_snapshot_is_reused_without_second_embedding_or_search():
+    executor, context, store, _, adapter = setup([response()])
+    evidence = RetrievedChunk(
+        id=uuid4(),
+        source_id=uuid4(),
+        source_key="handbook",
+        source_version="v1",
+        title="Handbook",
+        chunk_index=0,
+        start_offset=0,
+        end_offset=17,
+        content="approved evidence",
+        metadata={},
+        score=0.9,
+    )
+    retriever = Retriever(RagSearchResult((evidence,), 3))
+    executor.retriever = retriever
+
+    asyncio.run(executor.execute(context, not_cancelled))
+    asyncio.run(executor.execute(replace(context, attempt_count=2), not_cancelled))
+
+    assert retriever.calls == 1
+    assert store.retrieval.chunk_count == 1
+    assert len(adapter.requests) == 1
+    assert "source=handbook version=v1 chunk=0" in adapter.requests[0].messages[2].content
 
 
 def test_approval_resume_uses_persisted_decision_and_call_identity():
