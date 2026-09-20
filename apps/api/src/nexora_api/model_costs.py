@@ -20,6 +20,7 @@ class ModelCostSummary:
     priced_call_count: int
     total_usd_picos: int | None
     pricing_complete: bool
+    pricing_versions: tuple[str, ...]
 
 
 async def record_model_usage_cost(
@@ -156,7 +157,12 @@ async def load_model_cost_summary(
     result = await connection.execute(
         f"""SELECT count(*)::integer AS call_count,
                    count(total_usd_picos)::integer AS priced_call_count,
-                   sum(total_usd_picos) AS total_usd_picos
+                   sum(total_usd_picos) AS total_usd_picos,
+                   COALESCE(
+                       array_agg(DISTINCT pricing_version ORDER BY pricing_version)
+                           FILTER (WHERE pricing_version IS NOT NULL),
+                       ARRAY[]::text[]
+                   ) AS pricing_versions
             FROM model_usage_costs
             WHERE workspace_id=%s AND {owner_column}=%s""",
         (workspace_id, owner_id),
@@ -175,4 +181,5 @@ async def load_model_cost_summary(
         priced_call_count=priced_call_count,
         total_usd_picos=total_usd_picos,
         pricing_complete=complete,
+        pricing_versions=tuple(row["pricing_versions"]),
     )
