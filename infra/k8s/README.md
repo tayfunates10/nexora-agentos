@@ -97,6 +97,12 @@ namespace `nexora.dev/monitoring: "true"`, or the network policies will keep bot
 Scraping still needs `NEXORA_METRICS_TOKEN`: `/metrics` is gated by token as well as by
 network policy.
 
+The API base config rate-limits each verified issuer/subject through shared Redis (120 requests per
+60 seconds by default). A 429 includes `Retry-After`; a Redis failure fails authenticated traffic
+closed instead of bypassing the limit. This does not replace edge controls: configure the
+Ingress/Gateway for unauthenticated request, connection and body-size limits without trusting
+client-supplied forwarding headers inside the application.
+
 Sign-in performs OIDC discovery and the code exchange from the web pod, so it needs TLS
 egress to the identity provider. The policy allows public address space only; an
 identity provider on a private address needs a rule naming it.
