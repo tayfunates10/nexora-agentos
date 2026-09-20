@@ -113,6 +113,7 @@ def build_worker(
         lease_seconds=settings.worker_lease_seconds,
     )
 
+
 async def close_retriever(retriever: RagEmbeddingPipeline | None) -> None:
     if retriever is None:
         return
