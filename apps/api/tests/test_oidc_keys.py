@@ -196,24 +196,30 @@ def test_provider_failure_fails_closed_as_service_unavailable():
 def test_dynamic_tokens_require_rs256_and_kid():
     private, _ = make_key("one")
     now = datetime.now(UTC)
-    no_kid = jwt.encode(
-        {
-            "iss": "https://identity.example.test/tenant",
-            "aud": "nexora-api",
-            "sub": "alice",
-            "iat": now,
-            "exp": now + timedelta(minutes=5),
-        },
-        private,
-        algorithm="RS256",
-    )
+    claims = {
+        "iss": "https://identity.example.test/tenant",
+        "aud": "nexora-api",
+        "sub": "alice",
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+    }
+    invalid_tokens = [
+        jwt.encode(claims, private, algorithm="RS256"),
+        jwt.encode(
+            claims,
+            "test-secret" * 4,
+            algorithm="HS256",
+            headers={"kid": "one"},
+        ),
+    ]
 
     async def scenario():
         resolver = OidcKeyResolver(settings())
         try:
-            with pytest.raises(HTTPException) as error:
-                await verify_request_token(no_kid, settings(), resolver)
-            assert error.value.status_code == 401
+            for encoded in invalid_tokens:
+                with pytest.raises(HTTPException) as error:
+                    await verify_request_token(encoded, settings(), resolver)
+                assert error.value.status_code == 401
         finally:
             await resolver.aclose()
 
