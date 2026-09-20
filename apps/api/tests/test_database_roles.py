@@ -57,12 +57,10 @@ def test_runtime_roles_are_effectively_least_privilege():
                     for privilege in ("TRUNCATE", "REFERENCES", "TRIGGER"):
                         assert has_table_privilege(connection, role, table, privilege) is False
 
-            assert has_table_privilege(
-                connection, api_role, "worker_job_receipts", "INSERT"
-            ) is False
-            assert has_table_privilege(
-                connection, api_role, "agent_model_steps", "INSERT"
-            ) is False
+            assert (
+                has_table_privilege(connection, api_role, "worker_job_receipts", "INSERT") is False
+            )
+            assert has_table_privilege(connection, api_role, "agent_model_steps", "INSERT") is False
             assert has_table_privilege(connection, worker_role, "workspaces", "UPDATE") is False
             assert has_table_privilege(connection, worker_role, "eval_suites", "INSERT") is False
         finally:
