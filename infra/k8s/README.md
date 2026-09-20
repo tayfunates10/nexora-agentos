@@ -24,13 +24,14 @@ kubectl create secret generic nexora-secrets -n nexora \
   --from-literal=NEXORA_WEB_ORIGIN='https://nexora.example' \
   --from-literal=NEXORA_OIDC_CLIENT_ID='<client id>' \
   --from-literal=NEXORA_OIDC_CLIENT_SECRET='<client secret>' \
-  --from-literal=NEXORA_OPENAI_API_KEY='<provider key>' \
-  --from-file=NEXORA_AUTH_PUBLIC_KEY=./auth-public-key.pem
+  --from-literal=NEXORA_OPENAI_API_KEY='<provider key>'
 ```
 
 Then edit, in `base/configmap.yaml`, the issuer and audience, and the worker's model
-profiles — the workspace IDs, provider and model this deployment allows. A run can
-never name anything the profiles do not list.
+profiles — the workspace IDs, provider and model this deployment allows. The API discovers
+the issuer's OIDC metadata and rotates RS256 signing keys automatically. If that provider
+serves JWKS from another origin, set `NEXORA_AUTH_JWKS_URL` explicitly to that HTTPS URL.
+A run can never name anything the profiles do not list.
 
 If the worker runtime config declares remote MCP servers, put their bearer tokens in the
 optional `nexora-mcp-secrets` Secret under the exact environment-variable names referenced
@@ -103,9 +104,10 @@ closed instead of bypassing the limit. This does not replace edge controls: conf
 Ingress/Gateway for unauthenticated request, connection and body-size limits without trusting
 client-supplied forwarding headers inside the application.
 
-Sign-in performs OIDC discovery and the code exchange from the web pod, so it needs TLS
-egress to the identity provider. The policy allows public address space only; an
-identity provider on a private address needs a rule naming it.
+Sign-in performs OIDC discovery and the code exchange from the web pod, while the API
+performs OIDC discovery and JWKS refresh for bearer verification. The shared identity-provider
+egress policy allows public TLS only; an identity provider on a private address needs an
+environment-specific rule naming it. Token-provided `jku`/`x5u` URLs are never followed.
 
 ## Validating changes
 
