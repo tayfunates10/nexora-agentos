@@ -292,6 +292,7 @@ def test_delete_cancels_queued_ingestion_and_rejects_running_delete(keys, auth_s
     assert row == ("cancelled", None, None)
     client.__exit__(None, None, None)
 
+
 def test_lost_ingestion_lease_rolls_back_source_write(keys, auth_settings):
     migrate(auth_settings)
     client, headers, workspace_id, _owner, admin, _member, _member2 = setup_workspace(
@@ -358,6 +359,7 @@ def test_lost_ingestion_lease_rolls_back_source_write(keys, auth_settings):
     assert job == ("running", "replacement-worker")
     assert source_count == 0
     client.__exit__(None, None, None)
+
 
 def test_knowledge_endpoints_reject_cross_tenant_access(keys, auth_settings):
     migrate(auth_settings)
