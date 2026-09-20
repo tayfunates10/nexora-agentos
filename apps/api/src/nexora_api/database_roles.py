@@ -5,8 +5,8 @@ operations their process is expected to perform. Any unclassified new table make
 deployment fail until this policy is reviewed.
 """
 
-from collections.abc import Mapping
 import re
+from collections.abc import Mapping
 
 from psycopg import sql
 
@@ -107,7 +107,10 @@ def _validate_role_name(value: str, label: str) -> str:
     return value
 
 
-def configured_runtime_roles(api_role: str | None, worker_role: str | None) -> tuple[str, str] | None:
+def configured_runtime_roles(
+    api_role: str | None,
+    worker_role: str | None,
+) -> tuple[str, str] | None:
     if api_role is None and worker_role is None:
         return None
     if not api_role or not worker_role:
@@ -137,7 +140,9 @@ def apply_runtime_grants(connection, api_role: str, worker_role: str) -> None:
     for role in (api_role, worker_role):
         identifier = sql.Identifier(role)
         connection.execute(
-            sql.SQL("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM {}").format(identifier)
+            sql.SQL(
+                "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM {}"
+            ).format(identifier)
         )
         connection.execute(
             sql.SQL("REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM {}").format(
@@ -210,7 +215,8 @@ def _verify_schema_inventory(connection) -> None:
     ).fetchall()
     if sequences:
         raise RuntimeError(
-            "Runtime database sequence policy is undefined: " + ", ".join(row[0] for row in sequences)
+            "Runtime database sequence policy is undefined: "
+            + ", ".join(row[0] for row in sequences)
         )
 
     current_user = connection.execute("SELECT current_user").fetchone()[0]
