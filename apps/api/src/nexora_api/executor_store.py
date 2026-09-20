@@ -37,15 +37,19 @@ class ExecutorStore(RunStateStore):
         async with self.connection() as connection:
             run = await executable_run(connection, context)
             result = await connection.execute(
-                """SELECT query_hash,context_text,context_hash,
-                          embedding_input_tokens,chunk_count
-                   FROM agent_run_retrievals
-                   WHERE workspace_id=%s AND run_id=%s""",
+                """SELECT r.query_hash,r.context_hash,r.embedding_input_tokens,r.chunk_count,
+                          c.context_text
+                   FROM agent_run_retrievals r
+                   LEFT JOIN agent_run_retrieval_context c
+                     ON c.run_id=r.run_id AND c.workspace_id=r.workspace_id
+                   WHERE r.workspace_id=%s AND r.run_id=%s""",
                 (context.workspace_id, context.run_id),
             )
             row = await result.fetchone()
             if row is None:
                 return None
+            if row["context_text"] is None:
+                raise ToolContractError("retrieval_snapshot_unavailable")
             expected_query_hash = hashlib.sha256(
                 context.input_text.encode("utf-8")
             ).hexdigest()
@@ -146,21 +150,26 @@ class ExecutorStore(RunStateStore):
                         raise ToolContractError("retrieval_snapshot_unavailable")
             inserted = await connection.execute(
                 """INSERT INTO agent_run_retrievals
-                   (run_id,workspace_id,query_hash,context_text,context_hash,
+                   (run_id,workspace_id,query_hash,context_hash,
                     embedding_input_tokens,chunk_count)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s)
+                   VALUES (%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (run_id) DO NOTHING""",
                 (
                     context.run_id,
                     context.workspace_id,
                     query_hash,
-                    context_text,
                     context_hash,
                     result.embedding_input_tokens,
                     len(result.chunks),
                 ),
             )
             if inserted.rowcount == 1:
+                await connection.execute(
+                    """INSERT INTO agent_run_retrieval_context
+                       (run_id,workspace_id,context_text)
+                       VALUES (%s,%s,%s)""",
+                    (context.run_id, context.workspace_id, context_text),
+                )
                 for position, chunk in enumerate(result.chunks):
                     await connection.execute(
                         """INSERT INTO agent_run_retrieval_chunks
@@ -190,19 +199,23 @@ class ExecutorStore(RunStateStore):
                     },
                 )
             current = await connection.execute(
-                """SELECT query_hash,context_text,context_hash,
-                          embedding_input_tokens,chunk_count
-                   FROM agent_run_retrievals
-                   WHERE workspace_id=%s AND run_id=%s""",
+                """SELECT r.query_hash,r.context_hash,r.embedding_input_tokens,r.chunk_count,
+                          c.context_text
+                   FROM agent_run_retrievals r
+                   LEFT JOIN agent_run_retrieval_context c
+                     ON c.run_id=r.run_id AND c.workspace_id=r.workspace_id
+                   WHERE r.workspace_id=%s AND r.run_id=%s""",
                 (context.workspace_id, context.run_id),
             )
             row = await current.fetchone()
             if (
                 row is None
+                or row["context_text"] is None
                 or row["query_hash"] != query_hash
                 or row["context_hash"] != context_hash
+                or row["context_text"] != context_text
             ):
-                raise RuntimeError("retrieval snapshot conflict")
+                raise ToolContractError("retrieval_snapshot_unavailable")
             return RunRetrievalSnapshot(
                 context_text=row["context_text"],
                 embedding_input_tokens=row["embedding_input_tokens"],
