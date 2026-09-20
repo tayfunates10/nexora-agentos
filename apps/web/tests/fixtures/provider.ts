@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
 import type { AddressInfo } from "node:net";
 import type { EvalJudgeRun, EvalRun, EvalSuite } from "../../lib/evaluation-contracts.ts";
+import type { SpendRecord } from "../../lib/spend-contracts.ts";
 
 export async function startProvider() {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
@@ -14,9 +15,38 @@ export async function startProvider() {
   const evalRuns = new Map<string, EvalRun>();
   const evalJudgeRuns = new Map<string, EvalJudgeRun>();
   const judgeIdempotency = new Map<string, string>();
+  const spendRecords = new Map<string, SpendRecord & { workspace_id: string }>();
+  const budgets = new Map<string, {
+    monthly_limit_micros: number; enforcement: string; alert_thresholds: number[];
+  }>();
+  const spendAlerts = new Map<string, {
+    threshold_percent: number; monthly_limit_micros: number;
+    consumed_micros: number; enforcement: string; created_at: string;
+  }>();
   let historyUnavailable = false;
+  let spendUnavailable = false;
   let issuer = "";
   let wrongNonce = false;
+  // Mirrors the API: a threshold is recorded once per workspace per period.
+  const raiseAlerts = (workspaceId: string) => {
+    const budget = budgets.get(workspaceId);
+    if (!budget) return;
+    const consumed = [...spendRecords.values()]
+      .filter(row => row.workspace_id === workspaceId)
+      .reduce((total, row) => total + row.cost_micros, 0);
+    for (const percent of budget.alert_thresholds) {
+      const key = `${workspaceId}:${percent}`;
+      if (spendAlerts.has(key)) continue;
+      if (consumed * 100 < percent * budget.monthly_limit_micros) continue;
+      spendAlerts.set(key, {
+        threshold_percent: percent,
+        monthly_limit_micros: budget.monthly_limit_micros,
+        consumed_micros: consumed,
+        enforcement: budget.enforcement,
+        created_at: "2026-09-20T15:30:00Z",
+      });
+    }
+  };
   const server = createServer(async (request, response) => {
     const send = (body: unknown, status = 200) => { response.writeHead(status, { "Content-Type": "application/json" }); response.end(JSON.stringify(body)); };
     try {
@@ -42,6 +72,78 @@ export async function startProvider() {
       if (url.pathname === "/api/v1/workspaces") {
         if (request.method === "POST") { const entry = { id: randomUUID(), name: JSON.parse(body).name, role: "owner" }; workspaces.set(entry.id, entry); return send(entry, 201); }
         return send({ items: [...workspaces.values()], next_cursor: null });
+      }
+      const spend = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/spend(\/budget|\/records)?$/);
+      if (spend) {
+        const [, workspaceId, resource] = spend;
+        const scope = workspaces.get(workspaceId);
+        if (!scope) return send({}, 404);
+        if (spendUnavailable) return send({}, 503);
+        const rows = [...spendRecords.values()]
+          .filter(row => row.workspace_id === workspaceId)
+          .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at) || b.id.localeCompare(a.id));
+        if (resource === "/budget") {
+          // Reading spend is a membership right; changing a cap needs spend:manage.
+          if (request.method !== "PUT") return send({}, 405);
+          if (scope.role === "member") return send({}, 403);
+          const input = JSON.parse(body);
+          budgets.set(workspaceId, {
+            monthly_limit_micros: input.monthly_limit_micros,
+            enforcement: input.enforcement,
+            alert_thresholds: input.alert_thresholds ?? [],
+          });
+          raiseAlerts(workspaceId);
+          return send({
+            workspace_id: workspaceId, ...budgets.get(workspaceId),
+            updated_at: "2026-09-20T15:00:00Z",
+          });
+        }
+        if (resource === "/records") {
+          const category = url.searchParams.get("category");
+          const cursor = url.searchParams.get("cursor");
+          const limit = Number(url.searchParams.get("limit") ?? "25");
+          let filtered = category ? rows.filter(row => row.category === category) : rows;
+          if (cursor) {
+            const index = filtered.findIndex(row => row.id === cursor);
+            if (index < 0) return send({}, 404);
+            filtered = filtered.slice(index + 1);
+          }
+          return send({
+            items: filtered.slice(0, limit),
+            next_cursor: filtered.length > limit ? filtered[limit - 1].id : null,
+          });
+        }
+        const budget = budgets.get(workspaceId) ?? null;
+        const consumed = rows.reduce((total, row) => total + row.cost_micros, 0);
+        const categories = [...new Set(rows.map(row => row.category))].sort().map(name => {
+          const group = rows.filter(row => row.category === name);
+          return {
+            category: name,
+            call_count: group.length,
+            input_tokens: group.reduce((total, row) => total + row.input_tokens, 0),
+            output_tokens: group.reduce((total, row) => total + row.output_tokens, 0),
+            cost_micros: group.reduce((total, row) => total + row.cost_micros, 0),
+          };
+        });
+        raiseAlerts(workspaceId);
+        return send({
+          workspace_id: workspaceId,
+          period_start: "2026-09-01T00:00:00Z",
+          period_end: "2026-10-01T00:00:00Z",
+          consumed_micros: consumed,
+          monthly_limit_micros: budget?.monthly_limit_micros ?? null,
+          enforcement: budget?.enforcement ?? null,
+          remaining_micros: budget ? Math.max(0, budget.monthly_limit_micros - consumed) : null,
+          exhausted: budget !== null
+            && budget.enforcement === "enforce"
+            && consumed >= budget.monthly_limit_micros,
+          alert_thresholds: budget?.alert_thresholds ?? [],
+          alerts: [...spendAlerts.entries()]
+            .filter(([key]) => key.startsWith(workspaceId + ":"))
+            .map(([, alert]) => alert)
+            .sort((a, b) => a.threshold_percent - b.threshold_percent),
+          categories,
+        });
       }
       const latestJudge = url.pathname.match(
         /^\/api\/v1\/workspaces\/([^/]+)\/eval-runs\/([^/]+)\/judge-runs\/latest$/,
@@ -121,7 +223,9 @@ export async function startProvider() {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  return { issuer, workspaces, evalSuites, evalRuns, evalJudgeRuns,
+  return { issuer, workspaces, evalSuites, evalRuns, evalJudgeRuns, spendRecords, budgets,
+    spendAlerts,
     historyUnavailable: (value: boolean) => { historyUnavailable = value; },
+    spendUnavailable: (value: boolean) => { spendUnavailable = value; },
     wrongNonce: (value: boolean) => { wrongNonce = value; }, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }

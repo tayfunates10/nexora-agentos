@@ -14,6 +14,7 @@ from psycopg.types.json import Jsonb
 
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
+from nexora_api.metrics import observe_spend_denied
 from nexora_api.rag import (
     AccessScope,
     AclIdentity,
@@ -22,6 +23,13 @@ from nexora_api.rag import (
     normalize_document,
     sha256_text,
 )
+from nexora_api.spend import (
+    EmbeddingSpend,
+    SpendCategory,
+    SpendLimitExceeded,
+    knowledge_source_key,
+)
+from nexora_api.spend_repository import evaluate_budget, observe_write, record_spend
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
@@ -57,6 +65,41 @@ class RagRepository:
                 workspace_id,
                 Permission.MANAGE_KNOWLEDGE,
             )
+
+    async def authorize_spend(self, workspace_id: UUID) -> None:
+        """Refuse embedding egress once a workspace has spent its budget for the period."""
+        async with self.connection() as connection:
+            decision = await evaluate_budget(connection, workspace_id)
+        if decision.allowed:
+            return
+        observe_spend_denied(SpendCategory.EMBEDDING)
+        raise SpendLimitExceeded()
+
+    async def record_embedding_spend(
+        self,
+        workspace_id: UUID,
+        *,
+        source_key: str,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        cost_micros: int,
+    ) -> bool:
+        """Append a priced embedding call that has no other durable row of its own."""
+        async with self.connection() as connection:
+            write = await record_spend(
+                connection,
+                workspace_id=workspace_id,
+                source_key=source_key,
+                category=SpendCategory.EMBEDDING,
+                provider=provider,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=0,
+                cost_micros=cost_micros,
+            )
+        observe_write(provider, SpendCategory.EMBEDDING, cost_micros, write)
+        return write.recorded
 
     async def authorize_retrieve(
         self,
@@ -277,6 +320,7 @@ class RagRepository:
         ingestion_job_id: UUID | None = None,
         ingestion_worker_id: str | None = None,
         embedding_input_tokens: int | None = None,
+        embedding_spend: EmbeddingSpend | None = None,
     ) -> UUID:
         self._validate_source_fields(source_key, version, title, embedding_model)
         normalized = normalize_document(text)
@@ -445,6 +489,24 @@ class RagRepository:
                 if completed.rowcount != 1:
                     raise KnowledgeIngestionLeaseLost("knowledge_ingestion_lease_lost")
 
+            # The ledger row commits with the indexed version it pays for, so a
+            # retried job never charges the same stored embeddings twice.
+            recorded_cost = None
+            write = None
+            if embedding_spend is not None and embedding_input_tokens is not None:
+                recorded_cost = embedding_spend.cost_micros(embedding_input_tokens)
+                write = await record_spend(
+                    connection,
+                    workspace_id=workspace_id,
+                    source_key=knowledge_source_key(source_id),
+                    category=SpendCategory.EMBEDDING,
+                    provider=embedding_spend.provider,
+                    model=embedding_spend.model,
+                    input_tokens=embedding_input_tokens,
+                    output_tokens=0,
+                    cost_micros=recorded_cost,
+                )
+
             await self.workspaces.audit(
                 connection,
                 principal,
@@ -453,7 +515,9 @@ class RagRepository:
                 request_id,
                 source_key,
             )
-            return source_id
+        if write is not None:
+            observe_write(embedding_spend.provider, SpendCategory.EMBEDDING, recorded_cost, write)
+        return source_id
 
     async def delete_source(
         self,

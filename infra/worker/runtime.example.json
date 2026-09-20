@@ -9,7 +9,9 @@
         "structured_output"
       ],
       "quality_tier": 2,
-      "estimated_cost_per_million_tokens": 0
+      "estimated_cost_per_million_tokens": 0,
+      "input_micros_per_million_tokens": 3000000,
+      "output_micros_per_million_tokens": 15000000
     }
   ],
   "profiles": {
@@ -35,7 +37,8 @@
     "dimensions": 1536,
     "limit": 8,
     "batch_size": 128,
-    "timeout_seconds": 15
+    "timeout_seconds": 15,
+    "input_micros_per_million_tokens": 20000
   },
   "evaluation_judge": {
     "provider": "openai",

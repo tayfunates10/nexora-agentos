@@ -22,6 +22,7 @@ from nexora_api.metrics import (
     observe_evaluation_judge_call,
     observe_evaluation_judge_job,
     observe_model_call,
+    observe_spend_denied,
 )
 from nexora_api.model_routing import (
     ProviderAdapter,
@@ -31,6 +32,13 @@ from nexora_api.model_routing import (
 )
 from nexora_api.run_results import summarize_result
 from nexora_api.runtime_config import EvaluationJudgeConfig
+from nexora_api.spend import (
+    SpendCategory,
+    SpendPolicy,
+    SpendPricingError,
+    judge_case_source_key,
+)
+from nexora_api.spend_repository import evaluate_budget, observe_write, record_spend
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
@@ -60,6 +68,7 @@ class EvaluationJudgeWorker:
         *,
         worker_id: str,
         lease_seconds: int = 30,
+        spend: SpendPolicy | None = None,
     ):
         if not 3 <= lease_seconds <= 300:
             raise ValueError("lease_seconds must be between 3 and 300")
@@ -70,6 +79,7 @@ class EvaluationJudgeWorker:
         self.config = config
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
+        self.spend = spend
         self.workspaces = WorkspaceRepository(settings)
 
     @asynccontextmanager
@@ -96,6 +106,7 @@ class EvaluationJudgeWorker:
                 return True
 
             await self._assert_authorized(job)
+            await self._assert_budget(job)
             candidate, candidate_usage, candidate_latency = await self._score(
                 job,
                 case["id"],
@@ -109,6 +120,7 @@ class EvaluationJudgeWorker:
             baseline_latency = 0
             if case["baseline_output"] is not None:
                 await self._assert_authorized(job)
+                await self._assert_budget(job)
                 baseline, baseline_usage, baseline_latency = await self._score(
                     job,
                     case["id"],
@@ -242,6 +254,17 @@ class EvaluationJudgeWorker:
                 job["workspace_id"],
                 Permission.MANAGE_EVALS,
             )
+
+    async def _assert_budget(self, job):
+        """A judge evaluation is paid provider work, so it obeys the same workspace budget."""
+        if self.spend is None:
+            return
+        async with self.connection() as connection:
+            decision = await evaluate_budget(connection, job["workspace_id"])
+        if decision.allowed:
+            return
+        observe_spend_denied(SpendCategory.EVALUATION_JUDGE)
+        raise JudgeExecutionError("judge_budget_exhausted")
 
     async def _next_case(self, job):
         principal = Principal(job["requested_by_issuer"], job["requested_by_subject"])
@@ -487,6 +510,14 @@ class EvaluationJudgeWorker:
         output_tokens: int,
         latency_ms: int,
     ):
+        cost_micros = None
+        if self.spend is not None:
+            try:
+                cost_micros = self.spend.cost_micros(
+                    self.config.provider, self.config.model, input_tokens, output_tokens
+                )
+            except SpendPricingError as exc:
+                raise JudgeExecutionError(exc.code) from exc
         async with self.connection() as connection:
             owned = await self._owned(connection, job["id"])
             if not owned:
@@ -516,6 +547,19 @@ class EvaluationJudgeWorker:
                     latency_ms,
                 ),
             )
+            write = None
+            if cost_micros is not None:
+                write = await record_spend(
+                    connection,
+                    workspace_id=job["workspace_id"],
+                    source_key=judge_case_source_key(job["id"], case_id),
+                    category=SpendCategory.EVALUATION_JUDGE,
+                    provider=self.config.provider,
+                    model=self.config.model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_micros=cost_micros,
+                )
             count_result = await connection.execute(
                 """SELECT count(*)::integer AS count
                    FROM eval_judge_case_scores
@@ -540,6 +584,9 @@ class EvaluationJudgeWorker:
                        WHERE id=%s""",
                     (job["id"],),
                 )
+        # Only a ledger row that this attempt actually wrote is counted.
+        if write is not None:
+            observe_write(self.config.provider, SpendCategory.EVALUATION_JUDGE, cost_micros, write)
         if completed:
             observe_evaluation_judge_job("succeeded")
         return True

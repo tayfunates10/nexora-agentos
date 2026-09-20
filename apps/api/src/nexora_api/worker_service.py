@@ -122,6 +122,7 @@ def build_retriever(
         batch_size=retrieval.batch_size,
         timeout_seconds=retrieval.timeout_seconds,
         retrieval_limit=retrieval.limit,
+        spend=config.embedding_spend(),
     )
 
 
@@ -160,6 +161,7 @@ def build_evaluation_judge_worker(
         judge,
         worker_id=worker_id,
         lease_seconds=settings.worker_lease_seconds,
+        spend=config.spend_policy(),
     )
 
 
@@ -174,7 +176,7 @@ def build_worker(
     worker_id: str | None = None,
 ) -> AgentWorker:
     executor = DurableAgentExecutor(
-        store=ExecutorStore(settings),
+        store=ExecutorStore(settings, spend=config.spend_policy()),
         router=ModelRouter(config.candidates()),
         adapters=adapters if adapters is not None else build_provider_adapters(settings, config),
         gateway=McpGateway(settings, adapters=mcp_adapters),

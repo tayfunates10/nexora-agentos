@@ -25,6 +25,7 @@ class Permission(StrEnum):
     APPROVE_TOOLS = "tool:approve"
     MANAGE_KNOWLEDGE = "knowledge:manage"
     MANAGE_EVALS = "eval:manage"
+    MANAGE_SPEND = "spend:manage"
 
 
 GRANTS = {
@@ -40,6 +41,7 @@ GRANTS = {
             Permission.APPROVE_TOOLS,
             Permission.MANAGE_KNOWLEDGE,
             Permission.MANAGE_EVALS,
+            Permission.MANAGE_SPEND,
         }
     ),
     Role.MEMBER: frozenset({Permission.READ, Permission.RUN_AGENTS}),

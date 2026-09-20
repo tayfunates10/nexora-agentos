@@ -18,6 +18,7 @@ from nexora_api.model_routing import (
     RoutingRequest,
 )
 from nexora_api.rag import build_untrusted_context
+from nexora_api.spend import SpendLimitExceeded, SpendPricingError, run_retrieval_source_key
 from nexora_api.telemetry import record, record_error, span
 from nexora_api.tool_contracts import ToolContractError
 from nexora_api.worker import RetryableExecutionError, TerminalExecutionError
@@ -72,6 +73,8 @@ class DurableAgentExecutor:
             error = RetryableExecutionError if exc.retryable else TerminalExecutionError
             raise error(exc.code) from exc
         except ToolContractError as exc:
+            raise TerminalExecutionError(exc.code) from exc
+        except (SpendLimitExceeded, SpendPricingError) as exc:
             raise TerminalExecutionError(exc.code) from exc
 
     async def _execute(self, context, is_cancelled):
@@ -133,6 +136,8 @@ class DurableAgentExecutor:
                         profile.max_output_tokens, profile.max_total_tokens - total_tokens
                     ),
                 )
+                # Budget is checked before egress, not after billing arrives.
+                await self.store.authorize_spend(context)
                 response = await self._observed_generate(
                     adapter, decision, request, profile.timeout_seconds, context, step, is_cancelled
                 )
@@ -186,6 +191,7 @@ class DurableAgentExecutor:
                         context.workspace_id,
                         query=context.input_text,
                         request_id=f"worker-retrieval:{context.run_id}",
+                        spend_key=run_retrieval_source_key(context.run_id),
                     )
                     evidence = build_untrusted_context(result.chunks) if result.chunks else ""
                     if len(evidence) > max_evidence_chars:

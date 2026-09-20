@@ -2,6 +2,7 @@ import { chromium, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { startProvider } from "./fixtures/provider.ts";
 import { checkEvaluations } from "./evaluation-browser.ts";
+import { checkSpend } from "./spend-browser.ts";
 
 const provider = await startProvider();
 const origin = "http://127.0.0.1:3100";
@@ -50,6 +51,7 @@ try {
     await page.screenshot({ path: `/tmp/nexora-workspace-${width}.png`, fullPage: true });
   }
   await checkEvaluations(page, provider, detailUrl);
+  await checkSpend(page, provider, detailUrl);
   const workspace = [...provider.workspaces.values()][0]; workspace.role = "member";
   await page.goto(detailUrl);
   await expect(page.getByText("You have read-only access.", { exact: false })).toBeVisible();
@@ -60,7 +62,7 @@ try {
   await context.addCookies([session!]);
   await page.goto(origin + "/workspaces");
   await expect(page).toHaveURL(origin + "/login");
-  console.log("Browser flow passed: OIDC sign-in, create, rename, membership, CSRF, responsive layouts, role UI and logout replay rejection");
+  console.log("Browser flow passed: OIDC sign-in, create, rename, membership, CSRF, spend and budget console, responsive layouts, role UI and logout replay rejection");
 } finally {
   await browser?.close(); child.kill("SIGTERM"); await provider.close();
 }

@@ -21,14 +21,23 @@ from nexora_api.model_routing import (
 from nexora_api.rag import RetrievedChunk, build_untrusted_context
 from nexora_api.rag_pipeline import RagSearchResult
 from nexora_api.run_state import ExecutionContext
+from nexora_api.spend import SpendLimitExceeded, run_retrieval_source_key
+from nexora_api.tool_contracts import ToolContractError
 from nexora_api.worker import RetryableExecutionError, TerminalExecutionError
 
 
 class Store:
-    def __init__(self):
+    def __init__(self, budget_allows=True):
         self.steps = {}
         self.checks = 0
         self.retrieval = None
+        self.budget_allows = budget_allows
+        self.budget_checks = 0
+
+    async def authorize_spend(self, context):
+        self.budget_checks += 1
+        if not self.budget_allows:
+            raise ToolContractError("workspace_budget_exhausted")
 
     async def check(self, context):
         self.checks += 1
@@ -66,12 +75,17 @@ class Adapter:
 
 
 class Retriever:
-    def __init__(self, result):
+    def __init__(self, result, error=None):
         self.result = result
+        self.error = error
         self.calls = 0
+        self.spend_keys = []
 
     async def retrieve(self, *args, **kwargs):
         self.calls += 1
+        self.spend_keys.append(kwargs.get("spend_key"))
+        if self.error is not None:
+            raise self.error
         return self.result
 
 
@@ -155,6 +169,20 @@ def test_retrieval_snapshot_is_reused_without_second_embedding_or_search():
     assert store.retrieval.chunk_count == 1
     assert len(adapter.requests) == 1
     assert "source=handbook version=v1 chunk=0" in adapter.requests[0].messages[2].content
+
+
+def test_retrieval_is_charged_to_its_run_and_a_spent_budget_fails_it_closed():
+    executor, context, store, _, adapter = setup([response()])
+    executor.retriever = Retriever(RagSearchResult((), 3))
+    asyncio.run(executor.execute(context, not_cancelled))
+    assert executor.retriever.spend_keys == [run_retrieval_source_key(context.run_id)]
+
+    executor, context, store, _, adapter = setup([response()])
+    executor.retriever = Retriever(None, error=SpendLimitExceeded())
+    with pytest.raises(TerminalExecutionError, match="workspace_budget_exhausted"):
+        asyncio.run(executor.execute(context, not_cancelled))
+    # No model call may follow a refused retrieval.
+    assert adapter.requests == []
 
 
 def test_approval_resume_uses_persisted_decision_and_call_identity():

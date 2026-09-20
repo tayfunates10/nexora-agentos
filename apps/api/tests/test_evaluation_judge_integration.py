@@ -15,6 +15,7 @@ from nexora_api.main import create_app
 from nexora_api.migrate import migrate
 from nexora_api.model_routing import ProviderResponse, ProviderUsage
 from nexora_api.runtime_config import EvaluationJudgeConfig
+from nexora_api.spend import ModelPrice, SpendPolicy
 
 pytestmark = [
     pytest.mark.integration,
@@ -52,6 +53,16 @@ class StubJudgeAdapter:
 
     async def cancel(self, request_id):
         return None
+
+
+def judge_spend(settings, workspace_id):
+    with psycopg.connect(settings.database_url.get_secret_value()) as connection:
+        return connection.execute(
+            """SELECT category,input_tokens,output_tokens,cost_micros
+               FROM workspace_spend_records
+               WHERE workspace_id=%s ORDER BY occurred_at,id""",
+            (UUID(workspace_id),),
+        ).fetchall()
 
 
 def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_settings):
@@ -287,8 +298,18 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
             ),
             worker_id="judge-worker",
             lease_seconds=6,
+            # One micro per input token and two per output token.
+            spend=SpendPolicy(
+                prices={
+                    ("test", "judge-model-v1"): ModelPrice(
+                        input_micros_per_million_tokens=1_000_000,
+                        output_micros_per_million_tokens=2_000_000,
+                    )
+                }
+            ),
         )
         assert asyncio.run(worker.process_once()) is True
+        assert judge_spend(auth_settings, workspace_id) == [("evaluation_judge", 20, 10, 40)]
         partial = client.get(
             base + f"/eval-judge-runs/{judge_run_id}",
             headers=headers(admin),
@@ -316,6 +337,11 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
         assert payload["improvement_count"] == 2
         assert payload["input_tokens"] == 40
         assert payload["output_tokens"] == 20
+        # Candidate and baseline scoring for both cases are priced into the ledger.
+        assert judge_spend(auth_settings, workspace_id) == [
+            ("evaluation_judge", 20, 10, 40),
+            ("evaluation_judge", 20, 10, 40),
+        ]
         assert len(adapter.calls) == 4
         assert all(call[2]["additionalProperties"] is False for call in adapter.calls)
         assert all(result["quality_delta_milli"] == 750 for result in payload["results"])

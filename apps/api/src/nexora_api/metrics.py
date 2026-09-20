@@ -34,6 +34,7 @@ _DECISIONS = frozenset({"approved", "rejected", "expired", "cancelled"})
 _JUDGE_TARGETS = frozenset({"candidate", "baseline"})
 _JUDGE_CALL_OUTCOMES = frozenset({"success", "provider_error", "timeout", "invalid_response"})
 _JUDGE_JOB_OUTCOMES = frozenset({"succeeded", "failed"})
+_SPEND_CATEGORIES = frozenset({"agent_run", "evaluation_judge", "embedding"})
 
 _LATENCY_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
 _RUN_BUCKETS = (0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0)
@@ -200,6 +201,26 @@ evaluation_judge_jobs_total = Counter(
 )
 
 
+model_cost_micros_total = Counter(
+    "nexora_model_cost_micros_total",
+    "Recorded model spend in accounting micros, priced by operator configuration.",
+    ("provider", "category"),
+    registry=REGISTRY,
+)
+spend_denials_total = Counter(
+    "nexora_spend_denials_total",
+    "Priced model calls refused because a workspace budget was exhausted.",
+    ("category",),
+    registry=REGISTRY,
+)
+spend_alerts_total = Counter(
+    "nexora_spend_alerts_total",
+    "Budget thresholds reached for the first time in an accounting period.",
+    ("threshold",),
+    registry=REGISTRY,
+)
+
+
 def label(value: str | None) -> str:
     """Bound an operator-controlled label value; unknown shapes collapse to 'other'."""
     if not value:
@@ -272,6 +293,25 @@ def observe_evaluation_judge_call(
 
 def observe_evaluation_judge_job(outcome: str) -> None:
     evaluation_judge_jobs_total.labels(_bounded(outcome, _JUDGE_JOB_OUTCOMES)).inc()
+
+
+def observe_spend(provider: str, category: str, cost_micros: int) -> None:
+    """Record priced spend. Workspace and run identifiers stay out of Prometheus."""
+    if cost_micros <= 0:
+        return
+    model_cost_micros_total.labels(label(provider), _bounded(category, _SPEND_CATEGORIES)).inc(
+        cost_micros
+    )
+
+
+def observe_spend_denied(category: str) -> None:
+    spend_denials_total.labels(_bounded(category, _SPEND_CATEGORIES)).inc()
+
+
+def observe_spend_alert(threshold_percent: int) -> None:
+    """Thresholds are whole percents, so the label set is bounded by definition."""
+    valid = isinstance(threshold_percent, int) and 1 <= threshold_percent <= 100
+    spend_alerts_total.labels(str(threshold_percent) if valid else "other").inc()
 
 
 def observe_tool_call(server_key: str | None, outcome: str, seconds: float | None = None) -> None:
