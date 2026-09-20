@@ -6,7 +6,13 @@ from uuid import UUID, uuid4
 
 from nexora_api.auth import Principal
 from nexora_api.embeddings import EmbeddingAdapter
-from nexora_api.rag import (\n    AccessScope,\n    AclIdentity,\n    RetrievedChunk,\n    build_untrusted_context,\n    chunk_text,\n)
+from nexora_api.rag import (
+    AccessScope,
+    AclIdentity,
+    RetrievedChunk,
+    build_untrusted_context,
+    chunk_text,
+)
 from nexora_api.rag_repository import RagRepository
 
 
@@ -33,6 +39,7 @@ class RagEmbeddingPipeline:
         dimensions: int,
         batch_size: int = 128,
         timeout_seconds: float = 15.0,
+        retrieval_limit: int = 8,
     ):
         if not 1 <= dimensions <= 4096:
             raise ValueError("dimensions must be between 1 and 4096")
@@ -40,12 +47,15 @@ class RagEmbeddingPipeline:
             raise ValueError("batch_size must be between 1 and 256")
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        if not 1 <= retrieval_limit <= 50:
+            raise ValueError("retrieval_limit must be between 1 and 50")
         self.repository = repository
         self.adapter = adapter
         self.embedding_model = embedding_model
         self.dimensions = dimensions
         self.batch_size = batch_size
-        self.timeout_seconds = timeout_seconds\n        self.retrieval_limit = retrieval_limit
+        self.timeout_seconds = timeout_seconds
+        self.retrieval_limit = retrieval_limit
 
     async def index_source(
         self,
@@ -63,8 +73,8 @@ class RagEmbeddingPipeline:
         max_chars: int = 1200,
         overlap_chars: int = 120,
     ) -> RagIndexResult:
-        # Prevent unauthorized callers from triggering paid provider work. The repository
-        # rechecks permission inside the write transaction after provider egress.
+        # Do not trigger paid provider work for an unauthorized caller.
+        # The repository rechecks permission inside the write transaction.
         await self.repository.authorize_manage(principal, workspace_id)
 
         chunks = chunk_text(text, max_chars=max_chars, overlap_chars=overlap_chars)
@@ -101,9 +111,9 @@ class RagEmbeddingPipeline:
         *,
         query: str,
         request_id: str,
-        limit: int = 8,
+        limit: int | None = None,
     ) -> RagSearchResult:
-        # Membership is checked before paid egress and again in the retrieval query.
+        # Membership is checked before provider egress and again in retrieval SQL.
         await self.repository.authorize_retrieve(principal, workspace_id)
         vectors, input_tokens = await self._embed_texts(
             (query,),
@@ -114,9 +124,30 @@ class RagEmbeddingPipeline:
             workspace_id,
             embedding_model=self.embedding_model,
             query_embedding=vectors[0],
-            limit=limit,
+            limit=self.retrieval_limit if limit is None else limit,
         )
         return RagSearchResult(chunks=chunks, embedding_input_tokens=input_tokens)
+
+    async def context(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        query: str,
+    ) -> str:
+        result = await self.retrieve(
+            principal,
+            workspace_id,
+            query=query,
+            request_id=f"worker-retrieval:{uuid4()}",
+        )
+        if not result.chunks:
+            return ""
+        return build_untrusted_context(result.chunks)
+
+    async def aclose(self) -> None:
+        closer = getattr(self.adapter, "aclose", None)
+        if closer is not None:
+            await closer()
 
     async def _embed_texts(
         self,
