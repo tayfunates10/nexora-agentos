@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     auth_issuer: str | None = None
     auth_audience: str | None = None
     auth_public_key: str | None = None
+    # Shared authenticated-request limiter. Zero disables it for isolated library/test use;
+    # repository deployment configs enable it explicitly.
+    api_rate_limit_requests: int = Field(default=0, ge=0, le=100_000)
+    api_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
     # Telemetry is operator-owned. Without an exporter endpoint nothing leaves the
     # process, and without a metrics token the scrape endpoint stays disabled.
     service_name: str = Field(default="nexora-api", min_length=1, max_length=64)
