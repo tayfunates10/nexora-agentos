@@ -28,6 +28,8 @@ normalized adapter contract plus an OpenAI Responses API adapter with fixed egre
 errors/streaming and cancellation. The RAG foundation now adds versioned tenant-scoped sources,
 ACL-filtered pgvector retrieval, deterministic chunking and citation provenance. The worker can now
 opt into fixed-egress OpenAI embeddings and permission-aware retrieval through operator configuration.
+The knowledge API can queue durable text/Markdown ingestion jobs; embedding and indexing stay in the
+worker so the API process never gains provider egress.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
@@ -44,7 +46,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [Kubernetes deployment](docs/architecture/0012-kubernetes-deployment.md), and
 [release pipeline](docs/architecture/0013-release-pipeline.md), and
 [RAG embedding runtime](docs/architecture/0014-rag-embedding-runtime.md), and
-[MCP Streamable HTTP transport](docs/architecture/0015-mcp-streamable-http.md).
+[MCP Streamable HTTP transport](docs/architecture/0015-mcp-streamable-http.md), and
+[durable knowledge ingestion](docs/architecture/0016-knowledge-ingestion.md).
 
 ## Run locally with Docker Compose
 
@@ -285,6 +288,31 @@ fail closed rather than widening the trust boundary.
 
 See [ADR 0006](docs/architecture/0006-mcp-tool-governance.md) and
 [ADR 0015](docs/architecture/0015-mcp-streamable-http.md).
+
+## Knowledge ingestion API
+
+Owners and admins can queue text or Markdown knowledge sources without giving the API process
+provider network access. Ingestion is durable and idempotent: the API stores validated source
+content and ACL metadata in PostgreSQL, then a retrieval-enabled worker embeds and indexes it
+through the operator-configured embedding adapter. Raw source text is never copied to Redis.
+
+Core endpoints are:
+
+- `POST /api/v1/workspaces/{workspace_id}/knowledge/sources`
+- `GET /api/v1/workspaces/{workspace_id}/knowledge/ingestions/{job_id}`
+- `GET /api/v1/workspaces/{workspace_id}/knowledge/sources`
+- `DELETE /api/v1/workspaces/{workspace_id}/knowledge/sources/{source_key}`
+
+Create requests require an `Idempotency-Key`. Workspace-wide sources are visible to current
+workspace members; restricted sources are omitted from listing unless the current issuer/subject
+appears in that source's ACL. Worker execution rechecks `knowledge:manage` before any paid
+embedding call, so a user whose role was revoked after enqueue cannot trigger provider egress.
+
+Deletion cancels queued ingestion for the same source key. A source with a currently running
+ingestion returns HTTP 409 rather than racing the worker and being recreated after deletion.
+The first public ingestion surface accepts bounded UTF-8 text/Markdown; PDF parsing and other
+untrusted binary formats remain a separate parser/sandbox milestone. See
+[ADR 0016](docs/architecture/0016-knowledge-ingestion.md).
 
 ## Traces, metrics and structured logs
 
