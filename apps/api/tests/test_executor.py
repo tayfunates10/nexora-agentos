@@ -39,7 +39,9 @@ class Store:
 
     async def save_retrieval(self, context, result):
         text = build_untrusted_context(result.chunks) if result.chunks else ""
-        self.retrieval = RunRetrievalSnapshot(text, result.embedding_input_tokens, len(result.chunks))
+        self.retrieval = RunRetrievalSnapshot(
+            text, result.embedding_input_tokens, len(result.chunks)
+        )
         return self.retrieval
 
     async def load(self, context, step):
