@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexora-config
+  namespace: nexora
+  labels:
+    app.kubernetes.io/part-of: nexora
+data:
+  # Non-secret process configuration. Credentials, connection strings and the
+  # scrape token live in the nexora-secrets Secret, which is never committed.
+  NEXORA_LOG_LEVEL: "INFO"
+  NEXORA_OTEL_SAMPLE_RATIO: "1.0"
+  NEXORA_OTEL_EXPORTER_ENDPOINT: ""
+  NEXORA_AUTH_ISSUER: ""
+  NEXORA_AUTH_AUDIENCE: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexora-worker-config
+  namespace: nexora
+  labels:
+    app.kubernetes.io/part-of: nexora
+data:
+  # Worker process settings, kept out of the shared map so the API is not handed
+  # configuration it never reads.
+  NEXORA_WORKER_ADMIN_PORT: "8001"
+  NEXORA_WORKER_RUNTIME_CONFIG: "/etc/nexora/runtime.json"
+  NEXORA_WORKER_SHUTDOWN_GRACE_SECONDS: "25"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexora-worker-runtime
+  namespace: nexora
+  labels:
+    app.kubernetes.io/part-of: nexora
+data:
+  # Operator-declared model profiles. A run cannot name a model, provider or tool
+  # that is not listed here. Replace the workspace IDs and model before deploying.
+  runtime.json: |
+    {
+      "model_candidates": [
+        {
+          "provider": "openai",
+          "model": "replace-with-a-model-your-account-can-call",
+          "capabilities": ["text", "tools"],
+          "quality_tier": 2
+        }
+      ],
+      "profiles": {
+        "default": {
+          "allowed_workspaces": ["00000000-0000-0000-0000-000000000000"],
+          "allowed_providers": ["openai"],
+          "allowed_tools": [],
+          "max_steps": 8
+        }
+      }
+    }

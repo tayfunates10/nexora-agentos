@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexora-worker
+  namespace: nexora
+  labels: &labels
+    app.kubernetes.io/name: nexora-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: nexora
+spec:
+  # Queue depth, not CPU, is the meaningful signal for this workload, so replicas
+  # are set deliberately rather than autoscaled. See ADR 0012.
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-worker
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      serviceAccountName: nexora
+      automountServiceAccountToken: false
+      # SIGTERM stops the loop between jobs; this leaves room for the in-flight
+      # attempt to finish under its own lease instead of being recovered elsewhere.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: nexora/api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "nexora_api.worker_main"]
+          ports:
+            - name: admin
+              containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: nexora-config
+            - configMapRef:
+                name: nexora-worker-config
+          env:
+            - name: NEXORA_SERVICE_NAME
+              value: nexora-worker
+            - name: NEXORA_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_DATABASE_URL}}
+            - name: NEXORA_REDIS_URL
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_REDIS_URL}}
+            - name: NEXORA_METRICS_TOKEN
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_METRICS_TOKEN}}
+            - name: NEXORA_OPENAI_API_KEY
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_OPENAI_API_KEY}}
+          startupProbe:
+            httpGet: {path: /api/v1/health/ready, port: admin}
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet: {path: /api/v1/health/ready, port: admin}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /api/v1/health/live, port: admin}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 768Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: runtime-config
+              mountPath: /etc/nexora
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: runtime-config
+          configMap:
+            name: nexora-worker-runtime

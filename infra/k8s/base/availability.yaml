@@ -1,0 +1,62 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nexora-api
+  namespace: nexora
+  labels:
+    app.kubernetes.io/part-of: nexora
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nexora-web
+  namespace: nexora
+  labels:
+    app.kubernetes.io/part-of: nexora
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-web
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nexora-worker
+  namespace: nexora
+  labels:
+    app.kubernetes.io/part-of: nexora
+spec:
+  # A drained worker's in-flight attempt is recovered by the state machine, so
+  # availability here protects throughput rather than correctness.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-worker
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nexora-api
+  namespace: nexora
+  labels:
+    app.kubernetes.io/part-of: nexora
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nexora-api
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexora-api
+  namespace: nexora
+  labels: &labels
+    app.kubernetes.io/name: nexora-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: nexora
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-api
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      serviceAccountName: nexora
+      automountServiceAccountToken: false
+      # Long enough for in-flight requests to drain after endpoints are withdrawn.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: nexora-api
+      containers:
+        - name: api
+          image: nexora/api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "nexora_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: nexora-config
+          env:
+            - name: NEXORA_SERVICE_NAME
+              value: nexora-api
+            # Every value below carries a credential, so each comes from the Secret.
+            - name: NEXORA_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_DATABASE_URL}}
+            - name: NEXORA_REDIS_URL
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_REDIS_URL}}
+            - name: NEXORA_AUTH_PUBLIC_KEY
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_AUTH_PUBLIC_KEY}}
+            - name: NEXORA_METRICS_TOKEN
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_METRICS_TOKEN}}
+          # Readiness depends on PostgreSQL and Redis; liveness deliberately does not,
+          # so a dependency outage removes traffic instead of restarting every pod.
+          startupProbe:
+            httpGet: {path: /api/v1/health/ready, port: http}
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet: {path: /api/v1/health/ready, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /api/v1/health/live, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # Let endpoint removal propagate before the server stops accepting.
+                command: ["/bin/sh", "-c", "sleep 5"]
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

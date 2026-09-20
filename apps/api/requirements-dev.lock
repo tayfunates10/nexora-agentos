@@ -1,5 +1,6 @@
 # Runtime and development dependencies for Python 3.12
 PyJWT==2.14.0
+PyYAML==6.0.3
 Pygments==2.21.0
 annotated-doc==0.0.5
 annotated-types==0.8.0

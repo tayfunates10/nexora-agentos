@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexora-api
+  namespace: nexora
+  labels:
+    app.kubernetes.io/name: nexora-api
+    app.kubernetes.io/part-of: nexora
+spec:
+  # ClusterIP only: exposure is an operator-provided Ingress or Gateway.
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: nexora-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexora-worker
+  namespace: nexora
+  labels:
+    app.kubernetes.io/name: nexora-worker
+    app.kubernetes.io/part-of: nexora
+spec:
+  # The worker takes no traffic; this exists so its metrics can be scraped.
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: nexora-worker
+  ports:
+    - name: admin
+      port: 8001
+      targetPort: admin
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexora-web
+  namespace: nexora
+  labels:
+    app.kubernetes.io/name: nexora-web
+    app.kubernetes.io/part-of: nexora
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: nexora-web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

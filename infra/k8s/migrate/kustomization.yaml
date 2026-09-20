@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: nexora
+# Applied and awaited before the workload rollout, so a deployment never starts
+# against a schema it has not migrated. Kept out of base for that reason: a Job's
+# spec is immutable, so it is deleted and re-applied per release.
+resources:
+  - job.yaml

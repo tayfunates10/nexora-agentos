@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: nexora
+resources:
+  - ../../base
+# Promote the exact artifact that passed CI: pin by digest, never by a moving tag.
+images:
+  - name: nexora/api
+    newName: REPLACE_WITH_REGISTRY/nexora-api
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: nexora/web
+    newName: REPLACE_WITH_REGISTRY/nexora-web
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+replicas:
+  - name: nexora-api
+    count: 3
+  - name: nexora-web
+    count: 2
+  - name: nexora-worker
+    count: 2
+patches:
+  - target:
+      kind: ConfigMap
+      name: nexora-config
+    patch: |
+      - op: replace
+        path: /data/NEXORA_OTEL_EXPORTER_ENDPOINT
+        value: http://otel-collector.monitoring.svc.cluster.local:4318/v1/traces
+      - op: replace
+        path: /data/NEXORA_OTEL_SAMPLE_RATIO
+        value: "0.2"

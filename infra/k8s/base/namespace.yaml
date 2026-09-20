@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nexora
+  labels:
+    app.kubernetes.io/part-of: nexora
+    # Reject a workload that would run privileged or as root at admission time,
+    # not only through each pod's own securityContext.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
