@@ -21,9 +21,11 @@ registry rather than from a build log that expires. This uses the builder's own
 attestation support rather than extra third-party actions, which keeps the workflow's
 supply chain to the runner, Docker and one pinned first-party checkout action.
 
-Sigstore-signed GitHub attestations verifiable with `gh attestation verify` would add a
-second, independent chain of custody. That is a later addition, not a substitute for the
-attestations already attached here.
+Each released digest now also receives a GitHub artifact attestation signed through
+Sigstore with the workflow's short-lived OIDC identity. The release verifies that
+attestation immediately with the repository, signer workflow and source commit pinned.
+This is a second, independent chain of custody; it complements rather than replaces the
+BuildKit provenance and SBOM already attached to the image. See ADR 0035.
 
 ## Promotion is an edit, not an event
 The digest is written into the production overlay by a script and merged like any other
@@ -50,10 +52,11 @@ moves code back but not schema, so the previous release must tolerate the curren
 and that only holds while old migrations stay exactly as they were applied.
 
 ## Boundaries
-Image signing and registry retention, cluster credentials and the deploy step, staging
-promotion between environments, and vulnerability scanning of published images are not
-here. The scripts are build-time tools kept out of the runtime package, so nothing in a
-published image depends on them.
+Registry retention, cluster credentials and the deploy step, and staging promotion
+between environments remain outside this repository. Published image digests are now
+scanned and receive signed GitHub provenance before promotion, as specified in ADR 0035.
+The scripts and scanner are build-time tools kept out of the runtime package, so nothing
+in a published image depends on them.
 
 ## Skills applied
 cicd-release, docker-kubernetes, security-threat-modeling, postgres-data-modeling,
