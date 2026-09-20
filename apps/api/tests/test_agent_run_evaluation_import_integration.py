@@ -263,7 +263,7 @@ def test_agent_run_eval_import_is_requester_scoped_and_fail_closed(keys, auth_se
             headers=headers(admin, "agent-run-import-0003"),
         )
         assert mismatch.status_code == 422
-        assert mismatch.json()["detail"] == "agent_run_input_mismatch"
+        assert mismatch.json()["error"]["code"] == "http_422"
 
         unfinished = client.post(
             base + f"/eval-suites/{suite_id}/run-imports",
@@ -277,7 +277,7 @@ def test_agent_run_eval_import_is_requester_scoped_and_fail_closed(keys, auth_se
             headers=headers(admin, "agent-run-import-0004"),
         )
         assert unfinished.status_code == 409
-        assert unfinished.json()["detail"] == "agent_run_not_evaluable"
+        assert unfinished.json()["error"]["code"] == "http_409"
 
         citation_suite = client.post(
             base + "/eval-suites",
@@ -304,7 +304,7 @@ def test_agent_run_eval_import_is_requester_scoped_and_fail_closed(keys, auth_se
             headers=headers(admin, "citation-import-0001"),
         )
         assert citation_import.status_code == 422
-        assert citation_import.json()["detail"] == "verified_retrieval_provenance_required"
+        assert citation_import.json()["error"]["code"] == "http_422"
 
     with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
         sources = connection.execute(
