@@ -49,6 +49,9 @@ spec:
                 name: nexora-config
             - configMapRef:
                 name: nexora-worker-config
+            - secretRef:
+                name: nexora-mcp-secrets
+                optional: true
           env:
             - name: NEXORA_SERVICE_NAME
               value: nexora-worker
