@@ -53,13 +53,9 @@ def test_runtime_roles_are_effectively_least_privilege():
                     assert has_table_privilege(connection, role, table, "SELECT") is True
                     for privilege in ("INSERT", "UPDATE", "DELETE"):
                         expected = privilege in writes.get(table, frozenset())
-                        assert has_table_privilege(
-                            connection, role, table, privilege
-                        ) is expected
+                        assert has_table_privilege(connection, role, table, privilege) is expected
                     for privilege in ("TRUNCATE", "REFERENCES", "TRIGGER"):
-                        assert has_table_privilege(
-                            connection, role, table, privilege
-                        ) is False
+                        assert has_table_privilege(connection, role, table, privilege) is False
 
             assert has_table_privilege(
                 connection, api_role, "worker_job_receipts", "INSERT"
