@@ -267,3 +267,37 @@ tests:
   - eval_time: 20m
     alertname: NexoraApiErrorBudgetBurn
     exp_alerts: []
+- name: an abandoned budget notification alerts once and resolves after the window
+  interval: 1m
+  input_series:
+  - series: nexora_spend_alert_deliveries_total{job="nexora-worker",instance="worker-a",outcome="delivered"}
+    values: 0+3x90
+  - series: nexora_spend_alert_deliveries_total{job="nexora-worker",instance="worker-a",outcome="retry"}
+    values: 0+2x90
+  - series: nexora_spend_alert_deliveries_total{job="nexora-worker",instance="worker-a",outcome="abandoned"}
+    values: 0+0x10 1+0x79
+  # A second replica abandons its own notification in the same minute. Operators
+  # get one alert for the deployment, not one per pod.
+  - series: nexora_spend_alert_deliveries_total{job="nexora-worker",instance="worker-b",outcome="abandoned"}
+    values: 0+0x10 1+0x79
+  alert_rule_test:
+  # Retries and successful deliveries alone never raise this alert.
+  - eval_time: 9m
+    alertname: NexoraSpendAlertUndelivered
+    exp_alerts: []
+  - eval_time: 18m
+    alertname: NexoraSpendAlertUndelivered
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+      exp_annotations:
+        summary: Nexora abandoned a budget alert notification
+        description: A workspace crossed a budget threshold and its notification was given
+          up after the attempt limit. The durable alert is still readable in the console;
+          the receiver is what failed.
+        runbook_url: https://github.com/tayfunates10/nexora-agentos/blob/main/infra/monitoring/README.md#spend-alert-delivery
+  # The increase window empties, so a single abandoned notification stops alerting.
+  - eval_time: 40m
+    alertname: NexoraSpendAlertUndelivered
+    exp_alerts: []
+

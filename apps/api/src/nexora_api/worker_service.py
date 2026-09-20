@@ -30,6 +30,7 @@ from nexora_api.openai_responses import OpenAIResponsesAdapter
 from nexora_api.rag_pipeline import RagEmbeddingPipeline
 from nexora_api.rag_repository import RagRepository
 from nexora_api.runtime_config import RuntimeConfig, RuntimeConfigError, load_runtime_config
+from nexora_api.spend_alert_worker import SpendAlertNotifier, SpendAlertWebhook
 from nexora_api.worker import AgentWorker
 
 MAX_ERROR_BACKOFF_SECONDS = 30.0
@@ -165,6 +166,47 @@ def build_evaluation_judge_worker(
     )
 
 
+def build_spend_alert_notifier(
+    settings: Settings,
+    config: RuntimeConfig,
+    *,
+    worker_id: str,
+    client: httpx.AsyncClient | None = None,
+) -> SpendAlertNotifier | None:
+    """Deliver budget alerts only when an operator declares where they go."""
+    webhook = config.spend_alert_webhook
+    if webhook is None:
+        return None
+    secret = os.getenv(webhook.signing_secret_env)
+    if not secret:
+        raise RuntimeConfigError(
+            f"{webhook.signing_secret_env} is required by the spend alert webhook"
+        )
+    token = None
+    if webhook.bearer_token_env:
+        token = os.getenv(webhook.bearer_token_env)
+        if not token:
+            raise RuntimeConfigError(
+                f"{webhook.bearer_token_env} is required by the spend alert webhook"
+            )
+    try:
+        endpoint = SpendAlertWebhook(
+            url=webhook.url,
+            signing_secret=secret,
+            bearer_token=token,
+            timeout_seconds=webhook.timeout_seconds,
+        )
+    except ValueError as exc:
+        raise RuntimeConfigError(f"invalid spend alert webhook: {exc}") from exc
+    return SpendAlertNotifier(
+        settings,
+        endpoint,
+        worker_id=worker_id,
+        lease_seconds=settings.worker_lease_seconds,
+        client=client,
+    )
+
+
 def build_worker(
     settings: Settings,
     config: RuntimeConfig,
@@ -218,6 +260,18 @@ async def close_retriever(retriever: RagEmbeddingPipeline | None) -> None:
         )
 
 
+async def close_spend_alert_notifier(notifier: SpendAlertNotifier | None) -> None:
+    if notifier is None:
+        return
+    try:
+        await notifier.aclose()
+    except Exception:
+        service_log.warning(
+            "spend alert notifier close failed",
+            extra=log_context(outcome="ignored"),
+        )
+
+
 async def close_provider_adapters(adapters: dict[str, ProviderAdapter]) -> None:
     """Release adapter-owned connections on shutdown; a closing failure must not block exit."""
     for adapter in adapters.values():
@@ -242,6 +296,7 @@ class WorkerRuntime:
         settings: Settings,
         knowledge_worker: KnowledgeIngestionWorker | None = None,
         evaluation_judge_worker: EvaluationJudgeWorker | None = None,
+        spend_alert_notifier: SpendAlertNotifier | None = None,
         backoff_base_seconds: float = 2.0,
     ):
         if not 0 < backoff_base_seconds <= 60:
@@ -249,6 +304,7 @@ class WorkerRuntime:
         self.worker = worker
         self.knowledge_worker = knowledge_worker
         self.evaluation_judge_worker = evaluation_judge_worker
+        self.spend_alert_notifier = spend_alert_notifier
         self.settings = settings
         self._stop = asyncio.Event()
         self._idle = settings.worker_idle_sleep_seconds
@@ -286,6 +342,9 @@ class WorkerRuntime:
                 if self.evaluation_judge_worker is not None:
                     judge_handled = await self.evaluation_judge_worker.process_once()
                     handled = judge_handled or handled
+                if self.spend_alert_notifier is not None:
+                    alert_handled = await self.spend_alert_notifier.process_once()
+                    handled = alert_handled or handled
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

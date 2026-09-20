@@ -118,16 +118,22 @@ async def raise_threshold_alerts(connection, workspace_id: UUID) -> tuple[int, .
                     SELECT coalesce(sum(cost_micros),0)::bigint AS micros
                     FROM workspace_spend_records
                     WHERE workspace_id=%s AND {PERIOD}
+                ), raised AS (
+                    INSERT INTO workspace_spend_alerts
+                        (id,workspace_id,period_start,threshold_percent,
+                         monthly_limit_micros,consumed_micros,enforcement)
+                    SELECT gen_random_uuid(),%s,{PERIOD_DAY},threshold,
+                           budget.monthly_limit_micros,consumed.micros,budget.enforcement
+                    FROM budget,consumed,unnest(budget.alert_thresholds) AS threshold
+                    WHERE consumed.micros * 100 >= threshold::bigint * budget.monthly_limit_micros
+                    ON CONFLICT (workspace_id,period_start,threshold_percent) DO NOTHING
+                    RETURNING id,workspace_id,threshold_percent
+                ), queued AS (
+                    -- Delivery intent joins the crossing in one transaction.
+                    INSERT INTO workspace_spend_alert_outbox (alert_id,workspace_id)
+                    SELECT id,workspace_id FROM raised
                 )
-                INSERT INTO workspace_spend_alerts
-                    (id,workspace_id,period_start,threshold_percent,
-                     monthly_limit_micros,consumed_micros,enforcement)
-                SELECT gen_random_uuid(),%s,{PERIOD_DAY},threshold,
-                       budget.monthly_limit_micros,consumed.micros,budget.enforcement
-                FROM budget,consumed,unnest(budget.alert_thresholds) AS threshold
-                WHERE consumed.micros * 100 >= threshold::bigint * budget.monthly_limit_micros
-                ON CONFLICT (workspace_id,period_start,threshold_percent) DO NOTHING
-                RETURNING threshold_percent""",
+                SELECT threshold_percent FROM raised""",
             (workspace_id, workspace_id, workspace_id),
         )
         return tuple(sorted(row[0] for row in await cursor.fetchall()))

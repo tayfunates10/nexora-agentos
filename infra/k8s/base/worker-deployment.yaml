@@ -63,6 +63,13 @@ spec:
               valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_METRICS_TOKEN}}
             - name: NEXORA_OPENAI_API_KEY
               valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_OPENAI_API_KEY}}
+            # Required only when the runtime configuration declares spend_alert_webhook.
+            - name: NEXORA_SPEND_ALERT_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nexora-secrets
+                  key: NEXORA_SPEND_ALERT_SIGNING_SECRET
+                  optional: true
           startupProbe:
             httpGet: {path: /api/v1/health/ready, port: admin}
             periodSeconds: 3

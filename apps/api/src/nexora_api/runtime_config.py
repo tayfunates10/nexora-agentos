@@ -167,6 +167,46 @@ class EvaluationJudgeConfig(BaseModel):
         return self
 
 
+class SpendAlertWebhookConfig(BaseModel):
+    """Operator endpoint for budget threshold notifications.
+
+    Credentials and the signing secret stay in the process environment; only their
+    variable names appear here, exactly like MCP server credentials.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    url: str = Field(min_length=1, max_length=1000)
+    signing_secret_env: str = Field(pattern=r"^NEXORA_[A-Z0-9_]{1,100}$")
+    bearer_token_env: str | None = Field(default=None, pattern=r"^NEXORA_[A-Z0-9_]{1,100}$")
+    timeout_seconds: float = Field(default=10.0, ge=0.1, le=60)
+
+    @field_validator("url")
+    @classmethod
+    def _secure_endpoint(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.port not in (None, 443)
+        ):
+            raise ValueError("alert webhook URL must use HTTPS port 443 without credentials/query")
+        hostname = parsed.hostname.rstrip(".").lower()
+        if hostname == "localhost":
+            raise ValueError("alert webhook hostname is not allowed")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return value
+        if not address.is_global:
+            raise ValueError("alert webhook literal IP must be globally routable")
+        return value
+
+
 class McpServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -212,6 +252,7 @@ class RuntimeConfig(BaseModel):
     profiles: dict[str, ExecutionProfileConfig] = Field(min_length=1, max_length=16)
     retrieval: RetrievalConfig | None = None
     evaluation_judge: EvaluationJudgeConfig | None = None
+    spend_alert_webhook: SpendAlertWebhookConfig | None = None
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict, max_length=32)
 
     @model_validator(mode="after")

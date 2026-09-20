@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,7 @@ from nexora_api.worker_service import (
     build_mcp_adapters,
     build_provider_adapters,
     build_retriever,
+    build_spend_alert_notifier,
     close_mcp_adapters,
     close_retriever,
     load_worker_config,
@@ -349,3 +351,18 @@ def test_mcp_servers_are_operator_allowlisted_and_credentials_stay_in_env(tmp_pa
 def test_invalid_mcp_server_configuration_is_refused(tmp_path, mcp_servers):
     with pytest.raises(RuntimeConfigError):
         load_runtime_config(write(tmp_path, document(mcp_servers=mcp_servers)))
+
+
+def test_shipped_example_runtime_config_starts_a_worker_without_operator_secrets(monkeypatch):
+    """Compose mounts this file by default, so it must not demand a secret nobody set.
+
+    Delivery is opt-in: declaring a webhook here would make every local and CI worker
+    fail closed on a missing signing secret, for an endpoint no operator has chosen.
+    """
+    example = Path(__file__).resolve().parents[3] / "infra" / "worker" / "runtime.example.json"
+    config = load_runtime_config(example)
+
+    assert config.spend_alert_webhook is None
+
+    monkeypatch.delenv("NEXORA_SPEND_ALERT_SIGNING_SECRET", raising=False)
+    assert build_spend_alert_notifier(Settings(), config, worker_id="worker-1") is None

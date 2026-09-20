@@ -31,10 +31,12 @@ from nexora_api.worker_service import (
     build_mcp_adapters,
     build_provider_adapters,
     build_retriever,
+    build_spend_alert_notifier,
     build_worker,
     close_mcp_adapters,
     close_provider_adapters,
     close_retriever,
+    close_spend_alert_notifier,
     load_worker_config,
 )
 
@@ -115,11 +117,17 @@ async def serve(settings: Settings) -> None:
         adapters,
         worker_id=worker.worker_id,
     )
+    spend_alert_notifier = build_spend_alert_notifier(
+        settings,
+        config,
+        worker_id=worker.worker_id,
+    )
     runtime = WorkerRuntime(
         worker,
         settings,
         knowledge_worker=knowledge_worker,
         evaluation_judge_worker=evaluation_judge_worker,
+        spend_alert_notifier=spend_alert_notifier,
     )
     admin = create_admin_app(settings, DependencyProbe(settings, redis))
     server = uvicorn.Server(
@@ -149,6 +157,7 @@ async def serve(settings: Settings) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait_for(admin_task, timeout=settings.worker_shutdown_grace_seconds)
         await close_retriever(retriever)
+        await close_spend_alert_notifier(spend_alert_notifier)
         await close_mcp_adapters(mcp_adapters)
         await close_provider_adapters(adapters)
         await redis.aclose()
