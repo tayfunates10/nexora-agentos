@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from psycopg.types.json import Jsonb
 
 from nexora_api.execution_fence import executable_run
+from nexora_api.model_costs import record_model_usage_cost
 from nexora_api.model_routing import ProviderResponse, ProviderToolCall, ProviderUsage
 from nexora_api.rag import build_untrusted_context, sha256_text
 from nexora_api.run_state import RunStateStore
@@ -218,6 +219,32 @@ class ExecutorStore(RunStateStore):
                 context_text=row["context_text"],
                 embedding_input_tokens=row["embedding_input_tokens"],
                 chunk_count=row["chunk_count"],
+            )
+
+    async def record_cost(
+        self,
+        context,
+        step_no,
+        decision,
+        response,
+        provider_request_id,
+    ):
+        # Cost accounting records a provider call that already happened. It deliberately
+        # does not require the execution fence: a worker that loses its lease after the
+        # provider responds still incurred a real charge that belongs to this run.
+        async with self.connection() as connection:
+            return await record_model_usage_cost(
+                connection,
+                workspace_id=context.workspace_id,
+                source_kind="agent_model_step",
+                provider_request_id=provider_request_id,
+                attempt_count=context.attempt_count,
+                run_id=context.run_id,
+                step_no=step_no,
+                provider=decision.candidate.provider,
+                model=decision.candidate.model,
+                usage=response.usage,
+                pricing=decision.candidate.pricing,
             )
 
     async def load(self, context, step_no):
