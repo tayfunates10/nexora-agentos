@@ -25,7 +25,7 @@ from pydantic import (
 )
 
 from nexora_api.executor import ExecutionProfile
-from nexora_api.model_routing import ModelCandidate, ModelCapability
+from nexora_api.model_routing import ModelCandidate, ModelCapability, ModelPricing
 
 PROFILE_NAME = r"^[A-Za-z0-9._-]{1,64}$"
 PROVIDER_NAME = r"^[a-z][a-z0-9_.-]{1,63}$"
@@ -37,6 +37,21 @@ class RuntimeConfigError(ValueError):
     """Configuration a worker must refuse to start with."""
 
 
+class ModelPricingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    version: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$")
+    input_usd_micros_per_million_tokens: int = Field(ge=0, le=10_000_000_000)
+    output_usd_micros_per_million_tokens: int = Field(ge=0, le=10_000_000_000)
+
+    def pricing(self) -> ModelPricing:
+        return ModelPricing(
+            version=self.version,
+            input_usd_micros_per_million_tokens=self.input_usd_micros_per_million_tokens,
+            output_usd_micros_per_million_tokens=self.output_usd_micros_per_million_tokens,
+        )
+
+
 class ModelCandidateConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -45,6 +60,7 @@ class ModelCandidateConfig(BaseModel):
     capabilities: list[ModelCapability] = Field(min_length=1, max_length=8)
     quality_tier: int = Field(default=1, ge=1, le=5)
     estimated_cost_per_million_tokens: int = Field(default=0, ge=0, le=1_000_000)
+    pricing: ModelPricingConfig | None = None
 
     def candidate(self) -> ModelCandidate:
         return ModelCandidate(
@@ -53,6 +69,7 @@ class ModelCandidateConfig(BaseModel):
             capabilities=frozenset(self.capabilities),
             quality_tier=self.quality_tier,
             estimated_cost_per_million_tokens=self.estimated_cost_per_million_tokens,
+            pricing=self.pricing.pricing() if self.pricing else None,
         )
 
 
