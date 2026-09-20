@@ -187,6 +187,7 @@ def test_evaluation_judge_unknown_labels_collapse():
         == before + 1
     )
 
+
 def test_approval_wait_is_only_observed_for_real_waits():
     before = sample("nexora_approval_wait_seconds_count", decision="approved")
 
