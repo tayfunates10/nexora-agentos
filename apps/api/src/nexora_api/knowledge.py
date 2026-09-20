@@ -90,9 +90,7 @@ async def ingest_source(
     principal: Identity,
     request: Request,
     response: Response,
-    idempotency_key: Annotated[
-        str, Header(alias="Idempotency-Key", min_length=8, max_length=128)
-    ],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
 ):
     job, created = await request.app.state.rag.enqueue_ingestion(
         principal,
@@ -123,9 +121,7 @@ async def list_sources(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: UUID | None = None,
 ):
-    rows = await request.app.state.rag.list_sources(
-        principal, workspace_id, limit + 1, cursor
-    )
+    rows = await request.app.state.rag.list_sources(principal, workspace_id, limit + 1, cursor)
     return KnowledgeSourcePage(
         items=rows[:limit],
         next_cursor=rows[limit - 1].id if len(rows) > limit else None,
