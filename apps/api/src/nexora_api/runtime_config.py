@@ -95,12 +95,26 @@ class RetrievalConfig(BaseModel):
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
 
 
+class McpServerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    transport: Literal["streamable_http"] = "streamable_http"
+    url: str = Field(min_length=1, max_length=1000)
+    bearer_token_env: str | None = Field(
+        default=None,
+        pattern=r"^NEXORA_MCP_[A-Z0-9_]{1,100}$",
+    )
+    timeout_seconds: float = Field(default=15.0, ge=0.1, le=120)
+    max_response_bytes: int = Field(default=131072, ge=1024, le=1048576)
+
+
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_candidates: list[ModelCandidateConfig] = Field(min_length=1, max_length=32)
     profiles: dict[str, ExecutionProfileConfig] = Field(min_length=1, max_length=16)
     retrieval: RetrievalConfig | None = None
+    mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict, max_length=32)
 
     @model_validator(mode="after")
     def _consistent(self):
@@ -112,6 +126,10 @@ class RuntimeConfig(BaseModel):
                     f"duplicate model candidate: {candidate.provider}/{candidate.model}"
                 )
             seen.add(key)
+
+        for server_key in self.mcp_servers:
+            if not re.fullmatch(TOOL_NAME, server_key):
+                raise ValueError(f"invalid MCP server key: {server_key}")
 
         configured = {candidate.provider for candidate in self.model_candidates}
         for name, profile in self.profiles.items():
