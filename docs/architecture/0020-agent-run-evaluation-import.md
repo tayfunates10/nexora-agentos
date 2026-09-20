@@ -48,14 +48,14 @@ includes every case-to-run mapping.
 
 ## Citation boundary
 
-Automated import currently refuses any suite containing expected_citations with
-verified_retrieval_provenance_required.
+Citation-looking text in a final model answer is never treated as evidence that a source was actually
+retrieved. Automated imports may satisfy expected citations only from the immutable run retrieval
+snapshot introduced by ADR 0021. Runs created before that provenance exists still fail closed with
+verified_retrieval_provenance_required when a case expects citations.
 
-This is intentional. Citation-looking text in a final model answer is not evidence that a source was
-actually retrieved. Nexora's current RAG layer retains source provenance during retrieval, but the
-executor does not yet persist that exact evidence set against the durable agent run. A future
-retrieval-provenance milestone may enable citation evaluation only after that evidence can be tied
-immutably to the run without weakening source ACL or retention semantics.
+The importer derives canonical source/version identifiers from persisted provenance; it does not
+parse model output. Snapshot replay rechecks current workspace membership and exact source/chunk ACL
+visibility before the stored evidence can be reused by a resumed run.
 
 ## Limits and failure behavior
 
@@ -71,7 +71,7 @@ does not mutate source agent runs.
 
 Integration coverage exercises successful and failed deterministic cases, stored source-run
 provenance, requester isolation, RBAC denial, exact input matching, terminal-state enforcement,
-idempotent replay/conflict and citation fail-closed behavior. The provenance mapping is protected by
+idempotent replay/conflict, legacy citation fail-closed behavior and verified retrieval citations. The provenance mapping is protected by
 the same append-only evaluation mutation trigger as the existing evaluation records.
 
 Skills: llm-evaluation, agent-architecture, api-openapi, fastapi-backend,
