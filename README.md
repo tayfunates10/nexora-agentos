@@ -38,7 +38,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [RAG foundation](docs/architecture/0008-rag-foundation.md), and
 [durable executor](docs/architecture/0009-durable-executor.md), and
 [observability](docs/architecture/0010-observability.md), and
-[worker service](docs/architecture/0011-worker-service.md).
+[worker service](docs/architecture/0011-worker-service.md), and
+[Kubernetes deployment](docs/architecture/0012-kubernetes-deployment.md).
 
 ## Run locally with Docker Compose
 
@@ -81,6 +82,15 @@ In another terminal, run `npm run dev`. The server-side web client defaults to
 `http://127.0.0.1:8000`; override with `NEXORA_API_URL` when required. The API reads
 process environment variables; it does not automatically load the root Compose `.env`.
 The panel still starts with an unavailable state if the API is offline.
+
+## Deploying to Kubernetes
+
+`infra/k8s` holds plain Kustomize manifests for the API, worker and web: restricted pod
+security, default-deny networking, a migration Job applied before each rollout, and
+digest-pinned images in the production overlay. No credential is committed; the Secret is
+created out of band. See [infra/k8s/README.md](infra/k8s/README.md) for the apply and
+rollback sequence and [ADR 0012](docs/architecture/0012-kubernetes-deployment.md) for the
+boundaries these manifests enforce.
 
 ## Quality checks
 

@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexora-web
+  namespace: nexora
+  labels: &labels
+    app.kubernetes.io/name: nexora-web
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: nexora
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-web
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      serviceAccountName: nexora
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        # The web image ships as the node user; the API image uses uid 10001.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: nexora-web
+      containers:
+        - name: web
+          image: nexora/web:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: NEXORA_API_URL
+              value: http://nexora-api.nexora.svc.cluster.local:8000
+            - name: NEXORA_AUTH_ISSUER
+              valueFrom: {configMapKeyRef: {name: nexora-config, key: NEXORA_AUTH_ISSUER}}
+            - name: NEXORA_AUTH_AUDIENCE
+              valueFrom: {configMapKeyRef: {name: nexora-config, key: NEXORA_AUTH_AUDIENCE}}
+            # Browser sessions and the OIDC client credential never leave the Secret.
+            - name: NEXORA_WEB_ORIGIN
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_WEB_ORIGIN}}
+            - name: NEXORA_SESSION_REDIS_URL
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_SESSION_REDIS_URL}}
+            - name: NEXORA_OIDC_CLIENT_ID
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_OIDC_CLIENT_ID}}
+            - name: NEXORA_OIDC_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_OIDC_CLIENT_SECRET}}
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: next-cache
+              mountPath: /app/apps/web/.next/cache
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}

@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nexora-migrate
+  namespace: nexora
+  labels: &labels
+    app.kubernetes.io/name: nexora-migrate
+    app.kubernetes.io/component: migrate
+    app.kubernetes.io/part-of: nexora
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: nexora
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: nexora/api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "nexora_api.migrate"]
+          env:
+            - name: NEXORA_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_DATABASE_URL}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

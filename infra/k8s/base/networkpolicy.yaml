@@ -1,0 +1,219 @@
+# Default deny, then allow exactly what each workload needs. Egress matters most
+# here: the worker is the only workload that may reach a model provider, and it
+# may not reach private address space, so a tool or model cannot turn it into a
+# proxy for internal services.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: nexora
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: nexora
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-ingress
+  namespace: nexora
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-api
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              nexora.dev/ingress: "true"
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nexora-web
+      ports:
+        - {protocol: TCP, port: 8000}
+    # Scraping is separate: /metrics is token-gated as well as network-gated.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              nexora.dev/monitoring: "true"
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-ingress
+  namespace: nexora
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-web
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              nexora.dev/ingress: "true"
+      ports:
+        - {protocol: TCP, port: 3000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-metrics-ingress
+  namespace: nexora
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-worker
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              nexora.dev/monitoring: "true"
+      ports:
+        - {protocol: TCP, port: 8001}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-to-api-egress
+  namespace: nexora
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-web
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nexora-api
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: datastore-egress
+  namespace: nexora
+spec:
+  # Replace the ipBlock with the managed PostgreSQL and Redis addresses this
+  # deployment uses, or delete it when both run in-cluster with these labels.
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, worker, web, migrate]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - {protocol: TCP, port: 5432}
+        - {protocol: TCP, port: 6379}
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - {protocol: TCP, port: 5432}
+        - {protocol: TCP, port: 6379}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: telemetry-egress
+  namespace: nexora
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, worker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              nexora.dev/monitoring: "true"
+      ports:
+        - {protocol: TCP, port: 4318}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-identity-egress
+spec:
+  # Sign-in performs OIDC discovery and the code exchange server side, so the web
+  # needs TLS egress to the identity provider. Private space stays excluded; an
+  # internal provider needs an explicit rule naming it rather than opening that up.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-web
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+      ports:
+        - {protocol: TCP, port: 443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-provider-egress
+  namespace: nexora
+spec:
+  # Only the worker calls model providers, and only over TLS to public address
+  # space. Private ranges stay excluded so a compromised tool or a model-supplied
+  # address cannot reach cluster services, cloud metadata or internal networks.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nexora-worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+      ports:
+        - {protocol: TCP, port: 443}
