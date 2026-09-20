@@ -132,3 +132,33 @@ def test_malformed_scrape_credentials_are_rejected_without_error(client):
 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
+
+
+def test_declared_objectives_are_exported_for_alert_rules(client):
+    response = client.get("/metrics", headers={"authorization": f"Bearer {TOKEN}"})
+
+    assert sample("nexora_slo_objective_ratio", slo="api_availability") == 0.999
+    assert sample("nexora_slo_objective_ratio", slo="agent_run_reliability") == 0.99
+    assert sample("nexora_slo_window_days", slo="api_availability") == 30
+    assert 'nexora_slo_objective_ratio{slo="api_availability"}' in response.text
+
+
+def test_error_budget_follows_the_objective():
+    assert metrics.API_AVAILABILITY.error_budget == pytest.approx(0.001)
+    assert metrics.AGENT_RUN_RELIABILITY.error_budget == pytest.approx(0.01)
+    assert {objective.window_days for objective in metrics.SERVICE_LEVEL_OBJECTIVES} == {30}
+
+
+@pytest.mark.parametrize(
+    "name,objective,window",
+    [
+        ("api_availability", 1.0, 30),
+        ("api_availability", 0.4, 30),
+        ("api_availability", 0.99, 0),
+        ("api_availability", 0.99, 365),
+        ("API Availability", 0.99, 30),
+    ],
+)
+def test_unmeasurable_objectives_are_rejected(name, objective, window):
+    with pytest.raises(ValueError):
+        metrics.ServiceLevelObjective(name, objective, window)

@@ -44,9 +44,18 @@ process, and the endpoint must be an operator-supplied http(s) URL. Exporter, sa
 scrape token and log level are process configuration, never workspace or model input.
 
 ## Starting SLOs
-Availability and latency of `POST /runs` and the read endpoints, agent run success rate
-by outcome, governed tool failure rate by server key, and human approval wait time.
-Dashboards and alerts are deployment work and are not part of this increment.
+Two user-facing targets are declared in code before any dashboard exists, over a rolling
+30-day window: API availability at 99.9% of eligible requests served without a platform
+5xx, and agent run reliability at 99% of eligible runs reaching a successful terminal
+state without a platform failure. They are exported as `nexora_slo_objective_ratio` and
+`nexora_slo_window_days`, so alert rules read the stated goal instead of hardcoding a
+number, and the error budget follows from the objective rather than a second constant.
+
+These are initial engineering objectives; production traffic and an error-budget policy
+must precede any contractual guarantee. The supporting signals are latency of `POST /runs`
+and the read endpoints, run outcome, governed tool failure rate by server key, and human
+approval wait time. Dashboards and alert tuning are deployment work and are not part of
+this increment.
 
 ## Boundaries
 Metrics are per-process, so each API or worker replica is scraped separately; the worker

@@ -223,6 +223,12 @@ Exposed series include `nexora_http_requests_total`,
 `nexora_retrieval_queries_total`, `nexora_approval_wait_seconds`,
 `nexora_queue_depth` and `nexora_outbox_published_total`.
 
+Two user-facing objectives are declared in code and exported alongside them, so alert
+rules read the stated goal rather than a hardcoded number: API availability at 99.9% and
+agent run reliability at 99%, both over a rolling 30-day window
+(`nexora_slo_objective_ratio`, `nexora_slo_window_days`). They are initial engineering
+targets, not contractual guarantees.
+
 Metric labels stay bounded deliberately: workspace, user, run, approval and tool names
 are tenant data and remain on spans, while metrics carry only HTTP method, matched route
 template, status, outcome, provider, MCP server key, token kind and approval decision.

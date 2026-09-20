@@ -1,4 +1,5 @@
-"""Prometheus instruments for API, worker, model, retrieval and tool activity.
+"""Service level objectives and Prometheus instruments for API, worker, model,
+retrieval and tool activity.
 
 Label values stay bounded on purpose. Tenant, user, run and workspace identifiers are
 high-cardinality and belong on spans, never on metrics. Operator-controlled values
@@ -6,6 +7,7 @@ high-cardinality and belong on spans, never on metrics. Operator-controlled valu
 """
 
 import re
+from dataclasses import dataclass
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -32,6 +34,47 @@ _LATENCY_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
 _RUN_BUCKETS = (0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0)
 _WAIT_BUCKETS = (1.0, 5.0, 30.0, 60.0, 300.0, 900.0, 3600.0, 21600.0, 86400.0)
 
+
+@dataclass(frozen=True)
+class ServiceLevelObjective:
+    """A user-facing target, declared before dashboards so alerts measure a stated goal."""
+
+    name: str
+    objective: float
+    window_days: int
+
+    def __post_init__(self):
+        if not _LABEL.fullmatch(self.name):
+            raise ValueError("slo name must be a bounded label value")
+        if not 0.5 <= self.objective < 1.0:
+            raise ValueError("objective must be at least 0.5 and below 1.0")
+        if not 1 <= self.window_days <= 90:
+            raise ValueError("window_days must be between 1 and 90")
+
+    @property
+    def error_budget(self) -> float:
+        return 1.0 - self.objective
+
+
+# Initial engineering targets. Production traffic and an error-budget policy must come
+# before any of these becomes a contractual guarantee.
+API_AVAILABILITY = ServiceLevelObjective("api_availability", 0.999, 30)
+AGENT_RUN_RELIABILITY = ServiceLevelObjective("agent_run_reliability", 0.99, 30)
+SERVICE_LEVEL_OBJECTIVES = (API_AVAILABILITY, AGENT_RUN_RELIABILITY)
+
+
+slo_objective_ratio = Gauge(
+    "nexora_slo_objective_ratio",
+    "Declared service level objective as a success ratio.",
+    ("slo",),
+    registry=REGISTRY,
+)
+slo_window_days = Gauge(
+    "nexora_slo_window_days",
+    "Rolling evaluation window of a declared service level objective.",
+    ("slo",),
+    registry=REGISTRY,
+)
 http_requests_total = Counter(
     "nexora_http_requests_total",
     "HTTP requests served by the API.",
@@ -195,3 +238,13 @@ def observe_approval(decision: str, waited_seconds: float | None) -> None:
 
 def render() -> tuple[bytes, str]:
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
+
+
+def _publish_objectives() -> None:
+    """Export the targets so alert rules read them instead of hardcoding a number."""
+    for objective in SERVICE_LEVEL_OBJECTIVES:
+        slo_objective_ratio.labels(objective.name).set(objective.objective)
+        slo_window_days.labels(objective.name).set(objective.window_days)
+
+
+_publish_objectives()
