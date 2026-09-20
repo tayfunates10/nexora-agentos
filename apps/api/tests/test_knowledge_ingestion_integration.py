@@ -359,3 +359,58 @@ def test_lost_ingestion_lease_rolls_back_source_write(keys, auth_settings):
     assert source_count == 0
     client.__exit__(None, None, None)
 
+def test_knowledge_endpoints_reject_cross_tenant_access(keys, auth_settings):
+    migrate(auth_settings)
+    client, headers, _workspace_id, _owner, admin, _member, _member2 = setup_workspace(
+        keys, auth_settings, "knowledge-tenant-a"
+    )
+    other_owner = "knowledge-tenant-b-owner-" + str(uuid4())
+    other_workspace = client.post(
+        "/api/v1/workspaces",
+        json={"name": "Other knowledge workspace"},
+        headers=headers(other_owner),
+    )
+    assert other_workspace.status_code in (200, 201), other_workspace.text
+    other_workspace_id = other_workspace.json()["id"]
+    other_base = f"/api/v1/workspaces/{other_workspace_id}/knowledge"
+
+    created = client.post(
+        other_base + "/sources",
+        json={
+            "source_key": "private-handbook",
+            "version": "v1",
+            "title": "Private handbook",
+            "text": "Tenant B material.",
+        },
+        headers=headers(other_owner, "knowledge-tenant-b-ingest"),
+    )
+    assert created.status_code == 202, created.text
+    job_id = created.json()["id"]
+
+    assert client.get(other_base + "/sources", headers=headers(admin)).status_code == 403
+    assert (
+        client.get(other_base + "/ingestions/" + job_id, headers=headers(admin)).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            other_base + "/sources",
+            json={
+                "source_key": "cross-tenant-write",
+                "version": "v1",
+                "title": "Denied",
+                "text": "Must not be queued.",
+            },
+            headers=headers(admin, "knowledge-cross-tenant-write"),
+        ).status_code
+        == 403
+    )
+    assert (
+        client.delete(
+            other_base + "/sources/private-handbook",
+            headers=headers(admin),
+        ).status_code
+        == 403
+    )
+    client.__exit__(None, None, None)
+
