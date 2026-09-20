@@ -746,8 +746,7 @@ class RagRepository:
                                CROSS JOIN lexical_query
                                WHERE c.workspace_id=%s
                                  AND s.is_current
-                                 AND c.embedding_model=%s
-                                 AND c.embedding_dimensions=%s
+                                 AND {model_filter}
                                  AND lexical_query.query <> ''::tsquery
                                  AND to_tsvector('simple', c.content) @@ lexical_query.query
                                  AND (
