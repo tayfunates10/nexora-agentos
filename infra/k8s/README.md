@@ -32,6 +32,20 @@ Then edit, in `base/configmap.yaml`, the issuer and audience, and the worker's m
 profiles — the workspace IDs, provider and model this deployment allows. A run can
 never name anything the profiles do not list.
 
+If the worker runtime config declares remote MCP servers, put their bearer tokens in the
+optional `nexora-mcp-secrets` Secret under the exact environment-variable names referenced
+by `bearer_token_env`. The base deployment never contains those values and starts normally
+when no MCP server is configured:
+
+```bash
+kubectl create secret generic nexora-mcp-secrets -n nexora \
+  --from-literal=NEXORA_MCP_OPS_TOKEN='<short-lived server token>'
+```
+
+Remote MCP endpoints are operator configuration, not workspace data. The built-in transport
+accepts HTTPS on port 443 only; the worker NetworkPolicy additionally excludes private,
+loopback, link-local and carrier-grade NAT ranges.
+
 ## Deploying a release
 
 Migrations run first and are awaited, so no pod starts against a schema it has not
