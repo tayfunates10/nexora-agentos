@@ -25,13 +25,15 @@ Streams consumer groups, durable job receipts, leases, fencing, bounded retries,
 and crash recovery. Tool governance now adds a typed MCP tool registry, default-deny policy
 evaluation, idempotent call records and durable human approvals. Provider routing now has a
 normalized adapter contract plus an OpenAI Responses API adapter with fixed egress, normalized
-errors/streaming and cancellation. A production model executor and production MCP transport
-adapter are not enabled yet.
+errors/streaming and cancellation. The RAG foundation now adds versioned tenant-scoped sources,
+ACL-filtered pgvector retrieval, deterministic chunking and citation provenance. A production
+model executor and production MCP transport adapter are not enabled yet.
 See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [agent run architecture](docs/architecture/0004-agent-runs-outbox.md),
 [worker architecture](docs/architecture/0005-worker-state-machine.md), and
 [MCP tool governance](docs/architecture/0006-mcp-tool-governance.md), and
-[OpenAI provider adapter](docs/architecture/0007-openai-responses-adapter.md).
+[OpenAI provider adapter](docs/architecture/0007-openai-responses-adapter.md), and
+[RAG foundation](docs/architecture/0008-rag-foundation.md).
 
 ## Run locally with Docker Compose
 
