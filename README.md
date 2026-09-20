@@ -64,7 +64,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [spend governance](docs/architecture/0025-spend-governance.md), and
 [spend console](docs/architecture/0026-spend-console.md), and
 [spend alerts](docs/architecture/0027-spend-alerts.md), and
-[API rate limiting](docs/architecture/0029-api-rate-limiting.md).
+[API rate limiting](docs/architecture/0029-api-rate-limiting.md), and
+[OIDC JWKS rotation](docs/architecture/0030-oidc-jwks-rotation.md).
 
 ## Run locally with Docker Compose
 
@@ -144,13 +145,15 @@ The CI workflow also runs this test against service containers.
 
 See [identity architecture](docs/architecture/0002-identity-workspaces.md) for boundaries
 and known limitations. The API validates RS256 access tokens from a configured issuer.
-Set `NEXORA_AUTH_ISSUER`, `NEXORA_AUTH_AUDIENCE`, and `NEXORA_AUTH_PUBLIC_KEY` in the
-API process environment. The public key must contain real PEM newlines; it is the
-verification key from your identity provider, never a private signing key. For Compose,
-these settings are forwarded from the shell or `.env` (which supports quoted multiline
-values). Use a dedicated audience for Nexora user access tokens, distinct from ID tokens
-and machine/service credentials. Without this configuration authenticated endpoints
-fail closed. Health endpoints remain public.
+Set `NEXORA_AUTH_ISSUER` and `NEXORA_AUTH_AUDIENCE`. By default the API retrieves the
+issuer's OIDC discovery document, caches its JWKS signing keys, and refreshes on an unseen
+`kid` so normal provider key rotation needs no restart. A discovered cross-origin
+`jwks_uri` is refused unless the operator explicitly sets `NEXORA_AUTH_JWKS_URL`.
+`NEXORA_AUTH_PUBLIC_KEY` remains available only when a deployment deliberately wants to
+pin one RSA public PEM. Token-supplied key URLs are never followed. Use a dedicated audience
+for Nexora user access tokens, distinct from ID tokens and machine/service credentials.
+Without issuer/audience configuration authenticated endpoints fail closed. Health endpoints
+remain public.
 
 Compose runs a one-shot migration service before the API. For a non-Docker setup:
 
@@ -175,9 +178,9 @@ subject with `PUT /api/v1/workspaces/{id}/members`. Admins can rename a workspac
 members can only read. The initial owner cannot be demoted, and assigning a second
 owner is blocked. This endpoint changes database membership; it does not send invitations.
 The web panel includes browser sign-in and workspace management (setup below).
-Authenticated API rate limiting is now shared across replicas through Redis and enabled by the
-repository deployment configs. Automatic key rotation and production database role separation
-remain deployment work before public exposure.
+Authenticated API rate limiting is shared across replicas through Redis, and API bearer
+verification now rotates provider JWKS signing keys automatically. Production database role
+separation remains deployment work before public exposure.
 
 ## Agent definitions, durable runs and worker orchestration
 
@@ -550,8 +553,10 @@ sign-in is unavailable and protected pages redirect there.
    `audience` parameter; providers that use audience mappers must configure them accordingly.
 4. Set `NEXORA_WEB_ORIGIN`, `NEXORA_AUTH_ISSUER`, `NEXORA_AUTH_AUDIENCE`,
    `NEXORA_OIDC_CLIENT_ID`, and `NEXORA_OIDC_CLIENT_SECRET` privately in your environment.
-   Configure the API's `NEXORA_AUTH_PUBLIC_KEY` with the provider's verification PEM as
-   described above. Do not paste secrets into source files or commit `.env`.
+   The API normally discovers and rotates the provider's JWKS automatically; only set
+   `NEXORA_AUTH_JWKS_URL` for an intentionally cross-origin key endpoint or
+   `NEXORA_AUTH_PUBLIC_KEY` when deliberately pinning one PEM. Do not paste secrets into
+   source files or commit `.env`.
 5. Compose forwards these settings and supplies the web session Redis URL. Outside Compose,
    set `NEXORA_SESSION_REDIS_URL=redis://127.0.0.1:6379/1` for the web process as well.
 6. Restart services and visit `/login`. Create a workspace, rename it, or assign admin/member
