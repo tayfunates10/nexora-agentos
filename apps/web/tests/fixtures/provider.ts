@@ -78,6 +78,8 @@ export async function startProvider() {
           prompt_version: null, error_code: null, quality_milli: null,
           baseline_quality_milli: null, quality_delta_milli: null, regression_count: 0,
           improvement_count: 0, input_tokens: 0, output_tokens: 0, latency_ms: 0,
+          model_cost_usd_picos: "0", model_cost_call_count: 0,
+          model_cost_pricing_complete: true, model_cost_pricing_versions: [],
           created_at: "2026-09-20T14:00:00Z", finished_at: null, results: [],
         };
         evalJudgeRuns.set(id, judge);
