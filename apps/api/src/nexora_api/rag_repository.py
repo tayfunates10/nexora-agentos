@@ -9,12 +9,14 @@ from uuid import UUID, uuid4
 
 import psycopg
 from fastapi import HTTPException
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.metrics import observe_spend_denied
+from nexora_api.rag_ann import HNSW_MAX_EF_SEARCH, hnsw_index_name, validate_ann_target
 from nexora_api.rag import (
     AccessScope,
     AclIdentity,
@@ -584,6 +586,49 @@ class RagRepository:
                 )
             return count
 
+    async def authorize_ann_index(
+        self,
+        embedding_model: str,
+        dimensions: int,
+    ) -> None:
+        async with self.connection() as connection:
+            await self._verify_hnsw_index(connection, embedding_model, dimensions)
+
+    @staticmethod
+    async def _verify_hnsw_index(connection, embedding_model: str, dimensions: int) -> str:
+        model, dimensions = validate_ann_target(embedding_model, dimensions)
+        index_name = hnsw_index_name(model, dimensions)
+        result = await connection.execute(
+            """SELECT am.amname,i.indisvalid,i.indisready,pg_get_indexdef(i.indexrelid)
+               FROM pg_class idx
+               JOIN pg_index i ON i.indexrelid=idx.oid
+               JOIN pg_class tbl ON tbl.oid=i.indrelid
+               JOIN pg_namespace n ON n.oid=tbl.relnamespace
+               JOIN pg_am am ON am.oid=idx.relam
+               WHERE n.nspname='public' AND tbl.relname='rag_chunks'
+                 AND idx.relname=%s""",
+            (index_name,),
+        )
+        row = await result.fetchone()
+        if row is None:
+            raise RuntimeError(f"required RAG HNSW index is missing: {index_name}")
+        if row["amname"] != "hnsw" or not row["indisvalid"] or not row["indisready"]:
+            raise RuntimeError(f"required RAG HNSW index is not usable: {index_name}")
+        definition = row["pg_get_indexdef"]
+        if f"vector({dimensions})" not in definition or "vector_cosine_ops" not in definition:
+            raise RuntimeError(f"required RAG HNSW index has an unexpected definition: {index_name}")
+        return index_name
+
+    @staticmethod
+    def _distance_expression(dimensions: int, *, ann: bool):
+        if not ann:
+            return sql.SQL("c.embedding <=> %s::vector")
+        validate_ann_target("validated-model", dimensions)
+        return sql.SQL("c.embedding::vector({}) <=> %s::vector({})").format(
+            sql.Literal(dimensions),
+            sql.Literal(dimensions),
+        )
+
     async def retrieve(
         self,
         principal: Principal,
@@ -593,6 +638,8 @@ class RagRepository:
         query_embedding: tuple[float, ...],
         query_text: str | None = None,
         limit: int = 8,
+        ann_dimensions: int | None = None,
+        hnsw_ef_search: int | None = None,
     ) -> tuple[RetrievedChunk, ...]:
         if not 1 <= limit <= 50:
             raise ValueError("limit must be between 1 and 50")
@@ -601,11 +648,25 @@ class RagRepository:
 
         vector_literal = self._vector_literal(query_embedding)
         dimensions = len(query_embedding)
+        ann = ann_dimensions is not None
+        if ann:
+            _, ann_dimensions = validate_ann_target(embedding_model, ann_dimensions)
+            if ann_dimensions != dimensions:
+                raise ValueError("ANN dimensions must match the query embedding dimensions")
+            ef_search = 100 if hnsw_ef_search is None else hnsw_ef_search
+            if not 1 <= ef_search <= HNSW_MAX_EF_SEARCH:
+                raise ValueError(f"hnsw_ef_search must be between 1 and {HNSW_MAX_EF_SEARCH}")
+        else:
+            if hnsw_ef_search is not None:
+                raise ValueError("hnsw_ef_search requires ann_dimensions")
+            ef_search = None
+
         lexical_query = query_text.strip() if query_text is not None else ""
         if len(lexical_query) > HYBRID_QUERY_MAX_CHARS:
             raise ValueError(
                 f"hybrid retrieval query must be at most {HYBRID_QUERY_MAX_CHARS} characters"
             )
+        distance = self._distance_expression(dimensions, ann=ann)
 
         async with self.connection() as connection:
             await self.workspaces.scoped(
@@ -614,20 +675,26 @@ class RagRepository:
                 workspace_id,
                 Permission.READ,
             )
+            if ann:
+                await self._verify_hnsw_index(connection, embedding_model, dimensions)
+                await connection.execute(
+                    "SELECT set_config('hnsw.ef_search', %s, true)",
+                    (str(ef_search),),
+                )
+
             if lexical_query:
                 candidate_limit = min(
                     HYBRID_MAX_CANDIDATES,
                     max(limit, limit * HYBRID_CANDIDATE_MULTIPLIER),
                 )
-                result = await connection.execute(
+                query = sql.SQL(
                     """WITH lexical_query AS (
                            SELECT plainto_tsquery('simple', %s) AS query
                        ),
                        vector_candidates AS (
                            SELECT c.id,
                                   row_number() OVER (
-                                      ORDER BY c.embedding <=> %s::vector,
-                                               c.source_id,c.chunk_index
+                                      ORDER BY {distance},c.source_id,c.chunk_index
                                   ) AS vector_rank
                            FROM rag_chunks c
                            JOIN rag_sources s
@@ -646,7 +713,7 @@ class RagRepository:
                                        AND a.subject=%s
                                  )
                              )
-                           ORDER BY c.embedding <=> %s::vector,c.source_id,c.chunk_index
+                           ORDER BY {distance},c.source_id,c.chunk_index
                            LIMIT %s
                        ),
                        lexical_candidates AS (
@@ -700,7 +767,10 @@ class RagRepository:
                        JOIN rag_sources s
                          ON s.id=c.source_id AND s.workspace_id=c.workspace_id
                        ORDER BY score DESC,c.source_id,c.chunk_index
-                       LIMIT %s""",
+                       LIMIT %s"""
+                ).format(distance=distance)
+                result = await connection.execute(
+                    query,
                     (
                         lexical_query,
                         vector_literal,
@@ -723,10 +793,10 @@ class RagRepository:
                     ),
                 )
             else:
-                result = await connection.execute(
+                query = sql.SQL(
                     """SELECT c.id,c.source_id,s.source_key,c.source_version,s.title,
                               c.chunk_index,c.start_offset,c.end_offset,c.content,c.metadata,
-                              1 - (c.embedding <=> %s::vector) AS score
+                              1 - ({distance}) AS score
                        FROM rag_chunks c
                        JOIN rag_sources s
                          ON s.id=c.source_id AND s.workspace_id=c.workspace_id
@@ -744,8 +814,11 @@ class RagRepository:
                                    AND a.subject=%s
                              )
                          )
-                       ORDER BY c.embedding <=> %s::vector,c.source_id,c.chunk_index
-                       LIMIT %s""",
+                       ORDER BY {distance},c.source_id,c.chunk_index
+                       LIMIT %s"""
+                ).format(distance=distance)
+                result = await connection.execute(
+                    query,
                     (
                         vector_literal,
                         workspace_id,
