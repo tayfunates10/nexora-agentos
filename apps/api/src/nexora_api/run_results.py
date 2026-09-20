@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from nexora_api.agents import AgentRunResult, RecordedModelStep
+from nexora_api.model_costs import ModelCostSummary
 
 
 class _Usage(BaseModel):
@@ -20,7 +21,11 @@ class _Response(BaseModel):
     finish_reason: str
 
 
-def summarize_result(run, rows) -> AgentRunResult:
+def summarize_result(
+    run,
+    rows,
+    cost_summary: ModelCostSummary | None = None,
+) -> AgentRunResult:
     """Expose final text only after successful execution; never expose call arguments."""
     if run["status"] not in ("succeeded", "failed", "cancelled"):
         raise ValueError("run_result_not_ready")
@@ -64,6 +69,18 @@ def summarize_result(run, rows) -> AgentRunResult:
         failure_code=run["failure_code"],
         recorded_input_tokens=sum(step.input_tokens for step in steps),
         recorded_output_tokens=sum(step.output_tokens for step in steps),
+        model_cost_usd_picos=(
+            str(cost_summary.total_usd_picos)
+            if cost_summary and cost_summary.total_usd_picos is not None
+            else None
+        ),
+        model_cost_call_count=cost_summary.call_count if cost_summary else 0,
+        model_cost_pricing_complete=(
+            cost_summary.pricing_complete if cost_summary else False
+        ),
+        model_cost_pricing_versions=(
+            list(cost_summary.pricing_versions) if cost_summary else []
+        ),
         selected_tools=sorted(selections),
         model_steps=steps,
     )
