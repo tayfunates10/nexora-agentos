@@ -36,7 +36,8 @@ for task-completion, relevance and clarity scoring while keeping probabilistic q
 deterministic pass/fail.
 Provider spend is now metered per workspace: operator-declared model prices are converted to an
 append-only cost ledger inside the transaction that commits each model step or judge case, and
-per-workspace monthly budgets are enforced before provider egress.
+per-workspace monthly budgets are enforced before provider egress. The web console reports that
+spend per period and lets owners and admins set the cap.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
@@ -58,7 +59,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [durable evaluations](docs/architecture/0017-durable-evaluations.md), and
 [LLM judge evaluations](docs/architecture/0022-llm-judge-evaluations.md), and
 [judge observability](docs/architecture/0024-evaluation-judge-observability.md), and
-[spend governance](docs/architecture/0025-spend-governance.md).
+[spend governance](docs/architecture/0025-spend-governance.md), and
+[spend console](docs/architecture/0026-spend-console.md).
 
 ## Run locally with Docker Compose
 
@@ -405,6 +407,14 @@ per-case quality delta is stored. Judge results never alter deterministic pass/f
 [ADR 0023](docs/architecture/0023-evaluation-judge-console.md).
 
 ## Spend accounting and budgets
+
+The workspace panel links to **Spend and budget**. Members can read the current UTC month: consumed
+and remaining amounts, the budget state, the per-category breakdown and the priced-call ledger with
+cursor pagination and a category filter. Owners and admins can also set the monthly limit and
+enforcement mode through a CSRF-protected form; the browser never receives the API token. Amounts
+are converted between units and exact micros with integer arithmetic, and an amount that cannot be
+represented exactly is refused by both the input pattern and the server route. See
+[ADR 0026](docs/architecture/0026-spend-console.md).
 
 Provider spend is metered per workspace. Operators declare a price for every model candidate in the
 worker runtime configuration (`input_micros_per_million_tokens` and
