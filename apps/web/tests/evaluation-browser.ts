@@ -83,6 +83,10 @@ export async function checkEvaluations(page: Page, provider: Awaited<ReturnType<
     input_tokens: 48,
     output_tokens: 16,
     latency_ms: 123,
+    model_cost_usd_picos: "80000000",
+    model_cost_call_count: 4,
+    model_cost_pricing_complete: true,
+    model_cost_pricing_versions: ["judge-pricing-v1"],
     finished_at: "2026-09-20T14:01:00Z",
     results: [
       {
@@ -107,6 +111,8 @@ export async function checkEvaluations(page: Page, provider: Awaited<ReturnType<
   await expect(page.locator(".judge-panel")).toContainText("Judge succeeded");
   await expect(page.locator(".judge-panel")).toContainText("87.5%");
   await expect(page.locator(".judge-panel")).toContainText("+12.5 pts");
+  await expect(page.locator(".judge-panel")).toContainText("Model cost: $0.00008");
+  await expect(page.locator(".judge-panel")).toContainText("pricing: judge-pricing-v1");
   await expect(page.getByText("Strong grounded answer.", { exact: true })).toBeVisible();
 
   for (const width of [1440, 390]) {
