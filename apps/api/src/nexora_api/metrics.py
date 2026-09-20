@@ -6,8 +6,10 @@ high-cardinality and belong on spans, never on metrics. Operator-controlled valu
 (provider, server_key) are length- and charset-bounded; anything else becomes "other".
 """
 
+import hmac
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -238,6 +240,19 @@ def observe_approval(decision: str, waited_seconds: float | None) -> None:
 
 def render() -> tuple[bytes, str]:
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
+
+
+def authorize_scrape(presented: str, token) -> Literal["disabled", "unauthorized", "allowed"]:
+    """Gate the scrape endpoint. No configured token means the endpoint does not exist.
+
+    Credentials are compared as bytes so a malformed header fails instead of raising.
+    """
+    if token is None:
+        return "disabled"
+    expected = f"Bearer {token.get_secret_value()}".encode()
+    if not hmac.compare_digest(presented.encode("utf-8", "replace"), expected):
+        return "unauthorized"
+    return "allowed"
 
 
 def _publish_objectives() -> None:

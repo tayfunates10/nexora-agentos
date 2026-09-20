@@ -1,4 +1,3 @@
-import hmac
 import re
 import time
 from contextlib import asynccontextmanager
@@ -146,13 +145,12 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
     @app.get(METRICS_PATH, include_in_schema=False)
     async def scrape(request: Request):
         # Operational data is not public: no token means the endpoint does not exist.
-        token = settings.metrics_token
-        if token is None:
+        decision = metrics.authorize_scrape(
+            request.headers.get("authorization", ""), settings.metrics_token
+        )
+        if decision == "disabled":
             return error(request, 404, "not_found", "Request failed")
-        # Compare bytes: a non-ASCII header must fail, not raise.
-        presented = request.headers.get("authorization", "").encode("utf-8", "replace")
-        expected = f"Bearer {token.get_secret_value()}".encode()
-        if not hmac.compare_digest(presented, expected):
+        if decision == "unauthorized":
             response = error(request, 401, "unauthorized", "Request failed")
             response.headers["www-authenticate"] = "Bearer"
             return response

@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     otel_export_timeout_seconds: float = Field(default=5.0, gt=0.0, le=30.0)
     metrics_token: SecretStr | None = None
     log_level: str = "INFO"
+    # Worker process settings. Model profiles come from an operator-mounted file and
+    # provider credentials from the environment; a run can influence neither.
+    worker_runtime_config: str | None = None
+    worker_lease_seconds: int = Field(default=30, ge=3, le=300)
+    worker_idle_sleep_seconds: float = Field(default=0.5, gt=0.0, le=5.0)
+    worker_shutdown_grace_seconds: float = Field(default=25.0, ge=1.0, le=300.0)
+    worker_admin_port: int = Field(default=8001, ge=1, le=65535)
+    openai_api_key: SecretStr | None = None
 
     @field_validator("otel_exporter_endpoint")
     @classmethod

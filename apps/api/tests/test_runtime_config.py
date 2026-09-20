@@ -1,0 +1,166 @@
+import json
+
+import pytest
+
+from nexora_api.config import Settings
+from nexora_api.model_routing import ModelCapability
+from nexora_api.runtime_config import RuntimeConfigError, load_runtime_config
+from nexora_api.worker_service import build_provider_adapters, load_worker_config
+
+WORKSPACE = "11111111-1111-1111-1111-111111111111"
+
+
+def document(**overrides):
+    base = {
+        "model_candidates": [
+            {
+                "provider": "openai",
+                "model": "operator-model",
+                "capabilities": ["text", "tools"],
+                "quality_tier": 2,
+                "estimated_cost_per_million_tokens": 5,
+            }
+        ],
+        "profiles": {
+            "default": {
+                "allowed_workspaces": [WORKSPACE],
+                "allowed_providers": ["openai"],
+                "allowed_tools": ["lookup"],
+                "max_steps": 4,
+            }
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def write(tmp_path, content):
+    path = tmp_path / "runtime.json"
+    path.write_text(content if isinstance(content, str) else json.dumps(content))
+    return path
+
+
+def test_operator_configuration_builds_routing_and_profiles(tmp_path):
+    config = load_runtime_config(write(tmp_path, document()))
+
+    candidate = config.candidates()[0]
+    profile = config.execution_profiles()["default"]
+
+    assert candidate.provider == "openai"
+    assert candidate.capabilities == frozenset({ModelCapability.TEXT, ModelCapability.TOOLS})
+    assert profile.allowed_tools == frozenset({"lookup"})
+    assert profile.max_steps == 4
+    assert config.providers == frozenset({"openai"})
+    assert config.model_capabilities("openai")["operator-model"] == candidate.capabilities
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"profiles": {}},
+        {"model_candidates": []},
+        {"profiles": {"default": {"allowed_workspaces": [], "allowed_providers": ["openai"]}}},
+        {
+            "profiles": {
+                "default": {"allowed_workspaces": [WORKSPACE], "allowed_providers": ["anthropic"]}
+            }
+        },
+        {
+            "profiles": {
+                "default": {
+                    "allowed_workspaces": [WORKSPACE],
+                    "allowed_providers": ["openai"],
+                    "allowed_tools": ["Not A Tool"],
+                }
+            }
+        },
+        {
+            "profiles": {
+                "default": {
+                    "allowed_workspaces": ["not-a-uuid"],
+                    "allowed_providers": ["openai"],
+                }
+            }
+        },
+        {
+            "profiles": {
+                "default": {
+                    "allowed_workspaces": [WORKSPACE],
+                    "allowed_providers": ["openai"],
+                    "max_steps": 99,
+                }
+            }
+        },
+        {"model_candidates": [{"provider": "openai", "model": "m", "capabilities": []}]},
+    ],
+)
+def test_unusable_configuration_is_refused(tmp_path, mutation):
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(write(tmp_path, document(**mutation)))
+
+
+def test_credentials_cannot_be_declared_in_the_config_file(tmp_path):
+    # Secrets belong to the process environment; an unknown key must not be ignored.
+    invalid = document()
+    invalid["api_key"] = "sk-should-never-be-here"
+
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(write(tmp_path, invalid))
+
+
+def test_duplicate_candidates_are_refused(tmp_path):
+    invalid = document()
+    invalid["model_candidates"] = invalid["model_candidates"] * 2
+
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(write(tmp_path, invalid))
+
+
+@pytest.mark.parametrize("content", ["", "[]", "{", "not json"])
+def test_malformed_files_are_refused(tmp_path, content):
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(write(tmp_path, content))
+
+
+def test_missing_file_is_refused(tmp_path):
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(tmp_path / "absent.json")
+
+
+def test_worker_without_configured_profiles_refuses_to_start():
+    with pytest.raises(RuntimeConfigError, match="NEXORA_WORKER_RUNTIME_CONFIG"):
+        load_worker_config(Settings(worker_runtime_config=None))
+
+
+def test_provider_adapter_requires_its_credential(tmp_path):
+    config = load_runtime_config(write(tmp_path, document()))
+
+    with pytest.raises(RuntimeConfigError, match="NEXORA_OPENAI_API_KEY"):
+        build_provider_adapters(Settings(openai_api_key=None), config)
+
+    adapters = build_provider_adapters(Settings(openai_api_key="sk-operator-test"), config)
+
+    assert adapters["openai"].name == "openai"
+    assert adapters["openai"].capabilities("operator-model")
+
+
+def test_unsupported_provider_has_no_adapter(tmp_path):
+    config = load_runtime_config(
+        write(
+            tmp_path,
+            document(
+                model_candidates=[
+                    {"provider": "acme", "model": "m-1", "capabilities": ["text"]},
+                ],
+                profiles={
+                    "default": {
+                        "allowed_workspaces": [WORKSPACE],
+                        "allowed_providers": ["acme"],
+                    }
+                },
+            ),
+        )
+    )
+
+    with pytest.raises(RuntimeConfigError, match="no adapter is available"):
+        build_provider_adapters(Settings(), config)

@@ -58,6 +58,36 @@ services:
       interval: 15s
       timeout: 6s
       retries: 3
+  worker:
+    # Opt-in: `docker compose --profile worker up`. Without operator profiles and a
+    # provider credential the process refuses to start, so it is never on by default.
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "nexora_api.worker_main"]
+    environment:
+      NEXORA_DATABASE_URL: postgresql://nexora:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/nexora
+      NEXORA_REDIS_URL: redis://redis:6379/0
+      NEXORA_WORKER_RUNTIME_CONFIG: /etc/nexora/runtime.json
+      NEXORA_OPENAI_API_KEY: ${NEXORA_OPENAI_API_KEY:-}
+      NEXORA_OTEL_EXPORTER_ENDPOINT: ${NEXORA_OTEL_EXPORTER_ENDPOINT:-}
+      NEXORA_OTEL_SAMPLE_RATIO: ${NEXORA_OTEL_SAMPLE_RATIO:-1.0}
+      NEXORA_METRICS_TOKEN: ${NEXORA_METRICS_TOKEN:-}
+      NEXORA_LOG_LEVEL: ${NEXORA_LOG_LEVEL:-INFO}
+    volumes:
+      - ${NEXORA_WORKER_RUNTIME_CONFIG:-./infra/worker/runtime.example.json}:/etc/nexora/runtime.json:ro
+    ports: ["127.0.0.1:8001:8001"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/v1/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
   web:
     build:
       context: .

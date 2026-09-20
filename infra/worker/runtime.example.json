@@ -1,0 +1,23 @@
+{
+  "model_candidates": [
+    {
+      "provider": "openai",
+      "model": "replace-with-a-model-your-account-can-call",
+      "capabilities": ["text", "tools"],
+      "quality_tier": 2,
+      "estimated_cost_per_million_tokens": 0
+    }
+  ],
+  "profiles": {
+    "default": {
+      "allowed_workspaces": ["00000000-0000-0000-0000-000000000000"],
+      "allowed_providers": ["openai"],
+      "allowed_tools": [],
+      "max_steps": 8,
+      "max_output_tokens": 2048,
+      "max_total_tokens": 32000,
+      "timeout_seconds": 60,
+      "max_context_chars": 100000
+    }
+  }
+}
