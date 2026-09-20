@@ -126,6 +126,7 @@ class RetrievalConfig(BaseModel):
     provider: Literal["openai"] = "openai"
     model: str = Field(min_length=1, max_length=128)
     dimensions: int = Field(default=1536, ge=1, le=4096)
+    strategy: Literal["vector", "hybrid"] = "hybrid"
     limit: int = Field(default=8, ge=1, le=50)
     batch_size: int = Field(default=128, ge=1, le=256)
     timeout_seconds: float = Field(default=15.0, gt=0, le=120)
