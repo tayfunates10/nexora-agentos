@@ -253,6 +253,17 @@ class DurableAgentExecutor:
                 response.usage.input_tokens,
                 response.usage.output_tokens,
             )
+            try:
+                await self.store.record_cost(
+                    context,
+                    step,
+                    decision,
+                    response,
+                    request.request_id,
+                )
+            except Exception as exc:
+                record_error(active, "cost_accounting_unavailable")
+                raise RetryableExecutionError("cost_accounting_unavailable") from exc
             return response
 
     @staticmethod
