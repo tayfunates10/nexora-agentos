@@ -94,7 +94,6 @@ def test_comparison_rejects_mismatched_cases():
         compare_result(candidate, baseline)
 
 
-
 def test_agent_run_eval_input_rejects_duplicate_case_or_run_mapping():
     run_id = "11111111-1111-1111-1111-111111111111"
     other_run_id = "22222222-2222-2222-2222-222222222222"
