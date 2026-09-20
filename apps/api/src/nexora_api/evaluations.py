@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nexora_api.auth import Principal, authenticated
 
-
 BoundedName = Annotated[str, Field(min_length=1, max_length=200)]
 
 
