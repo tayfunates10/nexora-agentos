@@ -23,6 +23,13 @@ def test_runtime_role_configuration_is_all_or_nothing():
         configured_runtime_roles("unsafe-role", "worker_role")
 
 
+def has_table_privilege(connection, role, table, privilege):
+    return connection.execute(
+        "SELECT has_table_privilege(%s,%s,%s)",
+        (role, f"public.{table}", privilege),
+    ).fetchone()[0]
+
+
 @pytest.mark.integration
 def test_runtime_roles_are_effectively_least_privilege():
     settings = Settings()
@@ -36,41 +43,32 @@ def test_runtime_roles_are_effectively_least_privilege():
             apply_runtime_grants(connection, api_role, worker_role)
 
             for role, writes in ((api_role, API_WRITES), (worker_role, WORKER_WRITES)):
-                assert connection.execute(
-                    "SELECT has_schema_privilege(%s,'public','CREATE')", (role,)
-                ).fetchone()[0] is False
-                for table in RUNTIME_TABLES:
-                    assert connection.execute(
-                        "SELECT has_table_privilege(%s,%s,'SELECT')",
-                        (role, f"public.{table}"),
-                    ).fetchone()[0] is True
-                    for privilege in ("INSERT", "UPDATE", "DELETE"):
-                        assert connection.execute(
-                            "SELECT has_table_privilege(%s,%s,%s)",
-                            (role, f"public.{table}", privilege),
-                        ).fetchone()[0] is (privilege in writes.get(table, frozenset()))
-                    for privilege in ("TRUNCATE", "REFERENCES", "TRIGGER"):
-                        assert connection.execute(
-                            "SELECT has_table_privilege(%s,%s,%s)",
-                            (role, f"public.{table}", privilege),
-                        ).fetchone()[0] is False
+                can_create = connection.execute(
+                    "SELECT has_schema_privilege(%s,'public','CREATE')",
+                    (role,),
+                ).fetchone()[0]
+                assert can_create is False
 
-            assert connection.execute(
-                "SELECT has_table_privilege(%s,'public.worker_job_receipts','INSERT')",
-                (api_role,),
-            ).fetchone()[0] is False
-            assert connection.execute(
-                "SELECT has_table_privilege(%s,'public.agent_model_steps','INSERT')",
-                (api_role,),
-            ).fetchone()[0] is False
-            assert connection.execute(
-                "SELECT has_table_privilege(%s,'public.workspaces','UPDATE')",
-                (worker_role,),
-            ).fetchone()[0] is False
-            assert connection.execute(
-                "SELECT has_table_privilege(%s,'public.eval_suites','INSERT')",
-                (worker_role,),
-            ).fetchone()[0] is False
+                for table in RUNTIME_TABLES:
+                    assert has_table_privilege(connection, role, table, "SELECT") is True
+                    for privilege in ("INSERT", "UPDATE", "DELETE"):
+                        expected = privilege in writes.get(table, frozenset())
+                        assert has_table_privilege(
+                            connection, role, table, privilege
+                        ) is expected
+                    for privilege in ("TRUNCATE", "REFERENCES", "TRIGGER"):
+                        assert has_table_privilege(
+                            connection, role, table, privilege
+                        ) is False
+
+            assert has_table_privilege(
+                connection, api_role, "worker_job_receipts", "INSERT"
+            ) is False
+            assert has_table_privilege(
+                connection, api_role, "agent_model_steps", "INSERT"
+            ) is False
+            assert has_table_privilege(connection, worker_role, "workspaces", "UPDATE") is False
+            assert has_table_privilege(connection, worker_role, "eval_suites", "INSERT") is False
         finally:
             connection.execute(f'DROP OWNED BY "{api_role}"')
             connection.execute(f'DROP OWNED BY "{worker_role}"')
