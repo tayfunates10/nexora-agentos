@@ -19,7 +19,7 @@ class McpToolAdapter(Protocol):
     ) -> Any: ...
 
 
-@dataclass(frozen=True)
+@dataclass
 class ApprovalRequired(Exception):
     tool_call_id: UUID
     approval_id: UUID
@@ -28,7 +28,7 @@ class ApprovalRequired(Exception):
         return "tool_approval_required"
 
 
-@dataclass(frozen=True)
+@dataclass
 class McpGatewayError(Exception):
     code: str
     retryable: bool
