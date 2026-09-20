@@ -97,7 +97,9 @@ class EvaluationJudgeRepository:
         baseline_quality_milli = None
         quality_delta_milli = None
         if scores:
-            quality_milli = (\n                sum(item.quality_milli for item in scores) + scored_count // 2\n            ) // scored_count
+            quality_milli = (
+                sum(item.quality_milli for item in scores) + scored_count // 2
+            ) // scored_count
             baseline_values = [
                 item.baseline_quality_milli
                 for item in scores
