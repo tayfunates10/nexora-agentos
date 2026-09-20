@@ -261,13 +261,13 @@ def observe_evaluation_judge_call(
     evaluation_judge_calls_total.labels(provider_value, target_value, outcome_value).inc()
     evaluation_judge_call_duration_seconds.labels(provider_value, target_value).observe(seconds)
     if input_tokens > 0:
-        evaluation_judge_tokens_total.labels(
-            provider_value, target_value, "input"
-        ).inc(input_tokens)
+        evaluation_judge_tokens_total.labels(provider_value, target_value, "input").inc(
+            input_tokens
+        )
     if output_tokens > 0:
-        evaluation_judge_tokens_total.labels(
-            provider_value, target_value, "output"
-        ).inc(output_tokens)
+        evaluation_judge_tokens_total.labels(provider_value, target_value, "output").inc(
+            output_tokens
+        )
 
 
 def observe_evaluation_judge_job(outcome: str) -> None:
