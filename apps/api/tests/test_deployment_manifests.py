@@ -170,7 +170,8 @@ def test_only_declared_services_have_public_tls_egress():
     assert external == {"worker-provider-egress", "identity-provider-egress"}
 
     identity = next(
-        policy for policy in by_kind("NetworkPolicy")
+        policy
+        for policy in by_kind("NetworkPolicy")
         if policy["metadata"]["name"] == "identity-provider-egress"
     )
     selector = identity["spec"]["podSelector"]["matchExpressions"][0]
