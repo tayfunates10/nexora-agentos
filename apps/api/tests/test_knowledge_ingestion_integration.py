@@ -242,16 +242,9 @@ def test_delete_cancels_queued_ingestion_and_rejects_running_delete(keys, auth_s
     )
     assert queued.status_code == 202
     queued_id = queued.json()["id"]
+    assert client.delete(base + "/sources/queued-source", headers=headers(admin)).status_code == 204
     assert (
-        client.delete(
-            base + "/sources/queued-source", headers=headers(admin)
-        ).status_code
-        == 204
-    )
-    assert (
-        client.get(
-            base + "/ingestions/" + queued_id, headers=headers(admin)
-        ).json()["status"]
+        client.get(base + "/ingestions/" + queued_id, headers=headers(admin)).json()["status"]
         == "cancelled"
     )
 
@@ -276,10 +269,7 @@ def test_delete_cancels_queued_ingestion_and_rejects_running_delete(keys, auth_s
         )
 
     assert (
-        client.delete(
-            base + "/sources/running-source", headers=headers(admin)
-        ).status_code
-        == 409
+        client.delete(base + "/sources/running-source", headers=headers(admin)).status_code == 409
     )
 
     with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
