@@ -391,8 +391,7 @@ def test_knowledge_endpoints_reject_cross_tenant_access(keys, auth_settings):
 
     assert client.get(other_base + "/sources", headers=headers(admin)).status_code == 403
     assert (
-        client.get(other_base + "/ingestions/" + job_id, headers=headers(admin)).status_code
-        == 403
+        client.get(other_base + "/ingestions/" + job_id, headers=headers(admin)).status_code == 403
     )
     assert (
         client.post(
@@ -415,4 +414,3 @@ def test_knowledge_endpoints_reject_cross_tenant_access(keys, auth_settings):
         == 403
     )
     client.__exit__(None, None, None)
-
