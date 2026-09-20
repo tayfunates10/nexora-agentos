@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from uuid import UUID, uuid4
 
@@ -6,13 +7,16 @@ import psycopg
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from psycopg import sql
 from test_auth import token
 
 from nexora_api.auth import Principal
 from nexora_api.main import create_app
 from nexora_api.migrate import migrate
 from nexora_api.rag import AccessScope, AclIdentity
+from nexora_api.rag_ann import drop_hnsw_index, ensure_hnsw_index, hnsw_index_name
 from nexora_api.rag_repository import RagRepository
+from nexora_api.retrieval_eval import RetrievalEvalCase, run_retrieval_eval
 
 pytestmark = [
     pytest.mark.integration,
@@ -348,3 +352,163 @@ def test_hybrid_retrieval_recovers_exact_identifier_without_acl_leak(keys, auth_
     assert hybrid[0].source_key == "incident-code"
     assert "restricted-incident" not in {item.source_key for item in hybrid}
     assert {item.source_key for item in hybrid} == {"semantic-guide", "incident-code"}
+
+
+def test_hnsw_retrieval_preserves_fixture_recall_and_uses_partial_index(keys, auth_settings):
+    migrate(auth_settings)
+    suffix = uuid4().hex
+    owner = "rag-ann-owner-" + suffix
+    other_owner = "rag-ann-other-" + suffix
+    issuer = auth_settings.auth_issuer or ""
+    model = "ann-eval-" + suffix
+    dimensions = 3
+
+    def headers(subject):
+        return {"Authorization": "Bearer " + token(keys, subject)}
+
+    with TestClient(create_app(settings=auth_settings)) as client:
+        workspace_id = client.post(
+            "/api/v1/workspaces",
+            json={"name": "ANN eval workspace"},
+            headers=headers(owner),
+        ).json()["id"]
+        other_workspace_id = client.post(
+            "/api/v1/workspaces",
+            json={"name": "ANN distractor workspace"},
+            headers=headers(other_owner),
+        ).json()["id"]
+
+    repository = RagRepository(auth_settings)
+    principal = Principal(issuer, owner)
+    other_principal = Principal(issuer, other_owner)
+    vectors = (
+        (1.0, 0.0, 0.0),
+        (0.95, 0.2, 0.0),
+        (0.8, 0.6, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.95, 0.2),
+        (0.0, 0.8, 0.6),
+        (0.0, 0.0, 1.0),
+        (0.2, 0.0, 0.95),
+        (0.6, 0.0, 0.8),
+    )
+
+    async def seed_and_score():
+        for index, vector in enumerate(vectors):
+            await repository.index_source(
+                principal,
+                UUID(workspace_id),
+                source_key=f"ann-source-{index}",
+                version="v1",
+                title=f"ANN source {index}",
+                text=f"Deterministic ANN evaluation source {index}.",
+                embedding_model=model,
+                embeddings=(vector,),
+                request_id=f"ann-seed-{index}",
+            )
+
+        # Same-model vectors from another tenant exercise filtered iterative HNSW scans.
+        for index in range(12):
+            await repository.index_source(
+                other_principal,
+                UUID(other_workspace_id),
+                source_key=f"distractor-{index}",
+                version="v1",
+                title=f"Distractor {index}",
+                text=f"Cross-tenant distractor {index}.",
+                embedding_model=model,
+                embeddings=(vectors[0],),
+                request_id=f"ann-distractor-{index}",
+            )
+
+        eval_cases = (
+            RetrievalEvalCase(
+                case_id="axis-x",
+                query_embedding=vectors[0],
+                expected_source_keys=frozenset({"ann-source-0"}),
+            ),
+            RetrievalEvalCase(
+                case_id="axis-y",
+                query_embedding=vectors[3],
+                expected_source_keys=frozenset({"ann-source-3"}),
+            ),
+            RetrievalEvalCase(
+                case_id="axis-z",
+                query_embedding=vectors[6],
+                expected_source_keys=frozenset({"ann-source-6"}),
+            ),
+        )
+        exact = await run_retrieval_eval(
+            repository,
+            principal,
+            UUID(workspace_id),
+            embedding_model=model,
+            cases=eval_cases,
+            k=1,
+        )
+        return eval_cases, exact
+
+    eval_cases, exact = asyncio.run(seed_and_score())
+    index_name = hnsw_index_name(model, dimensions)
+
+    try:
+        with psycopg.connect(
+            auth_settings.database_url.get_secret_value(),
+            autocommit=True,
+        ) as connection:
+            assert (
+                ensure_hnsw_index(
+                    connection,
+                    embedding_model=model,
+                    dimensions=dimensions,
+                )
+                == index_name
+            )
+            connection.execute("SET enable_seqscan=off")
+            plan_query = sql.SQL(
+                """EXPLAIN (FORMAT JSON)
+                   SELECT id
+                   FROM rag_chunks
+                   WHERE embedding_model={model}
+                     AND embedding_dimensions={dimensions}
+                   ORDER BY embedding::vector({dimensions})
+                            <=> %s::vector({dimensions})
+                   LIMIT 3"""
+            ).format(
+                model=sql.Literal(model),
+                dimensions=sql.Literal(dimensions),
+            )
+            plan = connection.execute(plan_query, ("[1,0,0]",)).fetchone()[0]
+            assert index_name in json.dumps(plan)
+
+        ann = asyncio.run(
+            run_retrieval_eval(
+                repository,
+                principal,
+                UUID(workspace_id),
+                embedding_model=model,
+                cases=eval_cases,
+                k=1,
+                ann_dimensions=dimensions,
+                hnsw_ef_search=100,
+            )
+        )
+
+        assert exact.hit_rate == 1.0
+        assert exact.mean_recall == 1.0
+        assert exact.mean_reciprocal_rank == 1.0
+        assert ann.hit_rate == exact.hit_rate
+        assert ann.mean_recall == exact.mean_recall
+        assert ann.mean_reciprocal_rank == exact.mean_reciprocal_rank
+        for result in ann.cases:
+            assert all(not key.startswith("distractor-") for key in result.ranked_source_keys)
+    finally:
+        with psycopg.connect(
+            auth_settings.database_url.get_secret_value(),
+            autocommit=True,
+        ) as connection:
+            drop_hnsw_index(
+                connection,
+                embedding_model=model,
+                dimensions=dimensions,
+            )

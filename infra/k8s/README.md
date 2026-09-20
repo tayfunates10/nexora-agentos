@@ -44,6 +44,21 @@ the issuer's OIDC metadata and rotates RS256 signing keys automatically. If that
 serves JWKS from another origin, set `NEXORA_AUTH_JWKS_URL` explicitly to that HTTPS URL.
 A run can never name anything the profiles do not list.
 
+If the worker runtime config enables retrieval ANN, provision the reviewed HNSW index before
+rolling workers. Run this with the migration-owner database credential; API/worker runtime roles
+cannot create indexes:
+
+```bash
+export NEXORA_DATABASE_URL='postgresql://nexora_migrate:password@host:5432/nexora'
+python -m nexora_api.rag_ann ensure \
+  --model text-embedding-3-small \
+  --dimensions 1536
+```
+
+The model and dimensions must exactly match the worker retrieval configuration. HNSW is optional;
+omit the runtime `ann` block for exact vector ranking. To roll back ANN, remove that block from the
+worker runtime first, roll workers, then run the same command with `drop` instead of `ensure`.
+
 If the worker runtime config declares remote MCP servers, put their bearer tokens in the
 optional `nexora-mcp-secrets` Secret under the exact environment-variable names referenced
 by `bearer_token_env`. The base deployment never contains those values and starts normally

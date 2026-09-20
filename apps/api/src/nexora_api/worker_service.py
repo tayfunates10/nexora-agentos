@@ -124,6 +124,8 @@ def build_retriever(
         timeout_seconds=retrieval.timeout_seconds,
         retrieval_limit=retrieval.limit,
         retrieval_strategy=retrieval.strategy,
+        ann_enabled=retrieval.ann is not None,
+        hnsw_ef_search=retrieval.ann.ef_search if retrieval.ann is not None else 100,
         spend=config.embedding_spend(),
     )
 

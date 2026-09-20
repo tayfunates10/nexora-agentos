@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 from fastapi import HTTPException
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -22,6 +23,12 @@ from nexora_api.rag import (
     chunk_text,
     normalize_document,
     sha256_text,
+)
+from nexora_api.rag_ann import (
+    HNSW_MAX_EF_SEARCH,
+    MAX_HNSW_VECTOR_DIMENSIONS,
+    hnsw_index_name,
+    validate_ann_target,
 )
 from nexora_api.spend import (
     EmbeddingSpend,
@@ -584,6 +591,54 @@ class RagRepository:
                 )
             return count
 
+    async def authorize_ann_index(
+        self,
+        embedding_model: str,
+        dimensions: int,
+    ) -> None:
+        async with self.connection() as connection:
+            await self._verify_hnsw_index(connection, embedding_model, dimensions)
+
+    @staticmethod
+    async def _verify_hnsw_index(connection, embedding_model: str, dimensions: int) -> str:
+        model, dimensions = validate_ann_target(embedding_model, dimensions)
+        index_name = hnsw_index_name(model, dimensions)
+        result = await connection.execute(
+            """SELECT am.amname,i.indisvalid,i.indisready,pg_get_indexdef(i.indexrelid)
+               FROM pg_class idx
+               JOIN pg_index i ON i.indexrelid=idx.oid
+               JOIN pg_class tbl ON tbl.oid=i.indrelid
+               JOIN pg_namespace n ON n.oid=tbl.relnamespace
+               JOIN pg_am am ON am.oid=idx.relam
+               WHERE n.nspname='public' AND tbl.relname='rag_chunks'
+                 AND idx.relname=%s""",
+            (index_name,),
+        )
+        row = await result.fetchone()
+        if row is None:
+            raise RuntimeError(f"required RAG HNSW index is missing: {index_name}")
+        if row["amname"] != "hnsw" or not row["indisvalid"] or not row["indisready"]:
+            raise RuntimeError(f"required RAG HNSW index is not usable: {index_name}")
+        definition = row["pg_get_indexdef"]
+        if f"vector({dimensions})" not in definition or "vector_cosine_ops" not in definition:
+            raise RuntimeError(
+                f"required RAG HNSW index has an unexpected definition: {index_name}"
+            )
+        return index_name
+
+    @staticmethod
+    def _distance_expression(dimensions: int, *, ann: bool):
+        if not ann:
+            return sql.SQL("c.embedding <=> %s::vector")
+        if not 1 <= dimensions <= MAX_HNSW_VECTOR_DIMENSIONS:
+            raise ValueError(
+                f"HNSW vector dimensions must be between 1 and {MAX_HNSW_VECTOR_DIMENSIONS}"
+            )
+        return sql.SQL("c.embedding::vector({}) <=> %s::vector({})").format(
+            sql.Literal(dimensions),
+            sql.Literal(dimensions),
+        )
+
     async def retrieve(
         self,
         principal: Principal,
@@ -593,6 +648,8 @@ class RagRepository:
         query_embedding: tuple[float, ...],
         query_text: str | None = None,
         limit: int = 8,
+        ann_dimensions: int | None = None,
+        hnsw_ef_search: int | None = None,
     ) -> tuple[RetrievedChunk, ...]:
         if not 1 <= limit <= 50:
             raise ValueError("limit must be between 1 and 50")
@@ -601,11 +658,29 @@ class RagRepository:
 
         vector_literal = self._vector_literal(query_embedding)
         dimensions = len(query_embedding)
+        ann = ann_dimensions is not None
+        if ann:
+            _, ann_dimensions = validate_ann_target(embedding_model, ann_dimensions)
+            if ann_dimensions != dimensions:
+                raise ValueError("ANN dimensions must match the query embedding dimensions")
+            ef_search = 100 if hnsw_ef_search is None else hnsw_ef_search
+            if not 1 <= ef_search <= HNSW_MAX_EF_SEARCH:
+                raise ValueError(f"hnsw_ef_search must be between 1 and {HNSW_MAX_EF_SEARCH}")
+        else:
+            if hnsw_ef_search is not None:
+                raise ValueError("hnsw_ef_search requires ann_dimensions")
+            ef_search = None
+
         lexical_query = query_text.strip() if query_text is not None else ""
         if len(lexical_query) > HYBRID_QUERY_MAX_CHARS:
             raise ValueError(
                 f"hybrid retrieval query must be at most {HYBRID_QUERY_MAX_CHARS} characters"
             )
+        distance = self._distance_expression(dimensions, ann=ann)
+        model_filter = sql.SQL("c.embedding_model={} AND c.embedding_dimensions={}").format(
+            sql.Literal(embedding_model),
+            sql.Literal(dimensions),
+        )
 
         async with self.connection() as connection:
             await self.workspaces.scoped(
@@ -614,28 +689,33 @@ class RagRepository:
                 workspace_id,
                 Permission.READ,
             )
+            if ann:
+                await self._verify_hnsw_index(connection, embedding_model, dimensions)
+                await connection.execute(
+                    "SELECT set_config('hnsw.ef_search', %s, true)",
+                    (str(ef_search),),
+                )
+                await connection.execute(
+                    "SELECT set_config('hnsw.iterative_scan', 'strict_order', true)"
+                )
+
             if lexical_query:
                 candidate_limit = min(
                     HYBRID_MAX_CANDIDATES,
                     max(limit, limit * HYBRID_CANDIDATE_MULTIPLIER),
                 )
-                result = await connection.execute(
+                query = sql.SQL(
                     """WITH lexical_query AS (
                            SELECT plainto_tsquery('simple', %s) AS query
                        ),
-                       vector_candidates AS (
-                           SELECT c.id,
-                                  row_number() OVER (
-                                      ORDER BY c.embedding <=> %s::vector,
-                                               c.source_id,c.chunk_index
-                                  ) AS vector_rank
+                       vector_pool AS MATERIALIZED (
+                           SELECT c.id,c.source_id,c.chunk_index,{distance} AS vector_distance
                            FROM rag_chunks c
                            JOIN rag_sources s
                              ON s.id=c.source_id AND s.workspace_id=c.workspace_id
                            WHERE c.workspace_id=%s
                              AND s.is_current
-                             AND c.embedding_model=%s
-                             AND c.embedding_dimensions=%s
+                             AND {model_filter}
                              AND (
                                  c.access_scope='workspace'
                                  OR EXISTS (
@@ -646,8 +726,15 @@ class RagRepository:
                                        AND a.subject=%s
                                  )
                              )
-                           ORDER BY c.embedding <=> %s::vector,c.source_id,c.chunk_index
+                           ORDER BY {distance}
                            LIMIT %s
+                       ),
+                       vector_candidates AS (
+                           SELECT id,
+                                  row_number() OVER (
+                                      ORDER BY vector_distance,source_id,chunk_index
+                                  ) AS vector_rank
+                           FROM vector_pool
                        ),
                        lexical_candidates AS (
                            SELECT ranked.id,
@@ -667,8 +754,7 @@ class RagRepository:
                                CROSS JOIN lexical_query
                                WHERE c.workspace_id=%s
                                  AND s.is_current
-                                 AND c.embedding_model=%s
-                                 AND c.embedding_dimensions=%s
+                                 AND {model_filter}
                                  AND lexical_query.query <> ''::tsquery
                                  AND to_tsvector('simple', c.content) @@ lexical_query.query
                                  AND (
@@ -700,20 +786,19 @@ class RagRepository:
                        JOIN rag_sources s
                          ON s.id=c.source_id AND s.workspace_id=c.workspace_id
                        ORDER BY score DESC,c.source_id,c.chunk_index
-                       LIMIT %s""",
+                       LIMIT %s"""
+                ).format(distance=distance, model_filter=model_filter)
+                result = await connection.execute(
+                    query,
                     (
                         lexical_query,
                         vector_literal,
                         workspace_id,
-                        embedding_model,
-                        dimensions,
                         principal.issuer,
                         principal.subject,
                         vector_literal,
                         candidate_limit,
                         workspace_id,
-                        embedding_model,
-                        dimensions,
                         principal.issuer,
                         principal.subject,
                         candidate_limit,
@@ -723,34 +808,42 @@ class RagRepository:
                     ),
                 )
             else:
-                result = await connection.execute(
-                    """SELECT c.id,c.source_id,s.source_key,c.source_version,s.title,
+                query = sql.SQL(
+                    """WITH vector_pool AS MATERIALIZED (
+                           SELECT c.id,{distance} AS vector_distance
+                           FROM rag_chunks c
+                           JOIN rag_sources s
+                             ON s.id=c.source_id AND s.workspace_id=c.workspace_id
+                           WHERE c.workspace_id=%s
+                             AND s.is_current
+                             AND {model_filter}
+                             AND (
+                                 c.access_scope='workspace'
+                                 OR EXISTS (
+                                     SELECT 1 FROM rag_source_acl a
+                                     WHERE a.workspace_id=c.workspace_id
+                                       AND a.source_id=c.source_id
+                                       AND a.issuer=%s
+                                       AND a.subject=%s
+                                 )
+                             )
+                           ORDER BY {distance}
+                           LIMIT %s
+                       )
+                       SELECT c.id,c.source_id,s.source_key,c.source_version,s.title,
                               c.chunk_index,c.start_offset,c.end_offset,c.content,c.metadata,
-                              1 - (c.embedding <=> %s::vector) AS score
-                       FROM rag_chunks c
+                              1 - vector_pool.vector_distance AS score
+                       FROM vector_pool
+                       JOIN rag_chunks c ON c.id=vector_pool.id
                        JOIN rag_sources s
                          ON s.id=c.source_id AND s.workspace_id=c.workspace_id
-                       WHERE c.workspace_id=%s
-                         AND s.is_current
-                         AND c.embedding_model=%s
-                         AND c.embedding_dimensions=%s
-                         AND (
-                             c.access_scope='workspace'
-                             OR EXISTS (
-                                 SELECT 1 FROM rag_source_acl a
-                                 WHERE a.workspace_id=c.workspace_id
-                                   AND a.source_id=c.source_id
-                                   AND a.issuer=%s
-                                   AND a.subject=%s
-                             )
-                         )
-                       ORDER BY c.embedding <=> %s::vector,c.source_id,c.chunk_index
-                       LIMIT %s""",
+                       ORDER BY vector_pool.vector_distance,c.source_id,c.chunk_index"""
+                ).format(distance=distance, model_filter=model_filter)
+                result = await connection.execute(
+                    query,
                     (
                         vector_literal,
                         workspace_id,
-                        embedding_model,
-                        dimensions,
                         principal.issuer,
                         principal.subject,
                         vector_literal,

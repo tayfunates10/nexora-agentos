@@ -42,6 +42,8 @@ class RagEmbeddingPipeline:
         timeout_seconds: float = 15.0,
         retrieval_limit: int = 8,
         retrieval_strategy: str = "hybrid",
+        ann_enabled: bool = False,
+        hnsw_ef_search: int = 100,
         spend: EmbeddingSpend | None = None,
     ):
         if not 1 <= dimensions <= 4096:
@@ -54,6 +56,10 @@ class RagEmbeddingPipeline:
             raise ValueError("retrieval_limit must be between 1 and 50")
         if retrieval_strategy not in {"vector", "hybrid"}:
             raise ValueError("retrieval_strategy must be vector or hybrid")
+        if ann_enabled and dimensions > 2000:
+            raise ValueError("HNSW vector indexing supports at most 2000 dimensions")
+        if not 1 <= hnsw_ef_search <= 1000:
+            raise ValueError("hnsw_ef_search must be between 1 and 1000")
         self.repository = repository
         self.adapter = adapter
         self.embedding_model = embedding_model
@@ -62,6 +68,8 @@ class RagEmbeddingPipeline:
         self.timeout_seconds = timeout_seconds
         self.retrieval_limit = retrieval_limit
         self.retrieval_strategy = retrieval_strategy
+        self.ann_enabled = ann_enabled
+        self.hnsw_ef_search = hnsw_ef_search
         # Without operator pricing, embedding accounting and budgets stay off rather
         # than recording a fabricated zero cost.
         self.spend = spend
@@ -133,6 +141,13 @@ class RagEmbeddingPipeline:
     ) -> RagSearchResult:
         # Membership is checked before provider egress and again in retrieval SQL.
         await self.repository.authorize_retrieve(principal, workspace_id)
+        if self.ann_enabled:
+            # Fail before paid provider egress when the operator enabled ANN but
+            # did not provision the reviewed model/dimension-specific HNSW index.
+            await self.repository.authorize_ann_index(
+                self.embedding_model,
+                self.dimensions,
+            )
         if self.spend is not None:
             # A query embedding with nowhere to charge it would be unmetered egress.
             if spend_key is None:
@@ -160,6 +175,8 @@ class RagEmbeddingPipeline:
             query_embedding=vectors[0],
             query_text=query if self.retrieval_strategy == "hybrid" else None,
             limit=self.retrieval_limit if limit is None else limit,
+            ann_dimensions=self.dimensions if self.ann_enabled else None,
+            hnsw_ef_search=self.hnsw_ef_search if self.ann_enabled else None,
         )
         return RagSearchResult(chunks=chunks, embedding_input_tokens=input_tokens)
 
