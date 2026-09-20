@@ -681,6 +681,9 @@ class RagRepository:
                     "SELECT set_config('hnsw.ef_search', %s, true)",
                     (str(ef_search),),
                 )
+                await connection.execute(
+                    "SELECT set_config('hnsw.iterative_scan', 'strict_order', true)"
+                )
 
             if lexical_query:
                 candidate_limit = min(
@@ -691,11 +694,8 @@ class RagRepository:
                     """WITH lexical_query AS (
                            SELECT plainto_tsquery('simple', %s) AS query
                        ),
-                       vector_candidates AS (
-                           SELECT c.id,
-                                  row_number() OVER (
-                                      ORDER BY {distance},c.source_id,c.chunk_index
-                                  ) AS vector_rank
+                       vector_pool AS MATERIALIZED (
+                           SELECT c.id,c.source_id,c.chunk_index,{distance} AS vector_distance
                            FROM rag_chunks c
                            JOIN rag_sources s
                              ON s.id=c.source_id AND s.workspace_id=c.workspace_id
@@ -713,8 +713,15 @@ class RagRepository:
                                        AND a.subject=%s
                                  )
                              )
-                           ORDER BY {distance},c.source_id,c.chunk_index
+                           ORDER BY {distance}
                            LIMIT %s
+                       ),
+                       vector_candidates AS (
+                           SELECT id,
+                                  row_number() OVER (
+                                      ORDER BY vector_distance,source_id,chunk_index
+                                  ) AS vector_rank
+                           FROM vector_pool
                        ),
                        lexical_candidates AS (
                            SELECT ranked.id,
@@ -794,28 +801,36 @@ class RagRepository:
                 )
             else:
                 query = sql.SQL(
-                    """SELECT c.id,c.source_id,s.source_key,c.source_version,s.title,
+                    """WITH vector_pool AS MATERIALIZED (
+                           SELECT c.id,{distance} AS vector_distance
+                           FROM rag_chunks c
+                           JOIN rag_sources s
+                             ON s.id=c.source_id AND s.workspace_id=c.workspace_id
+                           WHERE c.workspace_id=%s
+                             AND s.is_current
+                             AND c.embedding_model=%s
+                             AND c.embedding_dimensions=%s
+                             AND (
+                                 c.access_scope='workspace'
+                                 OR EXISTS (
+                                     SELECT 1 FROM rag_source_acl a
+                                     WHERE a.workspace_id=c.workspace_id
+                                       AND a.source_id=c.source_id
+                                       AND a.issuer=%s
+                                       AND a.subject=%s
+                                 )
+                             )
+                           ORDER BY {distance}
+                           LIMIT %s
+                       )
+                       SELECT c.id,c.source_id,s.source_key,c.source_version,s.title,
                               c.chunk_index,c.start_offset,c.end_offset,c.content,c.metadata,
-                              1 - ({distance}) AS score
-                       FROM rag_chunks c
+                              1 - vector_pool.vector_distance AS score
+                       FROM vector_pool
+                       JOIN rag_chunks c ON c.id=vector_pool.id
                        JOIN rag_sources s
                          ON s.id=c.source_id AND s.workspace_id=c.workspace_id
-                       WHERE c.workspace_id=%s
-                         AND s.is_current
-                         AND c.embedding_model=%s
-                         AND c.embedding_dimensions=%s
-                         AND (
-                             c.access_scope='workspace'
-                             OR EXISTS (
-                                 SELECT 1 FROM rag_source_acl a
-                                 WHERE a.workspace_id=c.workspace_id
-                                   AND a.source_id=c.source_id
-                                   AND a.issuer=%s
-                                   AND a.subject=%s
-                             )
-                         )
-                       ORDER BY {distance},c.source_id,c.chunk_index
-                       LIMIT %s"""
+                       ORDER BY vector_pool.vector_distance,c.source_id,c.chunk_index"""
                 ).format(distance=distance)
                 result = await connection.execute(
                     query,
