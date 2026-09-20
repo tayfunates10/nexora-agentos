@@ -1,6 +1,7 @@
 import { chromium, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { startProvider } from "./fixtures/provider.ts";
+import { checkEvaluations } from "./evaluation-browser.ts";
 
 const provider = await startProvider();
 const origin = "http://127.0.0.1:3100";
@@ -48,6 +49,7 @@ try {
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     await page.screenshot({ path: `/tmp/nexora-workspace-${width}.png`, fullPage: true });
   }
+  await checkEvaluations(page, provider, detailUrl);
   const workspace = [...provider.workspaces.values()][0]; workspace.role = "member";
   await page.goto(detailUrl);
   await expect(page.getByText("You have read-only access.", { exact: false })).toBeVisible();

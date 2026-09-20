@@ -3,12 +3,16 @@ import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
 import type { AddressInfo } from "node:net";
+import type { EvalRun, EvalSuite } from "../../lib/evaluation-contracts.ts";
 
 export async function startProvider() {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk = { ...await exportJWK(publicKey), kid: "fixture-key", alg: "RS256", use: "sig" };
   const codes = new Map<string, { nonce: string; challenge: string; redirect: string }>();
   const workspaces = new Map<string, { id: string; name: string; role: string }>();
+  const evalSuites = new Map<string, EvalSuite>();
+  const evalRuns = new Map<string, EvalRun>();
+  let historyUnavailable = false;
   let issuer = "";
   let wrongNonce = false;
   const server = createServer(async (request, response) => {
@@ -37,6 +41,33 @@ export async function startProvider() {
         if (request.method === "POST") { const entry = { id: randomUUID(), name: JSON.parse(body).name, role: "owner" }; workspaces.set(entry.id, entry); return send(entry, 201); }
         return send({ items: [...workspaces.values()], next_cursor: null });
       }
+      const evaluation = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/(eval-suites|eval-runs)(?:\/([^/]+))?(\/runs)?$/);
+      if (evaluation) {
+        const [, workspaceId, kind, resourceId, history] = evaluation;
+        const scope = workspaces.get(workspaceId);
+        if (!scope) return send({}, 404);
+        if ((kind === "eval-runs" || history) && scope.role === "member") return send({}, 403);
+        if (history && historyUnavailable) return send({}, 503);
+        if (kind === "eval-runs") {
+          const run = evalRuns.get(resourceId);
+          return run?.workspace_id === workspaceId ? send(run) : send({}, 404);
+        }
+        const suite = evalSuites.get(resourceId);
+        if (resourceId && suite?.workspace_id !== workspaceId) return send({}, 404);
+        if (resourceId && !history) return send(suite);
+        const limit = Number(url.searchParams.get("limit") ?? "25");
+        const cursor = url.searchParams.get("cursor");
+        let rows: Array<EvalSuite | EvalRun> = history
+          ? [...evalRuns.values()].filter(run => run.workspace_id === workspaceId && run.suite_id === resourceId)
+            .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id))
+          : [...evalSuites.values()].filter(item => item.workspace_id === workspaceId).sort((a, b) => a.id.localeCompare(b.id));
+        if (cursor) {
+          const index = rows.findIndex(row => row.id === cursor);
+          if (index < 0) return send({}, 404);
+          rows = rows.slice(index + 1);
+        }
+        return send({ items: rows.slice(0, limit), next_cursor: rows.length > limit ? rows[limit - 1].id : null });
+      }
       const match = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)(\/members)?$/);
       const workspace = match && workspaces.get(match[1]);
       if (!workspace) return send({}, 404);
@@ -47,5 +78,7 @@ export async function startProvider() {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  return { issuer, workspaces, wrongNonce: (value: boolean) => { wrongNonce = value; }, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
+  return { issuer, workspaces, evalSuites, evalRuns,
+    historyUnavailable: (value: boolean) => { historyUnavailable = value; },
+    wrongNonce: (value: boolean) => { wrongNonce = value; }, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }
