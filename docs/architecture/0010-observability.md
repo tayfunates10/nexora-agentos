@@ -28,8 +28,8 @@ explain a run without reading tenant content.
 ## Metric cardinality
 Metrics use a dedicated registry. Workspace, user, run, approval and tool names are
 high-cardinality tenant data and stay on spans; metric labels are limited to HTTP method,
-matched route template, status, run outcome, provider, MCP server key, token kind and
-approval decision. Unmatched paths collapse to `unmatched`, operator label values that do
+matched route template, status, run outcome, provider, MCP server key, token kind,
+approval decision and fixed evaluation-judge target/outcome values. Unmatched paths collapse to `unmatched`, operator label values that do
 not match the bounded pattern collapse to `other`, and unknown outcomes collapse to
 `other`. Approval latency is observed exactly once, where the pending approval actually
 transitions, so retried or repeated decision requests cannot inflate the SLO signal. That
@@ -55,7 +55,8 @@ These are initial engineering objectives; production traffic and an error-budget
 must precede any contractual guarantee. The supporting signals are latency of `POST /runs`
 and the read endpoints, run outcome, governed tool failure rate by server key, and human
 approval wait time. Dashboards and alert tuning are deployment work and are not part of
-this increment.
+this increment. Worker-side evaluation judge calls are additionally covered by the bounded
+series defined in ADR 0024; they reuse the same provider label policy and never add tenant IDs.
 
 ## Boundaries
 Metrics are per-process, so each API or worker replica is scraped separately; the worker

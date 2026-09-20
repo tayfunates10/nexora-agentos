@@ -18,6 +18,11 @@ from nexora_api.evaluation_judge import (
     JUDGE_SYSTEM_PROMPT,
     JudgeScores,
 )
+from nexora_api.metrics import (
+    observe_evaluation_judge_call,
+    observe_evaluation_judge_job,
+    observe_model_call,
+)
 from nexora_api.model_routing import (
     ProviderAdapter,
     ProviderError,
@@ -138,8 +143,10 @@ class EvaluationJudgeWorker:
 
     async def _claim(self):
         allowed = list(self.config.allowed_workspaces)
+        claimed = None
+        expired_terminal_count = 0
         async with self.connection() as connection:
-            await connection.execute(
+            expired = await connection.execute(
                 """UPDATE eval_judge_runs
                    SET status=CASE
                            WHEN attempt_count + 1 >= %s THEN 'failed'
@@ -160,7 +167,8 @@ class EvaluationJudgeWorker:
                      AND workspace_id=ANY(%s::uuid[])
                      AND judge_provider=%s
                      AND judge_model=%s
-                     AND prompt_version=%s""",
+                     AND prompt_version=%s
+                   RETURNING status""",
                 (
                     MAX_JUDGE_ATTEMPTS,
                     MAX_JUDGE_ATTEMPTS,
@@ -170,6 +178,9 @@ class EvaluationJudgeWorker:
                     self.config.prompt_version,
                 ),
             )
+            expired_rows = await expired.fetchall()
+            expired_terminal_count = sum(row["status"] == "failed" for row in expired_rows)
+
             result = await connection.execute(
                 """SELECT * FROM eval_judge_runs
                    WHERE status='queued'
@@ -194,30 +205,33 @@ class EvaluationJudgeWorker:
                 ),
             )
             job = await result.fetchone()
-            if not job:
-                return None
-            updated = await connection.execute(
-                """UPDATE eval_judge_runs
-                   SET status='running',
-                       lease_owner=%s,
-                       lease_expires_at=now()+(%s * interval '1 second'),
-                       judge_provider=COALESCE(judge_provider,%s),
-                       judge_model=COALESCE(judge_model,%s),
-                       prompt_version=COALESCE(prompt_version,%s),
-                       error_code=NULL,
-                       updated_at=now()
-                   WHERE id=%s
-                   RETURNING *""",
-                (
-                    self.worker_id,
-                    self.lease_seconds,
-                    self.config.provider,
-                    self.config.model,
-                    self.config.prompt_version,
-                    job["id"],
-                ),
-            )
-            return await updated.fetchone()
+            if job:
+                updated = await connection.execute(
+                    """UPDATE eval_judge_runs
+                       SET status='running',
+                           lease_owner=%s,
+                           lease_expires_at=now()+(%s * interval '1 second'),
+                           judge_provider=COALESCE(judge_provider,%s),
+                           judge_model=COALESCE(judge_model,%s),
+                           prompt_version=COALESCE(prompt_version,%s),
+                           error_code=NULL,
+                           updated_at=now()
+                       WHERE id=%s
+                       RETURNING *""",
+                    (
+                        self.worker_id,
+                        self.lease_seconds,
+                        self.config.provider,
+                        self.config.model,
+                        self.config.prompt_version,
+                        job["id"],
+                    ),
+                )
+                claimed = await updated.fetchone()
+
+        for _ in range(expired_terminal_count):
+            observe_evaluation_judge_job("failed")
+        return claimed
 
     async def _assert_authorized(self, job):
         principal = Principal(job["requested_by_issuer"], job["requested_by_subject"])
@@ -344,22 +358,81 @@ class EvaluationJudgeWorker:
             max_output_tokens=self.config.max_output_tokens,
         )
         started = time.perf_counter()
-        response = await self.adapter.generate(
-            model=self.config.model,
-            request=request,
-            timeout_seconds=self.config.timeout_seconds,
+        try:
+            response = await self.adapter.generate(
+                model=self.config.model,
+                request=request,
+                timeout_seconds=self.config.timeout_seconds,
+            )
+        except ProviderError as exc:
+            seconds = time.perf_counter() - started
+            outcome = "timeout" if "timeout" in exc.code else "provider_error"
+            observe_model_call(
+                self.config.provider,
+                "timeout" if outcome == "timeout" else "error",
+                seconds,
+            )
+            observe_evaluation_judge_call(
+                self.config.provider,
+                target,
+                outcome,
+                seconds,
+            )
+            raise
+        except Exception:
+            seconds = time.perf_counter() - started
+            observe_model_call(self.config.provider, "error", seconds)
+            observe_evaluation_judge_call(
+                self.config.provider,
+                target,
+                "provider_error",
+                seconds,
+            )
+            raise
+
+        seconds = time.perf_counter() - started
+        latency_ms = max(0, round(seconds * 1000))
+        observe_model_call(
+            self.config.provider,
+            "success",
+            seconds,
+            response.usage.input_tokens,
+            response.usage.output_tokens,
         )
-        latency_ms = max(0, round((time.perf_counter() - started) * 1000))
         if (
             response.finish_reason != "stop"
             or response.tool_calls
             or response.structured_output is None
         ):
+            observe_evaluation_judge_call(
+                self.config.provider,
+                target,
+                "invalid_response",
+                seconds,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            )
             raise JudgeExecutionError("judge_invalid_response")
         try:
             scores = JudgeScores.model_validate(response.structured_output)
         except ValidationError as exc:
+            observe_evaluation_judge_call(
+                self.config.provider,
+                target,
+                "invalid_response",
+                seconds,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            )
             raise JudgeExecutionError("judge_invalid_response") from exc
+        observe_evaluation_judge_call(
+            self.config.provider,
+            target,
+            "success",
+            seconds,
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
         return (
             scores,
             (response.usage.input_tokens, response.usage.output_tokens),
@@ -450,7 +523,8 @@ class EvaluationJudgeWorker:
                 (job["id"],),
             )
             count = (await count_result.fetchone())["count"]
-            if count == owned["case_count"]:
+            completed = count == owned["case_count"]
+            if completed:
                 await connection.execute(
                     """UPDATE eval_judge_runs
                        SET status='succeeded',lease_owner=NULL,lease_expires_at=NULL,
@@ -466,7 +540,9 @@ class EvaluationJudgeWorker:
                        WHERE id=%s""",
                     (job["id"],),
                 )
-            return True
+        if completed:
+            observe_evaluation_judge_job("succeeded")
+        return True
 
     async def _finish_if_complete(self, job):
         async with self.connection() as connection:
@@ -489,7 +565,8 @@ class EvaluationJudgeWorker:
                    WHERE id=%s""",
                 (job["id"],),
             )
-            return True
+        observe_evaluation_judge_job("succeeded")
+        return True
 
     async def _fail(self, job, error_code: str, *, retryable: bool):
         async with self.connection() as connection:
@@ -497,6 +574,7 @@ class EvaluationJudgeWorker:
             if not owned:
                 return False
             next_attempt = owned["attempt_count"] + 1
+            terminal_failure = False
             if retryable and next_attempt < MAX_JUDGE_ATTEMPTS:
                 delay = judge_retry_delay(job["id"], next_attempt)
                 await connection.execute(
@@ -517,4 +595,7 @@ class EvaluationJudgeWorker:
                        WHERE id=%s""",
                     (next_attempt, error_code[:100], job["id"]),
                 )
-            return True
+                terminal_failure = True
+        if terminal_failure:
+            observe_evaluation_judge_job("failed")
+        return True
