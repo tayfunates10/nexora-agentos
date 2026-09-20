@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 from test_auth import token
 
+from nexora_api import metrics
 from nexora_api.evaluation_judge_worker import EvaluationJudgeWorker
 from nexora_api.main import create_app
 from nexora_api.migrate import migrate
@@ -243,6 +244,23 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
             == 404
         )
 
+        judge_calls_before = metrics.REGISTRY.get_sample_value(
+            "nexora_evaluation_judge_calls_total",
+            {"provider": "test", "target": "candidate", "outcome": "success"},
+        ) or 0.0
+        judge_jobs_before = metrics.REGISTRY.get_sample_value(
+            "nexora_evaluation_judge_jobs_total",
+            {"outcome": "succeeded"},
+        ) or 0.0
+        model_calls_before = metrics.REGISTRY.get_sample_value(
+            "nexora_model_calls_total",
+            {"provider": "test", "outcome": "success"},
+        ) or 0.0
+        model_output_before = metrics.REGISTRY.get_sample_value(
+            "nexora_model_tokens_total",
+            {"provider": "test", "kind": "output"},
+        ) or 0.0
+
         adapter = StubJudgeAdapter()
         worker = EvaluationJudgeWorker(
             auth_settings,
@@ -289,6 +307,22 @@ def test_imported_eval_run_can_be_judged_against_same_model_baseline(keys, auth_
         assert len(adapter.calls) == 4
         assert all(call[2]["additionalProperties"] is False for call in adapter.calls)
         assert all(result["quality_delta_milli"] == 750 for result in payload["results"])
+        assert metrics.REGISTRY.get_sample_value(
+            "nexora_evaluation_judge_calls_total",
+            {"provider": "test", "target": "candidate", "outcome": "success"},
+        ) == judge_calls_before + 2
+        assert metrics.REGISTRY.get_sample_value(
+            "nexora_evaluation_judge_jobs_total",
+            {"outcome": "succeeded"},
+        ) == judge_jobs_before + 1
+        assert metrics.REGISTRY.get_sample_value(
+            "nexora_model_calls_total",
+            {"provider": "test", "outcome": "success"},
+        ) == model_calls_before + 4
+        assert metrics.REGISTRY.get_sample_value(
+            "nexora_model_tokens_total",
+            {"provider": "test", "kind": "output"},
+        ) == model_output_before + 20
 
         latest_completed = client.get(
             base + f"/eval-runs/{candidate_id}/judge-runs/latest",
