@@ -34,7 +34,9 @@ class McpHttpEndpoint:
             or parsed.fragment
             or parsed.port not in (None, 443)
         ):
-            raise ValueError("MCP endpoint must be an HTTPS URL on port 443 without credentials/query")
+            raise ValueError(
+                "MCP endpoint must be an HTTPS URL on port 443 without credentials/query"
+            )
         hostname = parsed.hostname.rstrip(".").lower()
         if hostname == "localhost" or not hostname:
             raise ValueError("MCP endpoint hostname is not allowed")
@@ -111,6 +113,7 @@ class StreamableHttpMcpAdapter:
                 headers=headers,
                 json=body,
                 timeout=timeout,
+                follow_redirects=False,
             ) as response:
                 self._raise_for_status(response)
                 payload = await self._read_bounded(response)
