@@ -19,6 +19,7 @@ from nexora_api.config import Settings
 from nexora_api.embeddings import OpenAIEmbeddingsAdapter
 from nexora_api.executor import DurableAgentExecutor
 from nexora_api.executor_store import ExecutorStore
+from nexora_api.knowledge_worker import KnowledgeIngestionWorker
 from nexora_api.logs import context as log_context
 from nexora_api.logs import logger
 from nexora_api.mcp_gateway import McpGateway, McpToolAdapter
@@ -123,6 +124,22 @@ def build_retriever(
     )
 
 
+def build_knowledge_worker(
+    settings: Settings,
+    retriever: RagEmbeddingPipeline | None,
+    *,
+    worker_id: str,
+) -> KnowledgeIngestionWorker | None:
+    if retriever is None:
+        return None
+    return KnowledgeIngestionWorker(
+        settings,
+        retriever,
+        worker_id=worker_id,
+        lease_seconds=settings.worker_lease_seconds,
+    )
+
+
 def build_worker(
     settings: Settings,
     config: RuntimeConfig,
@@ -198,11 +215,13 @@ class WorkerRuntime:
         self,
         worker: AgentWorker,
         settings: Settings,
+        knowledge_worker: KnowledgeIngestionWorker | None = None,
         backoff_base_seconds: float = 2.0,
     ):
         if not 0 < backoff_base_seconds <= 60:
             raise ValueError("backoff_base_seconds must be between 0 and 60")
         self.worker = worker
+        self.knowledge_worker = knowledge_worker
         self.settings = settings
         self._stop = asyncio.Event()
         self._idle = settings.worker_idle_sleep_seconds
@@ -234,6 +253,9 @@ class WorkerRuntime:
             started = time.perf_counter()
             try:
                 handled = await self.worker.process_once()
+                if self.knowledge_worker is not None:
+                    knowledge_handled = await self.knowledge_worker.process_once()
+                    handled = knowledge_handled or handled
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
