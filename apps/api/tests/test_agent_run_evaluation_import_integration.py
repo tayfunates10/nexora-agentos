@@ -206,6 +206,20 @@ def test_agent_run_eval_import_is_requester_scoped_and_fail_closed(keys, auth_se
             "Final answer for Inspect the account safely."
         )
 
+        requester_detail = client.get(
+            base + f"/eval-runs/{payload['id']}", headers=headers(admin)
+        )
+        assert requester_detail.status_code == 200
+        other_admin_detail = client.get(
+            base + f"/eval-runs/{payload['id']}", headers=headers(owner)
+        )
+        assert other_admin_detail.status_code == 404
+        shared_history = client.get(
+            base + f"/eval-suites/{suite_id}/runs", headers=headers(owner)
+        )
+        assert shared_history.status_code == 200
+        assert any(item["id"] == payload["id"] for item in shared_history.json()["items"])
+
         replay = client.post(
             base + f"/eval-suites/{suite_id}/run-imports",
             json=import_body,
