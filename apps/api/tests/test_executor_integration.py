@@ -5,21 +5,21 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
-from nexora_api.execution_fence import executable_run
-from nexora_api.executor import DurableAgentExecutor, ExecutionProfile
-from nexora_api.executor_store import ExecutorStore
-from nexora_api.mcp_gateway import McpGateway
-from nexora_api.model_routing import ModelCandidate, ModelCapability, ModelRouter
-from nexora_api.outbox import QUEUE_STREAM
-from nexora_api.tool_contracts import ToolContractError
-from nexora_api.worker import AgentWorker
 from redis.asyncio import Redis
 from test_auth import token
 from test_executor import Adapter, response
 from test_tool_governance_integration import clear_unpublished_outbox
 from test_worker_integration import make_runtime
 
+from nexora_api.execution_fence import executable_run
+from nexora_api.executor import DurableAgentExecutor, ExecutionProfile
+from nexora_api.executor_store import ExecutorStore
+from nexora_api.mcp_gateway import McpGateway
 from nexora_api.migrate import migrate
+from nexora_api.model_routing import ModelCandidate, ModelCapability, ModelRouter
+from nexora_api.outbox import QUEUE_STREAM
+from nexora_api.tool_contracts import ToolContractError
+from nexora_api.worker import AgentWorker
 
 pytestmark = [
     pytest.mark.integration,
