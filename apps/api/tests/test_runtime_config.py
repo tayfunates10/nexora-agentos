@@ -27,6 +27,11 @@ def document(**overrides):
                 "capabilities": ["text", "tools"],
                 "quality_tier": 2,
                 "estimated_cost_per_million_tokens": 5,
+                "pricing": {
+                    "version": "test-2026-09",
+                    "input_usd_micros_per_million_tokens": 1250000,
+                    "output_usd_micros_per_million_tokens": 5000000,
+                },
             }
         ],
         "profiles": {
@@ -56,6 +61,9 @@ def test_operator_configuration_builds_routing_and_profiles(tmp_path):
 
     assert candidate.provider == "openai"
     assert candidate.capabilities == frozenset({ModelCapability.TEXT, ModelCapability.TOOLS})
+    assert candidate.pricing is not None
+    assert candidate.pricing.version == "test-2026-09"
+    assert candidate.pricing.cost_usd_picos(10, 1) == 17500000
     assert profile.allowed_tools == frozenset({"lookup"})
     assert profile.max_steps == 4
     assert config.providers == frozenset({"openai"})
@@ -105,6 +113,30 @@ def test_operator_configuration_builds_routing_and_profiles(tmp_path):
 def test_unusable_configuration_is_refused(tmp_path, mutation):
     with pytest.raises(RuntimeConfigError):
         load_runtime_config(write(tmp_path, document(**mutation)))
+
+
+def test_model_pricing_is_optional_but_invalid_snapshots_are_refused(tmp_path):
+    unpriced = document()
+    unpriced["model_candidates"][0].pop("pricing")
+    config = load_runtime_config(write(tmp_path, unpriced))
+    assert config.candidates()[0].pricing is None
+
+    for pricing in (
+        {
+            "version": "bad pricing version",
+            "input_usd_micros_per_million_tokens": 1,
+            "output_usd_micros_per_million_tokens": 1,
+        },
+        {
+            "version": "v1",
+            "input_usd_micros_per_million_tokens": -1,
+            "output_usd_micros_per_million_tokens": 1,
+        },
+    ):
+        invalid = document()
+        invalid["model_candidates"][0]["pricing"] = pricing
+        with pytest.raises(RuntimeConfigError):
+            load_runtime_config(write(tmp_path, invalid))
 
 
 def test_credentials_cannot_be_declared_in_the_config_file(tmp_path):
