@@ -55,6 +55,10 @@ class EvalJudgeRun(BaseModel):
     input_tokens: int
     output_tokens: int
     latency_ms: int
+    model_cost_usd_picos: str | None
+    model_cost_call_count: int
+    model_cost_pricing_complete: bool
+    model_cost_pricing_versions: list[str]
     created_at: datetime
     finished_at: datetime | None = None
     results: list[EvalJudgeCaseScore]
