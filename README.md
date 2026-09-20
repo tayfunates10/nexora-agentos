@@ -352,8 +352,10 @@ Core endpoints are:
 
 Creating suites or runs requires an `Idempotency-Key`. A baseline must use the exact same suite
 version. A case is marked as a regression only when the baseline passed and the candidate fails; the
-inverse is recorded as an improvement. Raw output is retained only for failed cases and run details
-require owner/admin evaluation-management permission.
+inverse is recorded as an improvement. Raw output is retained only for failed cases and ordinary
+run details require owner/admin evaluation-management permission. Imported run details remain
+scoped to the importing requester because their failed raw output can contain requester-specific
+retrieval data; other owners/admins can still see the non-sensitive history summary.
 
 Agent-run imports map exactly one requester-owned successful agent run to each suite case. The
 persisted case input must match the agent-run input exactly; selected tools and final output are
