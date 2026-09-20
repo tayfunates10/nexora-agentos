@@ -281,3 +281,71 @@ def test_delete_cancels_queued_ingestion_and_rejects_running_delete(keys, auth_s
             (running_id,),
         )
     client.__exit__(None, None, None)
+
+def test_lost_ingestion_lease_rolls_back_source_write(keys, auth_settings):
+    migrate(auth_settings)
+    client, headers, workspace_id, _owner, admin, _member, _member2 = setup_workspace(
+        keys, auth_settings, "knowledge-fence"
+    )
+    base = f"/api/v1/workspaces/{workspace_id}/knowledge"
+    created = client.post(
+        base + "/sources",
+        json={
+            "source_key": "fenced-source",
+            "version": "v1",
+            "title": "Fenced source",
+            "text": "Lease fencing must prevent stale workers from publishing chunks. " * 20,
+            "max_chars": 300,
+            "overlap_chars": 20,
+        },
+        headers=headers(admin, "knowledge-fence-1"),
+    )
+    assert created.status_code == 202, created.text
+    job_id = created.json()["id"]
+
+    class LeaseStealingEmbeddingAdapter(StubEmbeddingAdapter):
+        async def embed(self, *, request_id, texts, model, dimensions, timeout_seconds):
+            async with await psycopg.AsyncConnection.connect(
+                auth_settings.database_url.get_secret_value()
+            ) as connection:
+                await connection.execute(
+                    """UPDATE knowledge_ingestion_jobs
+                       SET lease_owner='replacement-worker',
+                           lease_expires_at=now()+interval '1 minute',
+                           updated_at=now()
+                       WHERE id=%s AND status='running'""",
+                    (job_id,),
+                )
+            return await super().embed(
+                request_id=request_id,
+                texts=texts,
+                model=model,
+                dimensions=dimensions,
+                timeout_seconds=timeout_seconds,
+            )
+
+    adapter = LeaseStealingEmbeddingAdapter()
+    worker = KnowledgeIngestionWorker(
+        auth_settings,
+        pipeline(auth_settings, adapter),
+        worker_id="stale-worker",
+        lease_seconds=6,
+    )
+    assert asyncio.run(worker.process_once()) is True
+    assert adapter.calls > 0
+
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        job = connection.execute(
+            """SELECT status,lease_owner FROM knowledge_ingestion_jobs WHERE id=%s""",
+            (job_id,),
+        ).fetchone()
+        source_count = connection.execute(
+            """SELECT count(*) FROM rag_sources
+               WHERE workspace_id=%s AND source_key='fenced-source'""",
+            (workspace_id,),
+        ).fetchone()[0]
+
+    assert job == ("running", "replacement-worker")
+    assert source_count == 0
+    client.__exit__(None, None, None)
+
