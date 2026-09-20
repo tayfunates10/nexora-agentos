@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
+from nexora_api.execution_fence import executable_run
 from nexora_api.run_state import ExecutionContext
 from nexora_api.runtime_events import append_run_event
 from nexora_api.tool_contracts import (
@@ -454,14 +455,7 @@ class ToolGovernanceRepository:
             raise ToolContractError("invalid_call_key")
 
         async with self.connection() as connection:
-            run_result = await connection.execute(
-                """SELECT * FROM agent_runs
-                   WHERE id=%s AND workspace_id=%s FOR UPDATE""",
-                (context.run_id, context.workspace_id),
-            )
-            run = await run_result.fetchone()
-            if not run or run["status"] != "running":
-                raise ToolContractError("run_not_executable")
+            run = await executable_run(connection, context)
 
             membership_result = await connection.execute(
                 """SELECT role FROM workspace_memberships
@@ -667,8 +661,9 @@ class ToolGovernanceRepository:
                 )
             return ToolCallPlan("execute", call_id, tool)
 
-    async def mark_running(self, call_id: UUID) -> ToolExecution:
+    async def mark_running(self, call_id: UUID, context: ExecutionContext) -> ToolExecution:
         async with self.connection() as connection:
+            await executable_run(connection, context)
             result = await connection.execute(
                 """SELECT c.*,t.server_key,t.remote_name,t.input_schema,t.output_schema,
                           t.side_effect,t.enabled,p.decision AS current_policy
@@ -682,7 +677,7 @@ class ToolGovernanceRepository:
                 (call_id,),
             )
             call = await result.fetchone()
-            if not call:
+            if not call or call["run_id"] != context.run_id:
                 raise ToolContractError("unknown_tool_call")
             run_result = await connection.execute(
                 "SELECT * FROM agent_runs WHERE id=%s AND workspace_id=%s FOR UPDATE",
@@ -759,8 +754,11 @@ class ToolGovernanceRepository:
                 output_schema=call["output_schema"],
             )
 
-    async def complete_success(self, call_id: UUID, result_value: Any) -> bool:
+    async def complete_success(
+        self, call_id: UUID, result_value: Any, context: ExecutionContext
+    ) -> bool:
         async with self.connection() as connection:
+            await executable_run(connection, context)
             row_result = await connection.execute(
                 """SELECT c.*,t.output_schema FROM tool_calls c
                    JOIN tool_definitions t
@@ -769,7 +767,7 @@ class ToolGovernanceRepository:
                 (call_id,),
             )
             row = await row_result.fetchone()
-            if not row or row["status"] != "running":
+            if not row or row["status"] != "running" or row["run_id"] != context.run_id:
                 return False
             validate_result(result_value, row["output_schema"])
             await connection.execute(
@@ -794,16 +792,18 @@ class ToolGovernanceRepository:
         error_code: str,
         *,
         retryable: bool,
+        context: ExecutionContext,
     ) -> bool:
         if not error_code or len(error_code) > 100:
             raise ValueError("invalid error_code")
         async with self.connection() as connection:
+            await executable_run(connection, context)
             row_result = await connection.execute(
                 "SELECT * FROM tool_calls WHERE id=%s FOR UPDATE",
                 (call_id,),
             )
             row = await row_result.fetchone()
-            if not row or row["status"] != "running":
+            if not row or row["status"] != "running" or row["run_id"] != context.run_id:
                 return False
             if retryable:
                 approval = await self._approval_for_call(connection, call_id)

@@ -257,3 +257,23 @@ def test_stream_normalizes_text_tool_usage_and_completion():
     assert normalized[1].tool_call.arguments == {"title": "Stream"}
     assert normalized[2].usage is not None
     assert normalized[2].usage.output_tokens == 3
+
+
+def test_tool_history_serialization_preserves_call_identity():
+    from nexora_api.model_routing import ProviderToolCall
+
+    call = ProviderToolCall("call-42", "lookup", {"query": "question"})
+    encoded = OpenAIResponsesAdapter._message_payload(
+        ProviderMessage("assistant", "", tool_call=call)
+    )
+    assert encoded["type"] == "function_call"
+    assert encoded["call_id"] == "call-42"
+    assert json.loads(encoded["arguments"]) == {"query": "question"}
+    result = OpenAIResponsesAdapter._message_payload(
+        ProviderMessage("tool", '{"answer":42}', tool_call_id="call-42")
+    )
+    assert result == {
+        "type": "function_call_output",
+        "call_id": "call-42",
+        "output": '{"answer":42}',
+    }

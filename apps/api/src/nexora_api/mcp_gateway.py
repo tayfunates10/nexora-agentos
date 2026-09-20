@@ -78,14 +78,14 @@ class McpGateway:
             raise McpGatewayError("cancel_requested", retryable=False)
 
         try:
-            execution = await self.repository.mark_running(plan.call_id)
+            execution = await self.repository.mark_running(plan.call_id, context)
         except ToolContractError as exc:
             raise McpGatewayError(exc.code, retryable=False) from exc
 
         adapter = self.adapters.get(execution.server_key)
         if adapter is None:
             await self.repository.complete_failure(
-                execution.call_id, "mcp_server_unavailable", retryable=True
+                execution.call_id, "mcp_server_unavailable", retryable=True, context=context
             )
             raise McpGatewayError("mcp_server_unavailable", retryable=True)
 
@@ -99,24 +99,26 @@ class McpGateway:
                 timeout=self.timeout_seconds,
             )
         except TimeoutError as exc:
-            await self.repository.complete_failure(execution.call_id, "mcp_timeout", retryable=True)
+            await self.repository.complete_failure(
+                execution.call_id, "mcp_timeout", retryable=True, context=context
+            )
             raise McpGatewayError("mcp_timeout", retryable=True) from exc
         except asyncio.CancelledError:
             await self.repository.complete_failure(
-                execution.call_id, "mcp_cancelled", retryable=True
+                execution.call_id, "mcp_cancelled", retryable=True, context=context
             )
             raise
         except Exception as exc:
             await self.repository.complete_failure(
-                execution.call_id, "mcp_call_error", retryable=True
+                execution.call_id, "mcp_call_error", retryable=True, context=context
             )
             raise McpGatewayError("mcp_call_error", retryable=True) from exc
 
         try:
-            completed = await self.repository.complete_success(execution.call_id, result)
+            completed = await self.repository.complete_success(execution.call_id, result, context)
         except ToolContractError as exc:
             await self.repository.complete_failure(
-                execution.call_id, "mcp_invalid_result", retryable=False
+                execution.call_id, "mcp_invalid_result", retryable=False, context=context
             )
             raise McpGatewayError("mcp_invalid_result", retryable=False) from exc
         if not completed:
