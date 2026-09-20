@@ -9,10 +9,15 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr("postgresql://localhost/nexora")
     redis_url: SecretStr = SecretStr("redis://localhost:6379/0")
     dependency_timeout_seconds: float = 2.0
-    # A deployment-managed RSA public key: tokens cannot choose a key URL.
+    # The issuer/audience are operator trust anchors. A static PEM remains an optional
+    # pin; otherwise the API discovers and rotates bounded RS256 JWKS keys.
     auth_issuer: str | None = None
     auth_audience: str | None = None
     auth_public_key: str | None = None
+    auth_jwks_url: str | None = None
+    auth_jwks_cache_seconds: int = Field(default=300, ge=30, le=86_400)
+    auth_jwks_min_refresh_seconds: int = Field(default=10, ge=1, le=300)
+    auth_jwks_timeout_seconds: float = Field(default=3.0, gt=0.0, le=15.0)
     # Shared authenticated-request limiter. Zero disables it for isolated library/test use;
     # repository deployment configs enable it explicitly.
     api_rate_limit_requests: int = Field(default=0, ge=0, le=100_000)
@@ -34,6 +39,15 @@ class Settings(BaseSettings):
     worker_shutdown_grace_seconds: float = Field(default=25.0, ge=1.0, le=300.0)
     worker_admin_port: int = Field(default=8001, ge=1, le=65535)
     openai_api_key: SecretStr | None = None
+
+    @field_validator("auth_jwks_url", mode="before")
+    @classmethod
+    def _jwks_url(cls, value):
+        if value in (None, ""):
+            return None
+        if not isinstance(value, str) or len(value) > 500 or not value.startswith("https://"):
+            raise ValueError("auth_jwks_url must be an HTTPS URL")
+        return value
 
     @field_validator("otel_exporter_endpoint")
     @classmethod

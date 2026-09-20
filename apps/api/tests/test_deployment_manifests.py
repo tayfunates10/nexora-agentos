@@ -140,27 +140,23 @@ def test_network_is_default_deny():
 
 
 @pytest.mark.parametrize(
-    "policy_name,workload",
-    [
-        ("worker-provider-egress", "nexora-worker"),
-        ("web-identity-egress", "nexora-web"),
-    ],
+    "policy_name",
+    ["worker-provider-egress", "identity-provider-egress"],
 )
-def test_external_egress_is_tls_only_and_never_reaches_private_space(policy_name, workload):
+def test_external_egress_is_tls_only_and_never_reaches_private_space(policy_name):
     policies = {policy["metadata"]["name"]: policy for policy in by_kind("NetworkPolicy")}
     policy = policies[policy_name]
     rule = policy["spec"]["egress"][0]
 
-    assert policy["spec"]["podSelector"]["matchLabels"] == {"app.kubernetes.io/name": workload}
     assert rule["ports"] == [{"protocol": "TCP", "port": 443}]
     # Cluster services, cloud metadata and internal networks stay unreachable.
     assert PRIVATE_RANGES <= set(rule["to"][0]["ipBlock"]["except"])
     assert rule["to"][0]["ipBlock"]["cidr"] == "0.0.0.0/0"
 
 
-def test_the_api_has_no_route_to_the_public_internet():
-    # Only the worker (model providers) and the web (identity provider) may leave
-    # the cluster; the API's egress stays limited to datastores and telemetry.
+def test_only_declared_services_have_public_tls_egress():
+    # The worker reaches model providers; web and API reach the identity provider.
+    # No other workload receives a route to public address space.
     external = {
         policy["metadata"]["name"]
         for policy in by_kind("NetworkPolicy")
@@ -171,7 +167,19 @@ def test_the_api_has_no_route_to_the_public_internet():
         )
     }
 
-    assert external == {"worker-provider-egress", "web-identity-egress"}
+    assert external == {"worker-provider-egress", "identity-provider-egress"}
+
+    identity = next(
+        policy
+        for policy in by_kind("NetworkPolicy")
+        if policy["metadata"]["name"] == "identity-provider-egress"
+    )
+    selector = identity["spec"]["podSelector"]["matchExpressions"][0]
+    assert selector == {
+        "key": "app.kubernetes.io/component",
+        "operator": "In",
+        "values": ["api", "web"],
+    }
 
 
 def test_production_overlay_pins_images_by_digest():

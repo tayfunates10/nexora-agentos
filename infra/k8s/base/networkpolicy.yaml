@@ -168,14 +168,17 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: web-identity-egress
+  name: identity-provider-egress
+  namespace: nexora
 spec:
-  # Sign-in performs OIDC discovery and the code exchange server side, so the web
-  # needs TLS egress to the identity provider. Private space stays excluded; an
-  # internal provider needs an explicit rule naming it rather than opening that up.
+  # The web performs OIDC sign-in and the API performs discovery/JWKS rotation.
+  # Both may reach public identity providers over TLS only. Private space stays
+  # excluded; an internal provider needs an explicit environment-specific rule.
   podSelector:
-    matchLabels:
-      app.kubernetes.io/name: nexora-web
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, web]
   policyTypes: [Egress]
   egress:
     - to:
