@@ -202,7 +202,6 @@ def test_worker_shutdown_window_covers_its_configured_grace():
     assert worker["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] > grace
 
 
-
 def test_worker_accepts_mcp_credentials_only_from_an_optional_secret():
     worker = next(
         document
