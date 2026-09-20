@@ -1,0 +1,269 @@
+rule_files:
+- rules.yml
+evaluation_interval: 1m
+fuzzy_compare: true
+tests:
+- name: healthy traffic with no error series and probe errors excluded
+  interval: 1m
+  input_series:
+  - series: nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"}
+    values: 0.999+0x90
+  - series: nexora_slo_window_days{job="nexora-api",slo="api_availability"}
+    values: 30+0x90
+  - series: nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"}
+    values: 0.99+0x90
+  - series: nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}
+    values: 30+0x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="200"}
+    values: 0+600x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/health/ready",status="503"}
+    values: 0+6000x90
+  - series: nexora_agent_runs_total{job="nexora-worker",outcome="succeeded"}
+    values: 0+10x90
+  - series: nexora_agent_runs_total{job="nexora-worker",outcome="waiting_for_approval"}
+    values: 0+100x90
+  - series: nexora_agent_runs_total{job="nexora-worker",outcome="cancelled"}
+    values: 0+100x90
+  - series: nexora_agent_runs_total{job="nexora-worker",outcome="failed_retryable"}
+    values: 0+100x90
+  promql_expr_test:
+  - expr: nexora:api_error_ratio:5m
+    eval_time: 10m
+    exp_samples:
+    - labels: nexora:api_error_ratio:5m
+      value: 0
+  - expr: nexora:run_error_ratio:5m
+    eval_time: 10m
+    exp_samples:
+    - labels: nexora:run_error_ratio:5m
+      value: 0
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: NexoraApiErrorBudgetBurn
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: NexoraTerminalRunErrorBudgetBurn
+    exp_alerts: []
+- name: sustained errors fire both burn alerts
+  interval: 1m
+  input_series:
+  - series: nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"}
+    values: 0.999+0x90
+  - series: nexora_slo_window_days{job="nexora-api",slo="api_availability"}
+    values: 30+0x90
+  - series: nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"}
+    values: 0.99+0x90
+  - series: nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}
+    values: 30+0x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="200"}
+    values: 0+540x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="503"}
+    values: 0+60x90
+  - series: nexora_agent_runs_total{job="nexora-worker",outcome="succeeded"}
+    values: 0+8x90
+  - series: nexora_agent_runs_total{job="nexora-worker",outcome="failed_terminal"}
+    values: 0+2x90
+  promql_expr_test:
+  - expr: nexora:api_error_ratio:5m
+    eval_time: 10m
+    exp_samples:
+    - labels: nexora:api_error_ratio:5m
+      value: 0.1
+  - expr: nexora:run_error_ratio:5m
+    eval_time: 10m
+    exp_samples:
+    - labels: nexora:run_error_ratio:5m
+      value: 0.2
+  alert_rule_test:
+  - eval_time: 1m
+    alertname: NexoraApiErrorBudgetBurn
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: NexoraApiErrorBudgetBurn
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        slo: api_availability
+      exp_annotations: &id001
+        summary: Nexora API error budget is burning quickly
+        description: Both the one-hour and five-minute error ratios exceed the fast-burn
+          threshold derived from the exported SLO. Inspect errors and recent deployments.
+        runbook_url: https://github.com/tayfunates10/nexora-agentos/blob/main/infra/monitoring/README.md#error-budget-burn
+  - eval_time: 10m
+    alertname: NexoraTerminalRunErrorBudgetBurn
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        slo: agent_run_reliability
+      exp_annotations:
+        summary: Nexora terminal run error budget is burning quickly
+        description: Both the one-hour and five-minute error ratios exceed the fast-burn
+          threshold derived from the exported SLO. Inspect errors and recent deployments.
+        runbook_url: https://github.com/tayfunates10/nexora-agentos/blob/main/infra/monitoring/README.md#error-budget-burn
+- name: no traffic must not manufacture success or page
+  interval: 1m
+  input_series:
+  - series: nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"}
+    values: 0.999+0x90
+  - series: nexora_slo_window_days{job="nexora-api",slo="api_availability"}
+    values: 30+0x90
+  - series: nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"}
+    values: 0.99+0x90
+  - series: nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}
+    values: 30+0x90
+  promql_expr_test:
+  - expr: nexora:api_error_ratio:5m
+    eval_time: 10m
+    exp_samples: []
+  - expr: nexora:run_error_ratio:5m
+    eval_time: 10m
+    exp_samples: []
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: NexoraApiErrorBudgetBurn
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: NexoraTerminalRunErrorBudgetBurn
+    exp_alerts: []
+- name: ratios weight replicas by request volume
+  interval: 1m
+  input_series:
+  - series: nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"}
+    values: 0.999+0x90
+  - series: nexora_slo_window_days{job="nexora-api",slo="api_availability"}
+    values: 30+0x90
+  - series: nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"}
+    values: 0.99+0x90
+  - series: nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}
+    values: 30+0x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="large",method="GET",route="/api/v1/workspaces",status="200"}
+    values: 0+990x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="small",method="GET",route="/api/v1/workspaces",status="500"}
+    values: 0+10x90
+  promql_expr_test:
+  - expr: nexora:api_error_ratio:5m
+    eval_time: 10m
+    exp_samples:
+    - labels: nexora:api_error_ratio:5m
+      value: 0.01
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: NexoraApiErrorBudgetBurn
+    exp_alerts: []
+- name: exported objective changes the threshold
+  interval: 1m
+  input_series:
+  - series: nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"}
+    values: 0.99+0x90
+  - series: nexora_slo_window_days{job="nexora-api",slo="api_availability"}
+    values: 30+0x90
+  - series: nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"}
+    values: 0.99+0x90
+  - series: nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}
+    values: 30+0x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="200"}
+    values: 0+900x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="500"}
+    values: 0+100x90
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: NexoraApiErrorBudgetBurn
+    exp_alerts: []
+- name: all failed calls are counted without a success series
+  interval: 1m
+  input_series:
+  - series: nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"}
+    values: 0.999+0x90
+  - series: nexora_slo_window_days{job="nexora-api",slo="api_availability"}
+    values: 30+0x90
+  - series: nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"}
+    values: 0.99+0x90
+  - series: nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}
+    values: 30+0x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="500"}
+    values: 0+60x90
+  promql_expr_test:
+  - expr: nexora:api_error_ratio:5m
+    eval_time: 10m
+    exp_samples:
+    - labels: nexora:api_error_ratio:5m
+      value: 1
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: NexoraApiErrorBudgetBurn
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        slo: api_availability
+      exp_annotations: *id001
+- name: counter reset preserves request weighted rates
+  interval: 1m
+  input_series:
+  - series: nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"}
+    values: 0.999+0x90
+  - series: nexora_slo_window_days{job="nexora-api",slo="api_availability"}
+    values: 30+0x90
+  - series: nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"}
+    values: 0.99+0x90
+  - series: nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}
+    values: 30+0x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="200"}
+    values: 0+90x10 0+90x79
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="500"}
+    values: 0+10x10 0+10x79
+  promql_expr_test:
+  - expr: nexora:api_error_ratio:5m
+    eval_time: 14m
+    exp_samples:
+    - labels: nexora:api_error_ratio:5m
+      value: 0.1
+- name: target outage waits two minutes then resolves
+  interval: 1m
+  input_series:
+  - series: up{job="nexora-api",instance="api:8000"}
+    values: 0+0x5 1+0x10
+  alert_rule_test:
+  - eval_time: 1m
+    alertname: NexoraMetricsTargetDown
+    exp_alerts: []
+  - eval_time: 3m
+    alertname: NexoraMetricsTargetDown
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        job: nexora-api
+        instance: api:8000
+      exp_annotations:
+        summary: Nexora metrics target is unreachable
+        description: Check service readiness, network connectivity and the metrics
+          credential. A failed scrape is not evidence of healthy traffic.
+        runbook_url: https://github.com/tayfunates10/nexora-agentos/blob/main/infra/monitoring/README.md#target-down
+  - eval_time: 7m
+    alertname: NexoraMetricsTargetDown
+    exp_alerts: []
+- name: short window recovery resolves burn despite long window errors
+  interval: 1m
+  input_series:
+  - series: nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"}
+    values: 0.999+0x90
+  - series: nexora_slo_window_days{job="nexora-api",slo="api_availability"}
+    values: 30+0x90
+  - series: nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"}
+    values: 0.99+0x90
+  - series: nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}
+    values: 30+0x90
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="200"}
+    values: 0+0x10 600+600x79
+  - series: nexora_http_requests_total{job="nexora-api",instance="one",method="GET",route="/api/v1/workspaces",status="500"}
+    values: 0+600x10 6000+0x79
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: NexoraApiErrorBudgetBurn
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        slo: api_availability
+      exp_annotations: *id001
+  - eval_time: 20m
+    alertname: NexoraApiErrorBudgetBurn
+    exp_alerts: []

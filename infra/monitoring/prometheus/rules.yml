@@ -1,0 +1,59 @@
+groups:
+- name: nexora-recording
+  rules:
+  - record: nexora:api_error_ratio:5m
+    expr: (sum(rate(nexora_http_requests_total{job="nexora-api",route!~"/metrics|/api/v1/health/.*",status=~"5.."}[5m]))
+      or (0 * sum(rate(nexora_http_requests_total{job="nexora-api",route!~"/metrics|/api/v1/health/.*"}[5m]))))
+      / sum(rate(nexora_http_requests_total{job="nexora-api",route!~"/metrics|/api/v1/health/.*"}[5m]))
+  - record: nexora:api_error_ratio:1h
+    expr: (sum(rate(nexora_http_requests_total{job="nexora-api",route!~"/metrics|/api/v1/health/.*",status=~"5.."}[1h]))
+      or (0 * sum(rate(nexora_http_requests_total{job="nexora-api",route!~"/metrics|/api/v1/health/.*"}[1h]))))
+      / sum(rate(nexora_http_requests_total{job="nexora-api",route!~"/metrics|/api/v1/health/.*"}[1h]))
+  - record: nexora:run_error_ratio:5m
+    expr: (sum(rate(nexora_agent_runs_total{job="nexora-worker",outcome="failed_terminal"}[5m]))
+      or (0 * sum(rate(nexora_agent_runs_total{job="nexora-worker",outcome=~"succeeded|failed_terminal"}[5m]))))
+      / sum(rate(nexora_agent_runs_total{job="nexora-worker",outcome=~"succeeded|failed_terminal"}[5m]))
+  - record: nexora:run_error_ratio:1h
+    expr: (sum(rate(nexora_agent_runs_total{job="nexora-worker",outcome="failed_terminal"}[1h]))
+      or (0 * sum(rate(nexora_agent_runs_total{job="nexora-worker",outcome=~"succeeded|failed_terminal"}[1h]))))
+      / sum(rate(nexora_agent_runs_total{job="nexora-worker",outcome=~"succeeded|failed_terminal"}[1h]))
+- name: nexora-alerts
+  rules:
+  - alert: NexoraMetricsTargetDown
+    expr: up{job=~"nexora-api|nexora-worker"} == 0
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: Nexora metrics target is unreachable
+      description: Check service readiness, network connectivity and the metrics credential.
+        A failed scrape is not evidence of healthy traffic.
+      runbook_url: https://github.com/tayfunates10/nexora-agentos/blob/main/infra/monitoring/README.md#target-down
+  - alert: NexoraApiErrorBudgetBurn
+    expr: (nexora:api_error_ratio:1h > (0.02 * 24 * scalar(min(nexora_slo_window_days{job="nexora-api",slo="api_availability"}))
+      * (1 - scalar(min(nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"})))))
+      and (nexora:api_error_ratio:5m > (0.02 * 24 * scalar(min(nexora_slo_window_days{job="nexora-api",slo="api_availability"}))
+      * (1 - scalar(min(nexora_slo_objective_ratio{job="nexora-api",slo="api_availability"})))))
+    for: 2m
+    labels:
+      severity: critical
+      slo: api_availability
+    annotations:
+      summary: Nexora API error budget is burning quickly
+      description: Both the one-hour and five-minute error ratios exceed the fast-burn
+        threshold derived from the exported SLO. Inspect errors and recent deployments.
+      runbook_url: https://github.com/tayfunates10/nexora-agentos/blob/main/infra/monitoring/README.md#error-budget-burn
+  - alert: NexoraTerminalRunErrorBudgetBurn
+    expr: (nexora:run_error_ratio:1h > (0.02 * 24 * scalar(min(nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}))
+      * (1 - scalar(min(nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"})))))
+      and (nexora:run_error_ratio:5m > (0.02 * 24 * scalar(min(nexora_slo_window_days{job="nexora-worker",slo="agent_run_reliability"}))
+      * (1 - scalar(min(nexora_slo_objective_ratio{job="nexora-worker",slo="agent_run_reliability"})))))
+    for: 2m
+    labels:
+      severity: critical
+      slo: agent_run_reliability
+    annotations:
+      summary: Nexora terminal run error budget is burning quickly
+      description: Both the one-hour and five-minute error ratios exceed the fast-burn
+        threshold derived from the exported SLO. Inspect errors and recent deployments.
+      runbook_url: https://github.com/tayfunates10/nexora-agentos/blob/main/infra/monitoring/README.md#error-budget-burn

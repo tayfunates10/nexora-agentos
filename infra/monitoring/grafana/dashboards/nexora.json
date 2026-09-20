@@ -1,0 +1,400 @@
+{
+  "uid": "nexora-operations",
+  "title": "Nexora operations",
+  "description": "Operator-only process telemetry. Gaps mean no evidence, not success. Workspace budgets and quality evidence remain in the tenant console.",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "tags": [
+    "nexora",
+    "operations"
+  ],
+  "timezone": "utc",
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Scrape health",
+      "description": "One series per process. Zero means scrape failure; missing data is not healthy.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=~\"nexora-api|nexora-worker\"}",
+          "legendFormat": "{{job}} / {{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "API error ratio \u00b7 5 minutes",
+      "description": "5xx responses / API requests. Health and metrics endpoints are excluded. No traffic produces a gap.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nexora:api_error_ratio:5m",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "API latency \u00b7 p95",
+      "description": "Observed server latency; not browser latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(nexora_http_request_duration_seconds_bucket{job=\"nexora-api\",route!~\"/metrics|/api/v1/health/.*\"}[5m])))",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Terminal run error ratio \u00b7 5 minutes",
+      "description": "Failed-terminal / (succeeded + failed-terminal) worker outcomes. Retries, waits and cancellations are excluded; process crashes can lose observations.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nexora:run_error_ratio:5m",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Model calls / second",
+      "description": "Includes judge calls. Do not add judge-specific counts to this total.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider, outcome) (rate(nexora_model_calls_total{job=\"nexora-worker\"}[5m]))",
+          "legendFormat": "{{provider}} / {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Model tokens / second",
+      "description": "Provider-reported input and output usage, including judge calls.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider, kind) (rate(nexora_model_tokens_total{job=\"nexora-worker\"}[5m]))",
+          "legendFormat": "{{provider}} / {{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Recorded spend \u00b7 units / hour",
+      "description": "Approximate observed cost rate in operator currency units. Durable workspace ledger is authoritative; this is not an invoice.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (category) (rate(nexora_model_cost_micros_total{job=\"nexora-worker\"}[5m])) * 3600 / 1000000",
+          "legendFormat": "{{category}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Spend refusals / second",
+      "description": "Refused calls due to workspace budget exhaustion.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (category) (rate(nexora_spend_denials_total{job=\"nexora-worker\"}[5m]))",
+          "legendFormat": "{{category}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Judge terminal jobs / second",
+      "description": "Terminal judge jobs; quality scores remain in the tenant console.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(nexora_evaluation_judge_jobs_total{job=\"nexora-worker\"}[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Retained Redis stream entries",
+      "description": "This metric uses XLEN and includes acknowledged entries. It is NOT actionable backlog. Max avoids summing the same shared stream across replicas.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nexora-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(nexora_queue_depth{job=\"nexora-worker\"})",
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}
