@@ -8,7 +8,14 @@ from fastapi import HTTPException
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from nexora_api.evaluation import EvalCase, EvalObservation, EvalResult, compare_result, evaluate_case
+from nexora_api.config import Settings
+from nexora_api.evaluation import (
+    EvalCase,
+    EvalObservation,
+    EvalResult,
+    compare_result,
+    evaluate_case,
+)
 from nexora_api.evaluations import (
     EvalCaseDefinition,
     EvalCaseResult,
@@ -18,7 +25,6 @@ from nexora_api.evaluations import (
     EvalSuiteInput,
     EvalSuiteSummary,
 )
-from nexora_api.config import Settings
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
