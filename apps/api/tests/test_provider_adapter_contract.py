@@ -38,7 +38,11 @@ def test_provider_response_keeps_vendor_objects_out_of_runtime_contract():
     response = ProviderResponse(
         text=None,
         tool_calls=(
-            ProviderToolCall(id="call-1", name="ticket.create", arguments={"title": "Help"}),
+            ProviderToolCall(
+                id="call-1",
+                name="ticket.create",
+                arguments={"title": "Help"},
+            ),
         ),
         structured_output={"summary": "queued"},
         usage=ProviderUsage(input_tokens=12, output_tokens=7),
