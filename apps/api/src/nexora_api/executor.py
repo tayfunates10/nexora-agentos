@@ -17,6 +17,7 @@ from nexora_api.model_routing import (
     ProviderTool,
     RoutingRequest,
 )
+from nexora_api.rag import build_untrusted_context
 from nexora_api.telemetry import record, record_error, span
 from nexora_api.tool_contracts import ToolContractError
 from nexora_api.worker import RetryableExecutionError, TerminalExecutionError
@@ -95,7 +96,12 @@ class DurableAgentExecutor:
             ProviderMessage("user", context.input_text),
         ]
         if self.retriever:
-            evidence = await self._retrieve(principal, context)
+            initial_chars = sum(len(message.content) for message in messages)
+            evidence = await self._retrieve(
+                principal,
+                context,
+                max_evidence_chars=profile.max_context_chars - initial_chars,
+            )
             if evidence:
                 messages.append(ProviderMessage("user", evidence))
         total_tokens = 0
@@ -162,8 +168,8 @@ class DurableAgentExecutor:
                 )
         raise TerminalExecutionError("step_limit_exceeded")
 
-    async def _retrieve(self, principal, context):
-        """Retrieval is timed and traced; retrieved text itself is never telemetry."""
+    async def _retrieve(self, principal, context, *, max_evidence_chars):
+        """Persist the exact evidence context once so retries cannot silently change it."""
         started = time.perf_counter()
         with span(
             "agent.retrieval",
@@ -173,13 +179,25 @@ class DurableAgentExecutor:
             },
         ) as active:
             try:
-                evidence = await self.retriever.context(
-                    principal, context.workspace_id, context.input_text
-                )
+                snapshot = await self.store.load_retrieval(context)
+                if snapshot is None:
+                    result = await self.retriever.retrieve(
+                        principal,
+                        context.workspace_id,
+                        query=context.input_text,
+                        request_id=f"worker-retrieval:{context.run_id}",
+                    )
+                    evidence = build_untrusted_context(result.chunks) if result.chunks else ""
+                    if len(evidence) > max_evidence_chars:
+                        raise TerminalExecutionError("context_limit_exceeded")
+                    snapshot = await self.store.save_retrieval(context, result)
+                evidence = snapshot.context_text
+                if len(evidence) > max_evidence_chars:
+                    raise TerminalExecutionError("context_limit_exceeded")
             except Exception:
                 metrics.observe_retrieval("error", time.perf_counter() - started)
                 raise
-            record(active, **{"nexora.outcome": "hit" if evidence else "miss"})
+            record(active, **{"nexora.outcome": "hit" if snapshot.chunk_count else "miss"})
             metrics.observe_retrieval("success", time.perf_counter() - started)
             return evidence
 

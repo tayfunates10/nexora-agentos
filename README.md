@@ -360,10 +360,14 @@ retrieval data; other owners/admins can still see the non-sensitive history summ
 Agent-run imports map exactly one requester-owned successful agent run to each suite case. The
 persisted case input must match the agent-run input exactly; selected tools and final output are
 derived from the immutable model journal, not supplied by the client. Source run IDs are preserved as
-append-only evaluation provenance. Citation-bearing suites are rejected by the automated importer
-until exact retrieval provenance is durably tied to runs; citation-looking model text is never
-treated as verified evidence. See
-[ADR 0020](docs/architecture/0020-agent-run-evaluation-import.md).
+append-only evaluation provenance. Retrieval-enabled runs now persist immutable source/version/chunk
+identifiers and hashes before model generation; exact retrieved context is kept only while a run may
+retry or resume and is deleted on terminal status. Replay revalidates current chunk identity and ACLs
+instead of silently re-running retrieval. Automated imports derive canonical citations such as
+`rag:handbook@v1` only from that durable provenance; model-authored citation-looking text is never
+accepted as proof. Older runs without provenance still fail closed when a suite requires citations.
+See [ADR 0020](docs/architecture/0020-agent-run-evaluation-import.md) and
+[ADR 0021](docs/architecture/0021-run-retrieval-provenance.md).
 
 History accepts `limit` (1–100, default 25) and the `next_cursor` returned by the preceding
 page. It orders runs newest first and excludes raw output and case details. Cursors are scoped

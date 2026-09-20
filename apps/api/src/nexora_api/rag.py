@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
+from urllib.parse import quote
 from uuid import UUID
 
 
@@ -43,6 +44,11 @@ class RetrievedChunk:
 
 
 RAG_CONTEXT_VERSION = "rag-context-v1"
+
+
+def retrieval_citation_id(source_key: str, source_version: str) -> str:
+    """Canonical identifier for evidence provenance, independent of model-authored text."""
+    return f"rag:{quote(source_key, safe='')}@{quote(source_version, safe='')}"
 
 
 def normalize_document(text: str) -> str:
