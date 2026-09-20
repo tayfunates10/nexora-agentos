@@ -354,7 +354,6 @@ def test_hybrid_retrieval_recovers_exact_identifier_without_acl_leak(keys, auth_
     assert {item.source_key for item in hybrid} == {"semantic-guide", "incident-code"}
 
 
-
 def test_hnsw_retrieval_preserves_fixture_recall_and_uses_partial_index(keys, auth_settings):
     migrate(auth_settings)
     suffix = uuid4().hex
