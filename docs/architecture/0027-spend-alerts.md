@@ -68,10 +68,9 @@ two alerts, and the stored array is bounded to five entries between 1 and 100 by
 
 ## Limits
 
-This increment records and surfaces alerts; it does not deliver them. There is no email, webhook or
-chat notification, because an outbound channel needs its own egress, secret and replay boundary —
-the transactional outbox is the natural carrier when that increment comes, and an alert row is
-already the durable trigger it would read.
+This increment records and surfaces alerts. Delivery is a separate capability with its own egress,
+secret and replay boundary, added in [ADR 0032](0032-spend-alert-delivery.md) through a
+transactional outbox written alongside the alert.
 
 An alert is not re-armed within a period: crossing 80%, dropping below it through a raised limit and
 crossing it again records one alert. A new accounting month starts with none. Thresholds apply to

@@ -57,3 +57,15 @@ groups:
       description: Both the one-hour and five-minute error ratios exceed the fast-burn
         threshold derived from the exported SLO. Inspect errors and recent deployments.
       runbook_url: https://github.com/tayfunates10/nexora-agentos/blob/main/infra/monitoring/README.md#error-budget-burn
+  - alert: NexoraSpendAlertUndelivered
+    expr: sum(increase(nexora_spend_alert_deliveries_total{job="nexora-worker",outcome="abandoned"}[15m]))
+      > 0
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: Nexora abandoned a budget alert notification
+      description: A workspace crossed a budget threshold and its notification was given
+        up after the attempt limit. The durable alert is still readable in the console;
+        the receiver is what failed.
+      runbook_url: https://github.com/tayfunates10/nexora-agentos/blob/main/infra/monitoring/README.md#spend-alert-delivery

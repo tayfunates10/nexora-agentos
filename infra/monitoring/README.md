@@ -83,6 +83,20 @@ so no email, Slack or webhook delivery is claimed. Adding a receiver requires op
 routing and credentials. Workspace percentage alerts in the product console are separate from
 these deployment-wide operational alerts.
 
+## Spend alert delivery
+
+`NexoraSpendAlertUndelivered` fires when the worker gives up on a budget threshold notification
+after its attempt limit. The crossing itself is durable and still visible in the workspace spend
+console: what failed is the operator receiver. Check the endpoint's availability and its response
+codes in the worker's structured logs, where the last error code is recorded without the payload.
+A 4xx or a redirect is abandoned immediately by design, so a misconfigured URL or a rejected
+signature shows up here rather than as an endless retry. Dead-lettered notifications are not
+replayed automatically.
+
+The rule sums across worker replicas, so it reports one deployment-wide alert rather than one per
+pod and does not name the process that gave up. Search every worker replica's logs for the
+delivery, and query the counter by `instance` to narrow it down.
+
 ## Validation and production handoff
 
 The CI monitoring job runs real `promtool check rules` and `promtool test rules`. Fixtures cover

@@ -45,6 +45,7 @@ RUNTIME_TABLES = frozenset(
         "workspace_spend_budgets",
         "workspace_spend_budget_events",
         "workspace_spend_alerts",
+        "workspace_spend_alert_outbox",
     }
 )
 
@@ -74,6 +75,7 @@ API_WRITES: Mapping[str, frozenset[str]] = {
     "workspace_spend_budgets": frozenset({"INSERT", "UPDATE"}),
     "workspace_spend_budget_events": frozenset({"INSERT"}),
     "workspace_spend_alerts": frozenset({"INSERT"}),
+    "workspace_spend_alert_outbox": frozenset({"INSERT"}),
 }
 
 WORKER_WRITES: Mapping[str, frozenset[str]] = {
@@ -95,6 +97,7 @@ WORKER_WRITES: Mapping[str, frozenset[str]] = {
     "eval_judge_case_scores": frozenset({"INSERT"}),
     "workspace_spend_records": frozenset({"INSERT"}),
     "workspace_spend_alerts": frozenset({"INSERT"}),
+    "workspace_spend_alert_outbox": frozenset({"INSERT", "UPDATE"}),
 }
 
 WRITE_PRIVILEGES = frozenset({"INSERT", "UPDATE", "DELETE"})

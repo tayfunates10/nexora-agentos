@@ -35,6 +35,7 @@ _JUDGE_TARGETS = frozenset({"candidate", "baseline"})
 _JUDGE_CALL_OUTCOMES = frozenset({"success", "provider_error", "timeout", "invalid_response"})
 _JUDGE_JOB_OUTCOMES = frozenset({"succeeded", "failed"})
 _SPEND_CATEGORIES = frozenset({"agent_run", "evaluation_judge", "embedding"})
+_ALERT_DELIVERY_OUTCOMES = frozenset({"delivered", "retry", "abandoned"})
 
 _LATENCY_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
 _RUN_BUCKETS = (0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0)
@@ -219,6 +220,12 @@ spend_alerts_total = Counter(
     ("threshold",),
     registry=REGISTRY,
 )
+spend_alert_deliveries_total = Counter(
+    "nexora_spend_alert_deliveries_total",
+    "Spend alert notification attempts by terminal or retried outcome.",
+    ("outcome",),
+    registry=REGISTRY,
+)
 
 
 def label(value: str | None) -> str:
@@ -306,6 +313,10 @@ def observe_spend(provider: str, category: str, cost_micros: int) -> None:
 
 def observe_spend_denied(category: str) -> None:
     spend_denials_total.labels(_bounded(category, _SPEND_CATEGORIES)).inc()
+
+
+def observe_spend_alert_delivery(outcome: str) -> None:
+    spend_alert_deliveries_total.labels(_bounded(outcome, _ALERT_DELIVERY_OUTCOMES)).inc()
 
 
 def observe_spend_alert(threshold_percent: int) -> None:

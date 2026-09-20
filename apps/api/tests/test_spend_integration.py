@@ -1,7 +1,9 @@
 import asyncio
+import json
 import os
 from uuid import UUID, uuid4
 
+import httpx
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
@@ -25,7 +27,7 @@ from nexora_api.model_routing import ModelCandidate, ModelCapability, ModelRoute
 from nexora_api.outbox import QUEUE_STREAM
 from nexora_api.rag_pipeline import RagEmbeddingPipeline
 from nexora_api.rag_repository import RagRepository
-from nexora_api.runtime_config import EvaluationJudgeConfig
+from nexora_api.runtime_config import EvaluationJudgeConfig, RuntimeConfig
 from nexora_api.spend import (
     EmbeddingSpend,
     ModelPrice,
@@ -35,8 +37,15 @@ from nexora_api.spend import (
     knowledge_source_key,
     run_retrieval_source_key,
 )
+from nexora_api.spend_alert_worker import (
+    MAX_DELIVERY_ATTEMPTS,
+    SpendAlertNotifier,
+    SpendAlertWebhook,
+    signature,
+)
 from nexora_api.spend_repository import observe_write, record_spend
 from nexora_api.worker import AgentWorker
+from nexora_api.worker_service import build_spend_alert_notifier
 
 pytestmark = [
     pytest.mark.integration,
@@ -84,6 +93,32 @@ def seed_record(settings, workspace_id, source_key, cost_micros, category="agent
     write = asyncio.run(insert())
     observe_write("test", category, cost_micros, write)
     return write.recorded
+
+
+def test_spend_alert_outbox_rejects_cross_workspace_identity(auth_settings):
+    migrate(auth_settings)
+    first_workspace = uuid4()
+    second_workspace = uuid4()
+    alert_id = uuid4()
+
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        connection.execute(
+            "INSERT INTO workspaces (id,name) VALUES (%s,%s),(%s,%s)",
+            (first_workspace, "Alert owner", second_workspace, "Other workspace"),
+        )
+        connection.execute(
+            """INSERT INTO workspace_spend_alerts
+               (id,workspace_id,period_start,threshold_percent,
+                monthly_limit_micros,consumed_micros,enforcement)
+               VALUES (%s,%s,'2026-09-01',80,100000,80000,'enforce')""",
+            (alert_id, first_workspace),
+        )
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            connection.execute(
+                """INSERT INTO workspace_spend_alert_outbox (alert_id,workspace_id)
+                   VALUES (%s,%s)""",
+                (alert_id, second_workspace),
+            )
 
 
 def test_spend_api_reports_period_usage_and_guards_budget_changes(keys, auth_settings):
@@ -907,3 +942,249 @@ def test_concurrent_spend_cannot_miss_a_threshold(keys, auth_settings, commit_fi
             assert not replay.recorded and replay.alerts == ()
 
     asyncio.run(exercise())
+
+
+ALERT_SECRET = "s" * 32
+
+
+def alert_workspace(keys, auth_settings, suffix, thresholds=(50,)):
+    """A workspace whose budget has already been crossed, with its alert queued."""
+    subject = f"{suffix}-{uuid4()}"
+
+    def headers():
+        return {"Authorization": "Bearer " + token(keys, subject)}
+
+    client = TestClient(create_app(settings=auth_settings))
+    client.__enter__()
+    workspace_id = client.post(
+        "/api/v1/workspaces", json={"name": "Alert delivery"}, headers=headers()
+    ).json()["id"]
+    budget = client.put(
+        f"/api/v1/workspaces/{workspace_id}/spend/budget",
+        json={
+            "monthly_limit_micros": 1_000,
+            "enforcement": "monitor",
+            "alert_thresholds": list(thresholds),
+        },
+        headers=headers(),
+    )
+    assert budget.status_code == 200, budget.text
+    assert seed_record(auth_settings, workspace_id, f"delivery:{uuid4()}", 900) is True
+    return client, headers, workspace_id
+
+
+def outbox_row(auth_settings, workspace_id):
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        return connection.execute(
+            """SELECT alert_id,attempts,delivered_at,dead_lettered_at,last_error,lease_owner
+               FROM workspace_spend_alert_outbox WHERE workspace_id=%s""",
+            (UUID(workspace_id),),
+        ).fetchall()
+
+
+def notifier(auth_settings, handler, *, worker_id="alert-notifier"):
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return (
+        SpendAlertNotifier(
+            auth_settings,
+            SpendAlertWebhook(
+                url="https://alerts.example.test/hooks/spend",
+                signing_secret=ALERT_SECRET,
+                bearer_token="operator-token",
+                timeout_seconds=5,
+            ),
+            worker_id=worker_id,
+            client=client,
+        ),
+        client,
+    )
+
+
+def scoped_handler(workspace_id, responder, attempts):
+    """One notifier serves every workspace, so only this test's rows are asserted on."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content)["workspace_id"] != workspace_id:
+            return httpx.Response(200)
+        attempts.append(request)
+        return responder(request)
+
+    return handler
+
+
+def drain_notifier(worker, client, iterations=12):
+    async def run():
+        try:
+            for _ in range(iterations):
+                if not await worker.process_once():
+                    return
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_a_raised_alert_is_delivered_once_with_a_verifiable_signature(keys, auth_settings):
+    migrate(auth_settings)
+    client, headers, workspace_id = alert_workspace(keys, auth_settings, "alert-delivered")
+    try:
+        queued = outbox_row(auth_settings, workspace_id)
+        assert len(queued) == 1
+        assert (queued[0][1], queued[0][2], queued[0][3]) == (0, None, None)
+
+        requests = []
+        served = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            # Deliveries for other workspaces are counted too: the metric is global.
+            served.append(request)
+            if json.loads(request.content)["workspace_id"] == workspace_id:
+                requests.append(request)
+            return httpx.Response(202, json={"ok": True})
+
+        delivered_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_spend_alert_deliveries_total", {"outcome": "delivered"}
+            )
+            or 0.0
+        )
+        worker, transport = notifier(auth_settings, handler)
+        drain_notifier(worker, transport)
+        # Exactly one request for this workspace, however many others were queued.
+        assert len(requests) == 1
+
+        request = requests[0]
+        assert request.headers["nexora-event"] == "spend.threshold.reached.v1"
+        assert request.headers["authorization"] == "Bearer operator-token"
+        payload = json.loads(request.content)
+        assert payload["workspace_id"] == workspace_id
+        assert payload["threshold_percent"] == 50
+        assert payload["consumed_micros"] == 900
+        assert payload["monthly_limit_micros"] == 1_000
+        assert payload["enforcement"] == "monitor"
+        assert request.headers["nexora-delivery-id"] == payload["event_id"]
+        # A receiver can verify the exact bytes it was sent.
+        expected = signature(
+            ALERT_SECRET, int(request.headers["nexora-timestamp"]), request.content
+        )
+        assert request.headers["nexora-signature"] == expected
+
+        row = outbox_row(auth_settings, workspace_id)[0]
+        assert row[1] == 1
+        assert row[2] is not None and row[3] is None
+        assert row[5] is None
+        assert metrics.REGISTRY.get_sample_value(
+            "nexora_spend_alert_deliveries_total", {"outcome": "delivered"}
+        ) == delivered_before + len(served)
+
+        # A delivered notification is terminal at the database, not just in code.
+        with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+            with pytest.raises(psycopg.errors.RaiseException, match="already delivered"):
+                connection.execute(
+                    """UPDATE workspace_spend_alert_outbox SET delivered_at=now()
+                       WHERE workspace_id=%s""",
+                    (UUID(workspace_id),),
+                )
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_a_rejected_or_redirected_notification_is_abandoned_without_retrying(keys, auth_settings):
+    migrate(auth_settings)
+    client, headers, workspace_id = alert_workspace(keys, auth_settings, "alert-rejected")
+    try:
+        attempts = []
+        # A redirect could move a signed tenant event to an unvetted host.
+        handler = scoped_handler(
+            workspace_id,
+            lambda request: httpx.Response(
+                302, headers={"location": "https://elsewhere.example.test/"}
+            ),
+            attempts,
+        )
+
+        abandoned_before = (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_spend_alert_deliveries_total", {"outcome": "abandoned"}
+            )
+            or 0.0
+        )
+        worker, transport = notifier(auth_settings, handler)
+        drain_notifier(worker, transport)
+        assert len(attempts) == 1
+
+        row = outbox_row(auth_settings, workspace_id)[0]
+        assert row[1] == 1
+        assert row[2] is None and row[3] is not None
+        assert row[4] == "alert_redirect_forbidden"
+        assert (
+            metrics.REGISTRY.get_sample_value(
+                "nexora_spend_alert_deliveries_total", {"outcome": "abandoned"}
+            )
+            == abandoned_before + 1
+        )
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_an_unavailable_receiver_is_retried_then_abandoned(keys, auth_settings):
+    migrate(auth_settings)
+    client, headers, workspace_id = alert_workspace(keys, auth_settings, "alert-retry")
+    try:
+        attempts = []
+        handler = scoped_handler(workspace_id, lambda request: httpx.Response(503), attempts)
+
+        worker, transport = notifier(auth_settings, handler)
+        drain_notifier(worker, transport)
+        assert len(attempts) == 1
+        row = outbox_row(auth_settings, workspace_id)[0]
+        assert row[1] == 1
+        assert row[2] is None and row[3] is None
+        assert row[4] == "alert_unavailable"
+
+        # Backoff holds the next attempt back rather than hammering the receiver.
+        worker, transport = notifier(auth_settings, handler)
+        drain_notifier(worker, transport)
+        assert len(attempts) == 1
+
+        with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+            connection.execute(
+                """UPDATE workspace_spend_alert_outbox
+                   SET attempts=%s,available_at=now() WHERE workspace_id=%s""",
+                (MAX_DELIVERY_ATTEMPTS - 1, UUID(workspace_id)),
+            )
+        worker, transport = notifier(auth_settings, handler)
+        drain_notifier(worker, transport)
+        assert len(attempts) == 2
+
+        row = outbox_row(auth_settings, workspace_id)[0]
+        assert row[1] == MAX_DELIVERY_ATTEMPTS
+        assert row[2] is None and row[3] is not None
+        assert row[4] == "alert_unavailable"
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_delivery_never_starts_without_an_operator_endpoint(keys, auth_settings):
+    migrate(auth_settings)
+    client, headers, workspace_id = alert_workspace(keys, auth_settings, "alert-unconfigured")
+    try:
+        # The notification stays queued: nothing is dropped because delivery is off.
+        config = RuntimeConfig.model_validate(
+            {
+                "model_candidates": [
+                    {"provider": "openai", "model": "m", "capabilities": ["text"]}
+                ],
+                "profiles": {
+                    "default": {
+                        "allowed_workspaces": [workspace_id],
+                        "allowed_providers": ["openai"],
+                    }
+                },
+            }
+        )
+        assert build_spend_alert_notifier(auth_settings, config, worker_id="none") is None
+        row = outbox_row(auth_settings, workspace_id)[0]
+        assert row[2] is None and row[3] is None
+    finally:
+        client.__exit__(None, None, None)

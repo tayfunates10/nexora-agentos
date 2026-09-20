@@ -38,7 +38,8 @@ Provider spend is now metered per workspace: operator-declared prices are conver
 append-only cost ledger inside the transaction that commits each model step, judge case or indexed
 knowledge version, and per-workspace monthly budgets are enforced before any provider egress,
 generation and embeddings alike. Budget thresholds record an append-only alert the first time a
-period reaches them. The web console reports that spend per period and lets owners and admins set
+period reaches them, and a transactional outbox delivers each one to an operator-declared,
+signed webhook. The web console reports that spend per period and lets owners and admins set
 the cap and its thresholds.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
@@ -66,7 +67,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [spend alerts](docs/architecture/0027-spend-alerts.md), and
 [API rate limiting](docs/architecture/0029-api-rate-limiting.md), and
 [OIDC JWKS rotation](docs/architecture/0030-oidc-jwks-rotation.md), and
-[PostgreSQL role separation](docs/architecture/0031-postgres-role-separation.md).
+[PostgreSQL role separation](docs/architecture/0031-postgres-role-separation.md), and
+[spend alert delivery](docs/architecture/0032-spend-alert-delivery.md).
 
 ## Run locally with Docker Compose
 
@@ -210,7 +212,8 @@ nothing runs unless a deployment explicitly allows it.
 1. Copy `infra/worker/runtime.example.json`, set the workspace IDs, provider and model your
    deployment allows, and point `NEXORA_WORKER_RUNTIME_CONFIG` at it.
 2. Put the provider credential in the environment (`NEXORA_OPENAI_API_KEY`), never in the
-   configuration file — an unknown key there is rejected.
+   configuration file — an unknown key there is rejected. The same holds for the spend alert
+   signing secret, which the configuration names but never contains.
 3. Start it: `docker compose --profile worker up --build -d`, or run
    `python -m nexora_api.worker_main` with the same variables exported.
 
@@ -246,9 +249,18 @@ nothing runs unless a deployment explicitly allows it.
     "model": "your-model",
     "allowed_workspaces": ["<workspace-uuid>"],
     "prompt_version": "nexora-eval-judge-v1"
+  },
+  "spend_alert_webhook": {
+    "url": "https://alerts.your-operator.example/hooks/nexora-spend",
+    "signing_secret_env": "NEXORA_SPEND_ALERT_SIGNING_SECRET"
   }
 }
 ```
+
+`spend_alert_webhook` is shown here for its shape and is deliberately absent from
+`infra/worker/runtime.example.json`: declaring it makes the worker refuse to start until the
+named signing secret is in the environment, which is the right behaviour for an operator who
+chose an endpoint and the wrong default for a copy of the example.
 
 A run selects a profile only through the `model_profile` on its agent definition; it cannot
 name a model, provider, endpoint or tool the profile does not list. A run whose workspace is
@@ -467,9 +479,21 @@ percentage of the limit, an append-only alert row records the threshold with the
 amount and enforcement mode as they stood at that moment; a unique key per workspace, period and
 threshold is what keeps a busy month from repeating one warning. Crossing is compared with integer
 arithmetic, and writing a tighter budget re-evaluates thresholds because a lower limit can cross one
-without new spend. Alerts never block a call — enforcement does that — and they are recorded and
-surfaced, not delivered by email or webhook. See
+without new spend. Alerts never block a call — enforcement does that. See
 [ADR 0027](docs/architecture/0027-spend-alerts.md).
+
+Each alert also queues one notification in the same statement that records it, so a warning is
+never owed for a crossing that rolled back and a crossing never commits without its notification
+queued. Delivery is opt-in worker work: declare `spend_alert_webhook` in the runtime configuration
+with an HTTPS endpoint on port 443 and the name of the environment variable holding a signing
+secret of at least 32 characters. A workspace can never name that URL. Requests carry
+`spend.threshold.reached.v1` with identifiers and amounts only — no workspace name, user, prompt,
+model or retrieval data — plus `nexora-timestamp` and an HMAC-SHA256 `nexora-signature` a receiver
+must verify over the exact bytes before parsing, and `nexora-delivery-id` to deduplicate the
+at-least-once retries. Redirects are refused, responses are drained under a bound and never parsed,
+retryable failures back off, and a notification is dead-lettered after five attempts rather than
+retried forever. Without a configured endpoint notifications simply stay queued. See
+[ADR 0032](docs/architecture/0032-spend-alert-delivery.md).
 
 Budget changes are recorded twice — in an append-only budget event with actor and request identity,
 and in the workspace security audit trail. Ledger rows and budget events reject update, delete and
@@ -514,7 +538,8 @@ Exposed series include `nexora_http_requests_total`,
 `nexora_evaluation_judge_jobs_total`,
 `nexora_model_cost_micros_total`,
 `nexora_spend_denials_total` and
-`nexora_spend_alerts_total`.
+`nexora_spend_alerts_total` and
+`nexora_spend_alert_deliveries_total`.
 
 Two user-facing objectives are declared in code and exported alongside them, so alert
 rules read the stated goal rather than a hardcoded number: API availability at 99.9% and
