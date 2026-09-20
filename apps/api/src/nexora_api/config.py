@@ -7,6 +7,10 @@ LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NEXORA_", extra="ignore")
     database_url: SecretStr = SecretStr("postgresql://localhost/nexora")
+    # Set only on the migration process in production. These are capability role
+    # names, not credentials; the workload-specific login URLs stay in Secrets.
+    database_api_role: str | None = None
+    database_worker_role: str | None = None
     redis_url: SecretStr = SecretStr("redis://localhost:6379/0")
     dependency_timeout_seconds: float = 2.0
     # The issuer/audience are operator trust anchors. A static PEM remains an optional
@@ -39,6 +43,17 @@ class Settings(BaseSettings):
     worker_shutdown_grace_seconds: float = Field(default=25.0, ge=1.0, le=300.0)
     worker_admin_port: int = Field(default=8001, ge=1, le=65535)
     openai_api_key: SecretStr | None = None
+
+    @field_validator("database_api_role", "database_worker_role", mode="before")
+    @classmethod
+    def _database_role_name(cls, value):
+        if value in (None, ""):
+            return None
+        if not isinstance(value, str) or not __import__("re").fullmatch(
+            r"[a-z_][a-z0-9_]{0,62}", value
+        ):
+            raise ValueError("database runtime role must be a simple PostgreSQL identifier")
+        return value
 
     @field_validator("auth_jwks_url", mode="before")
     @classmethod
