@@ -95,14 +95,17 @@ class EvalSuitePage(BaseModel):
 
 
 class EvalObservationInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid")
     case_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$")
     selected_tools: list[BoundedName] = Field(default_factory=list, max_length=32)
     citations: list[BoundedName] = Field(default_factory=list, max_length=64)
-    raw_output: str | None = Field(default=None, max_length=50000)
+    raw_output: str | None = Field(default=None, min_length=1, max_length=50000)
 
     @model_validator(mode="after")
     def validate_sets(self):
+        for values in (self.selected_tools, self.citations):
+            if any(not value.strip() or value != value.strip() for value in values):
+                raise ValueError("tool and citation values must be trimmed and non-empty")
         if len(self.selected_tools) != len(set(self.selected_tools)):
             raise ValueError("selected_tools must not contain duplicates")
         if len(self.citations) != len(set(self.citations)):
