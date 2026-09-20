@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from nexora_api.config import Settings
+from nexora_api.oidc_keys import OidcKeyNotFound, OidcKeyResolver, OidcKeyUnavailable
 from nexora_api.rate_limit import RateLimitUnavailable
 
 
@@ -18,15 +19,13 @@ class Principal:
 bearer = HTTPBearer(auto_error=False)
 
 
-def verify_token(token: str, settings: Settings) -> Principal:
-    if not all([settings.auth_issuer, settings.auth_audience, settings.auth_public_key]):
-        raise HTTPException(503, "Authentication is not configured")
+def _decode_token(token: str, key, settings: Settings) -> Principal:
     if len(token) > 8192:
         raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
     try:
         claims = jwt.decode(
             token,
-            settings.auth_public_key,
+            key,
             algorithms=["RS256"],
             issuer=settings.auth_issuer,
             audience=settings.auth_audience,
@@ -43,8 +42,34 @@ def verify_token(token: str, settings: Settings) -> Principal:
     except jwt.InvalidTokenError:
         raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"}) from None
     except (jwt.InvalidKeyError, ValueError, TypeError):
-        # Invalid deployment key/config is not an authentication bypass.
         raise HTTPException(503, "Authentication configuration invalid") from None
+
+
+def verify_token(token: str, settings: Settings) -> Principal:
+    """Verify against an explicitly pinned PEM; kept for deterministic tests/pinned deployments."""
+    if not all([settings.auth_issuer, settings.auth_audience, settings.auth_public_key]):
+        raise HTTPException(503, "Authentication is not configured")
+    return _decode_token(token, settings.auth_public_key, settings)
+
+
+async def verify_request_token(
+    token: str,
+    settings: Settings,
+    key_resolver: OidcKeyResolver,
+) -> Principal:
+    if settings.auth_public_key:
+        return verify_token(token, settings)
+    if not settings.auth_issuer or not settings.auth_audience:
+        raise HTTPException(503, "Authentication is not configured")
+    if len(token) > 8192:
+        raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
+    try:
+        key = await key_resolver.key_for(token)
+    except OidcKeyNotFound:
+        raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"}) from None
+    except OidcKeyUnavailable:
+        raise HTTPException(503, "Authentication key service unavailable") from None
+    return _decode_token(token, key, settings)
 
 
 async def authenticated(
@@ -53,7 +78,11 @@ async def authenticated(
 ) -> Principal:
     if credentials is None:
         raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
-    principal = verify_token(credentials.credentials, request.app.state.settings)
+    principal = await verify_request_token(
+        credentials.credentials,
+        request.app.state.settings,
+        request.app.state.oidc_keys,
+    )
     try:
         decision = await request.app.state.identity_rate_limiter.check(
             principal.issuer, principal.subject
