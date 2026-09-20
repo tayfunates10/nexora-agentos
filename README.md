@@ -39,7 +39,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [durable executor](docs/architecture/0009-durable-executor.md), and
 [observability](docs/architecture/0010-observability.md), and
 [worker service](docs/architecture/0011-worker-service.md), and
-[Kubernetes deployment](docs/architecture/0012-kubernetes-deployment.md).
+[Kubernetes deployment](docs/architecture/0012-kubernetes-deployment.md), and
+[release pipeline](docs/architecture/0013-release-pipeline.md).
 
 ## Run locally with Docker Compose
 
@@ -91,6 +92,13 @@ digest-pinned images in the production overlay. No credential is committed; the 
 created out of band. See [infra/k8s/README.md](infra/k8s/README.md) for the apply and
 rollback sequence and [ADR 0012](docs/architecture/0012-kubernetes-deployment.md) for the
 boundaries these manifests enforce.
+
+Pushing to `main` builds each image once, publishes it tagged by commit SHA with
+provenance and SBOM attestations, and prints the command that pins its digest into the
+production overlay. Promotion is that explicit edit, reviewed and merged like any other
+change; there is no `latest` tag to drift. CI also refuses a change that modifies or
+deletes a migration a deployed database has already applied, which is what makes
+`kubectl rollout undo` safe. See [ADR 0013](docs/architecture/0013-release-pipeline.md).
 
 ## Quality checks
 

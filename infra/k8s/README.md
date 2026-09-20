@@ -50,6 +50,17 @@ Set the digests in `overlays/production/kustomization.yaml` to the images CI bui
 verified. A moving tag cannot be the artifact that passed CI, so images are pinned by
 digest and never by tag.
 
+The Release workflow publishes each image on every push to `main` and prints the exact
+promotion command in its job summary:
+
+```bash
+python scripts/promote_release.py   --image nexora/api   --new-name ghcr.io/<owner>/nexora-api   --digest sha256:<digest from the release summary>
+```
+
+Commit that edit and merge it: promotion is reviewable history, not a side effect of a
+build. The script refuses a malformed digest, an image the overlay does not declare, or
+a tag left beside a digest.
+
 ## Rollback
 
 Deployments keep three revisions, so a bad rollout is reversed without rebuilding:
