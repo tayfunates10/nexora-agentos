@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -18,8 +19,13 @@ class RetrievalEvalCase:
     def __post_init__(self) -> None:
         if not 1 <= len(self.case_id) <= 128:
             raise ValueError("case_id must be between 1 and 128 characters")
-        if not self.query_embedding:
-            raise ValueError("query_embedding must not be empty")
+        if not 1 <= len(self.query_embedding) <= 4096:
+            raise ValueError("query_embedding dimensions must be between 1 and 4096")
+        values = tuple(float(value) for value in self.query_embedding)
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError("query_embedding values must be finite")
+        if not any(value != 0 for value in values):
+            raise ValueError("query_embedding must not be the zero vector")
         if not self.expected_source_keys:
             raise ValueError("expected_source_keys must not be empty")
         if any(not key or len(key) > 255 for key in self.expected_source_keys):
