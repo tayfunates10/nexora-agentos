@@ -95,6 +95,32 @@ def seed_record(settings, workspace_id, source_key, cost_micros, category="agent
     return write.recorded
 
 
+def test_spend_alert_outbox_rejects_cross_workspace_identity(auth_settings):
+    migrate(auth_settings)
+    first_workspace = uuid4()
+    second_workspace = uuid4()
+    alert_id = uuid4()
+
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        connection.execute(
+            "INSERT INTO workspaces (id,name) VALUES (%s,%s),(%s,%s)",
+            (first_workspace, "Alert owner", second_workspace, "Other workspace"),
+        )
+        connection.execute(
+            """INSERT INTO workspace_spend_alerts
+               (id,workspace_id,period_start,threshold_percent,
+                monthly_limit_micros,consumed_micros,enforcement)
+               VALUES (%s,%s,'2026-09-01',80,100000,80000,'enforce')""",
+            (alert_id, first_workspace),
+        )
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            connection.execute(
+                """INSERT INTO workspace_spend_alert_outbox (alert_id,workspace_id)
+                   VALUES (%s,%s)""",
+                (alert_id, second_workspace),
+            )
+
+
 def test_spend_api_reports_period_usage_and_guards_budget_changes(keys, auth_settings):
     migrate(auth_settings)
     prefix = "spend-" + str(uuid4())
