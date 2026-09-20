@@ -89,6 +89,10 @@ class AgentRunResult(BaseModel):
     failure_code: str | None
     recorded_input_tokens: int
     recorded_output_tokens: int
+    model_cost_usd_picos: str | None
+    model_cost_call_count: int
+    model_cost_pricing_complete: bool
+    model_cost_pricing_versions: list[str]
     selected_tools: list[str]
     model_steps: list[RecordedModelStep]
 
