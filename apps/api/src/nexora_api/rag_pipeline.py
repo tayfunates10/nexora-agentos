@@ -41,6 +41,7 @@ class RagEmbeddingPipeline:
         batch_size: int = 128,
         timeout_seconds: float = 15.0,
         retrieval_limit: int = 8,
+        retrieval_strategy: str = "hybrid",
         spend: EmbeddingSpend | None = None,
     ):
         if not 1 <= dimensions <= 4096:
@@ -51,6 +52,8 @@ class RagEmbeddingPipeline:
             raise ValueError("timeout_seconds must be positive")
         if not 1 <= retrieval_limit <= 50:
             raise ValueError("retrieval_limit must be between 1 and 50")
+        if retrieval_strategy not in {"vector", "hybrid"}:
+            raise ValueError("retrieval_strategy must be vector or hybrid")
         self.repository = repository
         self.adapter = adapter
         self.embedding_model = embedding_model
@@ -58,6 +61,7 @@ class RagEmbeddingPipeline:
         self.batch_size = batch_size
         self.timeout_seconds = timeout_seconds
         self.retrieval_limit = retrieval_limit
+        self.retrieval_strategy = retrieval_strategy
         # Without operator pricing, embedding accounting and budgets stay off rather
         # than recording a fabricated zero cost.
         self.spend = spend
@@ -154,6 +158,7 @@ class RagEmbeddingPipeline:
             workspace_id,
             embedding_model=self.embedding_model,
             query_embedding=vectors[0],
+            query_text=query if self.retrieval_strategy == "hybrid" else None,
             limit=self.retrieval_limit if limit is None else limit,
         )
         return RagSearchResult(chunks=chunks, embedding_input_tokens=input_tokens)
