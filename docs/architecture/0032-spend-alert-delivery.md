@@ -73,6 +73,15 @@ Delivery state is operator infrastructure and stays out of the tenant API. A wor
 the durable alert in the console; whether the operator's webhook accepted it is not their concern
 and would leak operator detail into a tenant surface.
 
+## Database least privilege
+
+Migration 014 is part of the production PostgreSQL role policy. The API role may INSERT an outbox row
+when a budget edit crosses a threshold. The worker role may INSERT notifications produced by metered
+provider work and UPDATE leased delivery state. Both inherit the common SELECT grant; neither owns
+the table or receives DELETE, TRUNCATE, REFERENCES or TRIGGER privileges. The migration identity
+retains schema ownership and deployment fails closed if this table is missing from the reviewed
+runtime privilege inventory.
+
 ## Limits
 
 One endpoint per deployment, not per workspace: per-tenant routing needs a tenant-configurable
