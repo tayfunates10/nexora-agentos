@@ -143,8 +143,10 @@ class EvaluationJudgeWorker:
 
     async def _claim(self):
         allowed = list(self.config.allowed_workspaces)
+        claimed = None
+        expired_terminal_count = 0
         async with self.connection() as connection:
-            await connection.execute(
+            expired = await connection.execute(
                 """UPDATE eval_judge_runs
                    SET status=CASE
                            WHEN attempt_count + 1 >= %s THEN 'failed'
@@ -165,7 +167,8 @@ class EvaluationJudgeWorker:
                      AND workspace_id=ANY(%s::uuid[])
                      AND judge_provider=%s
                      AND judge_model=%s
-                     AND prompt_version=%s""",
+                     AND prompt_version=%s
+                   RETURNING status""",
                 (
                     MAX_JUDGE_ATTEMPTS,
                     MAX_JUDGE_ATTEMPTS,
@@ -175,6 +178,9 @@ class EvaluationJudgeWorker:
                     self.config.prompt_version,
                 ),
             )
+            expired_rows = await expired.fetchall()
+            expired_terminal_count = sum(row["status"] == "failed" for row in expired_rows)
+
             result = await connection.execute(
                 """SELECT * FROM eval_judge_runs
                    WHERE status='queued'
@@ -199,30 +205,33 @@ class EvaluationJudgeWorker:
                 ),
             )
             job = await result.fetchone()
-            if not job:
-                return None
-            updated = await connection.execute(
-                """UPDATE eval_judge_runs
-                   SET status='running',
-                       lease_owner=%s,
-                       lease_expires_at=now()+(%s * interval '1 second'),
-                       judge_provider=COALESCE(judge_provider,%s),
-                       judge_model=COALESCE(judge_model,%s),
-                       prompt_version=COALESCE(prompt_version,%s),
-                       error_code=NULL,
-                       updated_at=now()
-                   WHERE id=%s
-                   RETURNING *""",
-                (
-                    self.worker_id,
-                    self.lease_seconds,
-                    self.config.provider,
-                    self.config.model,
-                    self.config.prompt_version,
-                    job["id"],
-                ),
-            )
-            return await updated.fetchone()
+            if job:
+                updated = await connection.execute(
+                    """UPDATE eval_judge_runs
+                       SET status='running',
+                           lease_owner=%s,
+                           lease_expires_at=now()+(%s * interval '1 second'),
+                           judge_provider=COALESCE(judge_provider,%s),
+                           judge_model=COALESCE(judge_model,%s),
+                           prompt_version=COALESCE(prompt_version,%s),
+                           error_code=NULL,
+                           updated_at=now()
+                       WHERE id=%s
+                       RETURNING *""",
+                    (
+                        self.worker_id,
+                        self.lease_seconds,
+                        self.config.provider,
+                        self.config.model,
+                        self.config.prompt_version,
+                        job["id"],
+                    ),
+                )
+                claimed = await updated.fetchone()
+
+        for _ in range(expired_terminal_count):
+            observe_evaluation_judge_job("failed")
+        return claimed
 
     async def _assert_authorized(self, job):
         principal = Principal(job["requested_by_issuer"], job["requested_by_subject"])
