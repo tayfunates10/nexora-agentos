@@ -275,11 +275,21 @@ def test_delete_cancels_queued_ingestion_and_rejects_running_delete(keys, auth_s
     with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
         connection.execute(
             """UPDATE knowledge_ingestion_jobs
-               SET status='cancelled',lease_owner=NULL,lease_expires_at=NULL,
-                   finished_at=now()
+               SET lease_expires_at=now()-interval '1 second'
                WHERE id=%s""",
             (running_id,),
         )
+
+    assert (
+        client.delete(base + "/sources/running-source", headers=headers(admin)).status_code == 204
+    )
+    with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+        row = connection.execute(
+            """SELECT status,lease_owner,lease_expires_at
+               FROM knowledge_ingestion_jobs WHERE id=%s""",
+            (running_id,),
+        ).fetchone()
+    assert row == ("cancelled", None, None)
     client.__exit__(None, None, None)
 
 def test_lost_ingestion_lease_rolls_back_source_write(keys, auth_settings):
