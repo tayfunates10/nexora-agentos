@@ -135,8 +135,7 @@ class OpenAIResponsesAdapter:
         payload: dict[str, Any] = {
             "model": model,
             "input": [
-                {"role": message.role, "content": message.content}
-                for message in request.messages
+                {"role": message.role, "content": message.content} for message in request.messages
             ],
             "store": False,
         }
@@ -335,9 +334,7 @@ class OpenAIResponsesAdapter:
             raise ProviderError("provider_invalid_stream")
         return event
 
-    def _normalize_stream_event(
-        self, event: dict[str, Any]
-    ) -> tuple[ProviderStreamEvent, ...]:
+    def _normalize_stream_event(self, event: dict[str, Any]) -> tuple[ProviderStreamEvent, ...]:
         event_type = event.get("type")
         if event_type == "response.output_text.delta":
             delta = event.get("delta")
