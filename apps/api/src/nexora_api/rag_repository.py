@@ -16,7 +16,12 @@ from psycopg.types.json import Jsonb
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.metrics import observe_spend_denied
-from nexora_api.rag_ann import HNSW_MAX_EF_SEARCH, hnsw_index_name, validate_ann_target
+from nexora_api.rag_ann import (
+    HNSW_MAX_EF_SEARCH,
+    MAX_HNSW_VECTOR_DIMENSIONS,
+    hnsw_index_name,
+    validate_ann_target,
+)
 from nexora_api.rag import (
     AccessScope,
     AclIdentity,
@@ -623,7 +628,10 @@ class RagRepository:
     def _distance_expression(dimensions: int, *, ann: bool):
         if not ann:
             return sql.SQL("c.embedding <=> %s::vector")
-        validate_ann_target("validated-model", dimensions)
+        if not 1 <= dimensions <= MAX_HNSW_VECTOR_DIMENSIONS:
+            raise ValueError(
+                f"HNSW vector dimensions must be between 1 and {MAX_HNSW_VECTOR_DIMENSIONS}"
+            )
         return sql.SQL("c.embedding::vector({}) <=> %s::vector({})").format(
             sql.Literal(dimensions),
             sql.Literal(dimensions),
