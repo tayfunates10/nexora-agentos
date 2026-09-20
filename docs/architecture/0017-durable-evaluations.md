@@ -85,15 +85,16 @@ Evaluation submission is an assessment path, not an execution path: it cannot ca
 external messages, modify an agent run or invoke model providers. Failed raw output remains tenant
 data and is not copied to telemetry.
 
-## Future judge and automated execution layers
+## Judge and automated execution layers
 
-Model-judge scoring is intentionally not part of this increment. A later judge layer must pin judge
-prompt/version/model, keep judge scores separate from deterministic assertions, record cost and
-latency, and run outside the API process through an operator-controlled worker.
+The deterministic contract in this ADR remains unchanged. Agent-run automation now imports
+observations from completed requester-owned runs while preserving immutable suite versions,
+baseline semantics, tenant boundaries and complete-case comparison rules.
 
-A later automation layer may harvest observations directly from completed agent runs. That layer
-must preserve the same immutable suite version, baseline semantics, tenant boundary and complete-case
-comparison rules.
+The optional LLM judge layer is implemented separately in ADR 0022. It pins the judge
+prompt/version/model, keeps probabilistic quality scores separate from deterministic assertions,
+records normalized token usage and provider latency, and runs only through the operator-controlled
+worker. Judge results never mutate the deterministic pass/fail record.
 
 ## Skills applied
 
