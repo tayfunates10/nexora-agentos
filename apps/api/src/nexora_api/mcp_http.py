@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +35,16 @@ class McpHttpEndpoint:
             or parsed.port not in (None, 443)
         ):
             raise ValueError("MCP endpoint must be an HTTPS URL on port 443 without credentials/query")
+        hostname = parsed.hostname.rstrip(".").lower()
+        if hostname == "localhost" or not hostname:
+            raise ValueError("MCP endpoint hostname is not allowed")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            if not address.is_global:
+                raise ValueError("MCP endpoint literal IP must be globally routable")
         if not 0.1 <= self.timeout_seconds <= 120:
             raise ValueError("MCP endpoint timeout must be between 0.1 and 120 seconds")
         if not 1024 <= self.max_response_bytes <= 1024 * 1024:
