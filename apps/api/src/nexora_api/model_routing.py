@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, AsyncIterator, Protocol
 
 
 class ModelCapability(StrEnum):
@@ -50,10 +50,82 @@ class RoutingDecision:
     reason: str
 
 
-class ProviderAdapter(Protocol):
-    """Provider boundary. Vendor SDK objects must not escape this interface."""
+@dataclass(frozen=True, slots=True)
+class ProviderMessage:
+    role: str
+    content: str
 
-    async def generate(self, *, model: str, messages: list[dict[str, str]]) -> dict: ...
+
+@dataclass(frozen=True, slots=True)
+class ProviderTool:
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderRequest:
+    messages: tuple[ProviderMessage, ...]
+    tools: tuple[ProviderTool, ...] = ()
+    response_schema: dict[str, Any] | None = None
+    max_output_tokens: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderUsage:
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderResponse:
+    text: str | None
+    tool_calls: tuple[ProviderToolCall, ...]
+    structured_output: dict[str, Any] | None
+    usage: ProviderUsage
+    finish_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderStreamEvent:
+    type: str
+    text_delta: str | None = None
+    tool_call: ProviderToolCall | None = None
+    usage: ProviderUsage | None = None
+
+
+class ProviderAdapter(Protocol):
+    """Provider boundary. Vendor SDK objects and credentials must not escape this interface."""
+
+    @property
+    def name(self) -> str: ...
+
+    def capabilities(self, model: str) -> frozenset[ModelCapability]: ...
+
+    async def generate(
+        self,
+        *,
+        model: str,
+        request: ProviderRequest,
+        timeout_seconds: float,
+    ) -> ProviderResponse: ...
+
+    def stream(
+        self,
+        *,
+        model: str,
+        request: ProviderRequest,
+        timeout_seconds: float,
+    ) -> AsyncIterator[ProviderStreamEvent]: ...
+
+    async def cancel(self, request_id: str) -> None: ...
 
 
 class ModelRouter:
