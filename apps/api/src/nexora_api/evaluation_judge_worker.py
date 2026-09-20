@@ -18,7 +18,7 @@ from nexora_api.evaluation_judge import (
     JUDGE_SYSTEM_PROMPT,
     JudgeScores,
 )
-from nexora_api.model_routing import ProviderAdapter, ProviderError, ProviderMessage, ProviderRequest
+from nexora_api.model_routing import (\n    ProviderAdapter,\n    ProviderError,\n    ProviderMessage,\n    ProviderRequest,\n)
 from nexora_api.run_results import summarize_result
 from nexora_api.runtime_config import EvaluationJudgeConfig
 from nexora_api.workspace_repository import WorkspaceRepository
@@ -471,7 +471,7 @@ class EvaluationJudgeWorker:
             if not owned:
                 return False
             count_result = await connection.execute(
-                "SELECT count(*)::integer AS count FROM eval_judge_case_scores WHERE judge_run_id=%s",
+                """SELECT count(*)::integer AS count\n                   FROM eval_judge_case_scores WHERE judge_run_id=%s""",
                 (job["id"],),
             )
             count = (await count_result.fetchone())["count"]
