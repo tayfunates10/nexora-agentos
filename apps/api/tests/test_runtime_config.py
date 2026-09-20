@@ -203,6 +203,83 @@ def test_retrieval_is_opt_in_and_uses_operator_configuration(tmp_path):
     asyncio.run(close_retriever(retriever))
 
 
+def test_evaluation_judge_requires_pinned_structured_output_model(tmp_path):
+    invalid = document(
+        evaluation_judge={
+            "provider": "openai",
+            "model": "operator-model",
+            "allowed_workspaces": [WORKSPACE],
+        }
+    )
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(write(tmp_path, invalid))
+
+    valid = document(
+        model_candidates=[
+            {
+                "provider": "openai",
+                "model": "operator-model",
+                "capabilities": ["text", "tools"],
+            },
+            {
+                "provider": "openai",
+                "model": "judge-model-v1",
+                "capabilities": ["text", "structured_output"],
+            },
+        ],
+        evaluation_judge={
+            "provider": "openai",
+            "model": "judge-model-v1",
+            "allowed_workspaces": [WORKSPACE],
+            "prompt_version": "nexora-eval-judge-v1",
+            "timeout_seconds": 20,
+            "max_output_tokens": 256,
+            "max_input_chars": 50000,
+        },
+    )
+    config = load_runtime_config(write(tmp_path, valid))
+    assert config.evaluation_judge is not None
+    assert config.evaluation_judge.model == "judge-model-v1"
+    assert config.evaluation_judge.prompt_version == "nexora-eval-judge-v1"
+
+
+def test_evaluation_judge_rejects_unknown_prompt_or_duplicate_workspace(tmp_path):
+    candidate = {
+        "provider": "openai",
+        "model": "judge-model-v1",
+        "capabilities": ["text", "structured_output"],
+    }
+    for judge in (
+        {
+            "provider": "openai",
+            "model": "judge-model-v1",
+            "allowed_workspaces": [WORKSPACE],
+            "prompt_version": "unreviewed-v2",
+        },
+        {
+            "provider": "openai",
+            "model": "judge-model-v1",
+            "allowed_workspaces": [WORKSPACE, WORKSPACE],
+        },
+    ):
+        with pytest.raises(RuntimeConfigError):
+            load_runtime_config(
+                write(
+                    tmp_path,
+                    document(
+                        model_candidates=[candidate],
+                        profiles={
+                            "default": {
+                                "allowed_workspaces": [WORKSPACE],
+                                "allowed_providers": ["openai"],
+                            }
+                        },
+                        evaluation_judge=judge,
+                    ),
+                )
+            )
+
+
 @pytest.mark.parametrize(
     "retrieval",
     [
