@@ -16,6 +16,7 @@ from nexora_api.model_routing import (
 
 def test_provider_request_normalizes_messages_tools_and_structured_output():
     request = ProviderRequest(
+        request_id="contract-1",
         messages=(ProviderMessage(role="user", content="Create a ticket"),),
         tools=(
             ProviderTool(
@@ -74,7 +75,10 @@ def test_capability_values_cover_contract_features():
 
 
 def test_contract_values_are_immutable():
-    request = ProviderRequest(messages=(ProviderMessage(role="user", content="hello"),))
+    request = ProviderRequest(
+        request_id="contract-2",
+        messages=(ProviderMessage(role="user", content="hello"),),
+    )
 
     async def verify() -> None:
         await asyncio.sleep(0)
