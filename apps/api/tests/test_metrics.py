@@ -116,6 +116,66 @@ def test_model_usage_is_recorded_per_provider():
     assert sample("nexora_model_calls_total", provider="test", outcome="success")
 
 
+
+def test_evaluation_judge_metrics_are_bounded_and_track_tokens():
+    calls_before = sample(
+        "nexora_evaluation_judge_calls_total",
+        provider="test",
+        target="candidate",
+        outcome="success",
+    )
+    tokens_before = sample(
+        "nexora_evaluation_judge_tokens_total",
+        provider="test",
+        target="candidate",
+        kind="input",
+    )
+    jobs_before = sample("nexora_evaluation_judge_jobs_total", outcome="succeeded")
+
+    metrics.observe_evaluation_judge_call(
+        "test", "candidate", "success", 0.25, input_tokens=12, output_tokens=5
+    )
+    metrics.observe_evaluation_judge_job("succeeded")
+
+    assert sample(
+        "nexora_evaluation_judge_calls_total",
+        provider="test",
+        target="candidate",
+        outcome="success",
+    ) == calls_before + 1
+    assert sample(
+        "nexora_evaluation_judge_tokens_total",
+        provider="test",
+        target="candidate",
+        kind="input",
+    ) == tokens_before + 12
+    assert sample("nexora_evaluation_judge_jobs_total", outcome="succeeded") == jobs_before + 1
+    assert sample(
+        "nexora_evaluation_judge_call_duration_seconds_count",
+        provider="test",
+        target="candidate",
+    ) >= 1
+
+
+def test_evaluation_judge_unknown_labels_collapse():
+    before = sample(
+        "nexora_evaluation_judge_calls_total",
+        provider="other",
+        target="other",
+        outcome="other",
+    )
+
+    metrics.observe_evaluation_judge_call(
+        "Bad Provider", "unexpected-target", "unexpected-outcome", 0.1
+    )
+
+    assert sample(
+        "nexora_evaluation_judge_calls_total",
+        provider="other",
+        target="other",
+        outcome="other",
+    ) == before + 1
+
 def test_approval_wait_is_only_observed_for_real_waits():
     before = sample("nexora_approval_wait_seconds_count", decision="approved")
 
