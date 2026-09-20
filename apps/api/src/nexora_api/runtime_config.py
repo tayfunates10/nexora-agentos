@@ -15,7 +15,14 @@ from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from nexora_api.executor import ExecutionProfile
 from nexora_api.model_routing import ModelCandidate, ModelCapability
