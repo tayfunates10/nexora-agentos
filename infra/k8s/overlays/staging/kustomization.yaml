@@ -1,0 +1,96 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: nexora-staging
+resources:
+  - ../../base
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/environment: staging
+# Staging promotes the exact release digest too; never use a moving tag here.
+images:
+  - name: nexora/api
+    newName: REPLACE_WITH_REGISTRY/nexora-api
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: nexora/web
+    newName: REPLACE_WITH_REGISTRY/nexora-web
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+replicas:
+  - name: nexora-api
+    count: 1
+  - name: nexora-web
+    count: 1
+  - name: nexora-worker
+    count: 1
+patches:
+  - target:
+      kind: Namespace
+      name: nexora
+    patch: |
+      - op: replace
+        path: /metadata/name
+        value: nexora-staging
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: nexora-api
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 2
+  - target:
+      kind: Deployment
+      name: nexora-web
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nexora-web
+      spec:
+        template:
+          spec:
+            containers:
+              - name: web
+                env:
+                  - name: NEXORA_API_URL
+                    value: http://nexora-api.nexora-staging.svc.cluster.local:8000
+  - target:
+      kind: ConfigMap
+      name: nexora-worker-runtime
+    patch: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: nexora-worker-runtime
+      data:
+        runtime.json: |
+          {
+            "model_candidates": [
+              {
+                "provider": "openai",
+                "model": "replace-with-a-staging-model-your-account-can-call",
+                "capabilities": ["text", "tools"],
+                "quality_tier": 2,
+                "input_micros_per_million_tokens": 3000000,
+                "output_micros_per_million_tokens": 15000000
+              }
+            ],
+            "profiles": {
+              "default": {
+                "allowed_workspaces": ["00000000-0000-0000-0000-000000000000"],
+                "allowed_providers": ["openai"],
+                "allowed_tools": [],
+                "max_steps": 8
+              }
+            },
+            "retrieval": {
+              "provider": "openai",
+              "model": "text-embedding-3-small",
+              "dimensions": 1536,
+              "strategy": "hybrid",
+              "limit": 8,
+              "input_micros_per_million_tokens": 20000
+            }
+          }
