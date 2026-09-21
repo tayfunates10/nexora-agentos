@@ -194,6 +194,70 @@ def test_production_overlay_pins_images_by_digest():
         assert "newTag" not in image
 
 
+def _assert_digest_pins(overlay, expected_images):
+    images = overlay["images"]
+    assert {image["name"] for image in images} == set(expected_images)
+    for image in images:
+        assert image["digest"].startswith("sha256:")
+        assert len(image["digest"]) == 71
+        assert "newTag" not in image
+
+
+def test_staging_overlay_is_isolated_bounded_and_retrieval_enabled():
+    overlay = yaml.safe_load(
+        (MANIFEST_ROOT / "overlays" / "staging" / "kustomization.yaml").read_text()
+    )
+
+    assert overlay["namespace"] == "nexora-staging"
+    assert overlay["resources"] == ["../../base"]
+    assert {
+        item["name"]: item["count"]
+        for item in overlay["replicas"]
+    } == {
+        "nexora-api": 1,
+        "nexora-web": 1,
+        "nexora-worker": 1,
+    }
+    _assert_digest_pins(overlay, {"nexora/api", "nexora/web"})
+
+    patches = {
+        (item["target"]["kind"], item["target"]["name"]): yaml.safe_load(item["patch"])
+        for item in overlay["patches"]
+    }
+    namespace_patch = patches[("Namespace", "nexora")]
+    assert namespace_patch == [
+        {"op": "replace", "path": "/metadata/name", "value": "nexora-staging"}
+    ]
+    hpa_patch = patches[("HorizontalPodAutoscaler", "nexora-api")]
+    assert {item["path"]: item["value"] for item in hpa_patch} == {
+        "/spec/minReplicas": 1,
+        "/spec/maxReplicas": 2,
+    }
+
+    web_patch = patches[("Deployment", "nexora-web")]
+    web_env = web_patch["spec"]["template"]["spec"]["containers"][0]["env"]
+    api_url = next(item["value"] for item in web_env if item["name"] == "NEXORA_API_URL")
+    assert api_url == "http://nexora-api.nexora-staging.svc.cluster.local:8000"
+
+    runtime_patch = patches[("ConfigMap", "nexora-worker-runtime")]
+    runtime = yaml.safe_load(runtime_patch["data"]["runtime.json"])
+    assert runtime["retrieval"]["strategy"] == "hybrid"
+    assert runtime["retrieval"]["dimensions"] == 1536
+
+
+def test_staging_migration_bootstrap_is_separate_and_digest_pinned():
+    overlay = yaml.safe_load(
+        (MANIFEST_ROOT / "overlays" / "staging-migrate" / "kustomization.yaml").read_text()
+    )
+
+    assert overlay["namespace"] == "nexora-staging"
+    assert "../../migrate/job.yaml" in overlay["resources"]
+    assert "../../base/api-deployment.yaml" not in overlay["resources"]
+    assert "../../base/web-deployment.yaml" not in overlay["resources"]
+    assert "../../base/worker-deployment.yaml" not in overlay["resources"]
+    _assert_digest_pins(overlay, {"nexora/api"})
+
+
 def test_worker_shutdown_window_covers_its_configured_grace():
     worker = next(
         document
