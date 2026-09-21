@@ -121,6 +121,20 @@ The release gate reports every HIGH/CRITICAL image vulnerability and fails when 
 published fix. Findings without a published fix stay visible for operator risk review but
 do not automatically block promotion. See ADR 0035.
 
+## Staging acceptance gate
+
+After applying a candidate digest to a staging environment, run the manual
+`Staging E2E Smoke` GitHub workflow. The `staging` environment supplies only the deployed API
+and worker-admin origins, fixture identifiers, a short-lived Nexora access token and the metrics
+scrape token. The deployed worker retains the provider and MCP credentials.
+
+The default run verifies API readiness, identity, workspace/agent access, durable idempotent run
+creation, real worker/model execution, terminal results, append-only events, retrieval activity and
+worker metrics. Enable the workflow's approval option only after configuring the staging agent and a
+safe `require_approval` MCP fixture. See ADR 0036 for the exact variables and trust boundaries.
+
+A green staging smoke is deployment evidence, not permission to skip rollback preparation.
+
 ## Rollback
 
 Deployments keep three revisions, so a bad rollout is reversed without rebuilding:
