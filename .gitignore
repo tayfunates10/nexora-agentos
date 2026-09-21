@@ -13,3 +13,6 @@ build/
 coverage/
 
 .monitoring-secrets/
+
+# Runtime artifacts a local Redis writes into the working directory.
+dump.rdb

@@ -128,6 +128,16 @@ def test_a_tagged_entry_must_lose_its_tag_before_promotion():
         promote.pin_digest(tagged, "nexora/api", DIGEST)
 
 
+def test_both_staging_overlays_are_promotable_as_shipped():
+    root = Path(__file__).resolve().parents[3] / "infra" / "k8s" / "overlays" / "staging"
+
+    for overlay in (root / "kustomization.yaml", root / "migrate" / "kustomization.yaml"):
+        promoted = promote.pin_digest(overlay.read_text(), "nexora/api", DIGEST)
+
+        pinned = {image["name"]: image["digest"] for image in yaml.safe_load(promoted)["images"]}
+        assert pinned["nexora/api"] == DIGEST
+
+
 def test_the_production_overlay_is_promotable_as_shipped():
     overlay = (
         Path(__file__).resolve().parents[3]

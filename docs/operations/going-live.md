@@ -126,6 +126,25 @@ Check: the worker's readiness endpoint on port 8001 returns 200, and a queued ru
      `NEXORA_STAGING_KUBECONFIG` for the rollout drill.
 4. Decide who may trigger the rollout/rollback drill and how often it runs. It intentionally
    leaves staging on the previous release.
+5. For the **Deploy Staging** workflow, also set `NEXORA_STAGING_API_IMAGE` and
+   `NEXORA_STAGING_WEB_IMAGE` to the registry paths CI publishes, and
+   `NEXORA_STAGING_NAMESPACE` if the namespace is not `nexora-staging`. The staging Kubernetes
+   identity needs get/patch/create on deployments and get/create/delete on jobs in that namespace,
+   and nothing else. Before the first deploy, create the `nexora-secrets` Secret and the three
+   database logins in the staging cluster exactly as section 2 and 3 describe — the deploy applies
+   manifests, it does not create credentials.
+
+The staging overlays pin the release they deploy. Promote them the same way production is
+promoted, and merge that edit before dispatching the deploy:
+
+```bash
+python scripts/promote_release.py \
+  --overlay infra/k8s/overlays/staging/kustomization.yaml \
+  --image nexora/api --new-name <registry>/nexora-api --digest sha256:<digest>
+python scripts/promote_release.py \
+  --overlay infra/k8s/overlays/staging/migrate/kustomization.yaml \
+  --image nexora/api --new-name <registry>/nexora-api --digest sha256:<digest>
+```
 
 ## 8. Observability and on-call
 

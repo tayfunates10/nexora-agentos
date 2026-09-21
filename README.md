@@ -117,7 +117,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [workspace run history](docs/architecture/0038-workspace-run-history.md), and
 [agent operations console](docs/architecture/0039-agent-operations-console.md), and
 [tool governance console](docs/architecture/0040-tool-governance-console.md), and
-[knowledge console](docs/architecture/0041-knowledge-console.md).
+[knowledge console](docs/architecture/0041-knowledge-console.md), and
+[staging deployment](docs/architecture/0042-staging-deployment.md).
 
 ## Run locally with Docker Compose
 
@@ -179,6 +180,16 @@ no `latest` tag to drift. CI also refuses a change that modifies or deletes a mi
 deployed database has already applied, which is what makes `kubectl rollout undo` safe.
 See [ADR 0013](docs/architecture/0013-release-pipeline.md) and
 [ADR 0035](docs/architecture/0035-release-supply-chain-verification.md).
+
+A manually triggered **Deploy Staging** workflow puts a published release on staging and leaves
+it there. `infra/k8s/overlays/staging` renders the same base into the `nexora-staging` namespace
+with one replica each, and its `migrate/` sibling carries the migration Job pinned to the same
+digest. The deploy refuses to run a release the overlays do not already pin — promotion stays a
+reviewed edit with `scripts/promote_release.py --overlay` — checks the staging identity's
+permissions, server-side dry-runs the overlay, applies and awaits the migration before touching
+any workload, then rolls out, verifies the running images and restores the previous release if
+the rollout fails. It can run the deployed smoke afterwards. See
+[ADR 0042](docs/architecture/0042-staging-deployment.md).
 
 A manually triggered **Staging E2E Smoke** workflow validates a real deployed environment without
 placing provider credentials in GitHub Actions. It uses a short-lived API access token and a

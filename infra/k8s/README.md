@@ -203,3 +203,13 @@ kubectl apply -k infra/k8s/overlays/production --dry-run=server
 ```
 
 CI runs the first two. The server dry run needs a cluster and is the operator's gate.
+
+## Staging
+
+`overlays/staging` and `overlays/staging/migrate` deploy the same base into the
+`nexora-staging` namespace with one replica each, pinned to the release being tested. The
+`Deploy Staging` workflow runs `scripts/deploy_staging.py`, which refuses a release the overlays
+do not pin, applies and awaits the migration Job before any workload, verifies the images that
+end up running and restores the previous release if the rollout fails. The same Secret and
+database roles this page describes must exist in the staging namespace first. See
+[ADR 0042](../../docs/architecture/0042-staging-deployment.md).
