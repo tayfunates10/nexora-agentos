@@ -88,6 +88,28 @@ class RollbackDrillTests(unittest.TestCase):
             3,
         )
 
+    def test_unchanged_workload_is_not_rolled_back(self):
+        cluster = FakeCluster()
+        smoke_calls = 0
+
+        def smoke():
+            nonlocal smoke_calls
+            smoke_calls += 1
+
+        run_drill(NEW_API, OLD_WEB, runner=cluster, smoke=smoke)
+
+        undo_targets = [
+            command[3]
+            for command in cluster.commands
+            if command[:3] == ["kubectl", "rollout", "undo"]
+        ]
+        self.assertEqual(
+            undo_targets,
+            ["deployment/nexora-api", "deployment/nexora-worker"],
+        )
+        self.assertEqual(cluster.images["nexora-web"], OLD_WEB)
+        self.assertEqual(smoke_calls, 2)
+
     def test_failed_candidate_smoke_restores_exact_images(self):
         cluster = FakeCluster()
 
