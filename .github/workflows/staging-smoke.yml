@@ -13,6 +13,11 @@ on:
         required: true
         type: boolean
         default: false
+      verify_worker_metrics:
+        description: Verify private worker metrics (requires runner network access)
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -42,7 +47,7 @@ jobs:
           NEXORA_STAGING_EXPECT_SOURCE_KEY: ${{ inputs.require_retrieval && vars.NEXORA_STAGING_EXPECT_SOURCE_KEY || '' }}
           NEXORA_STAGING_APPROVAL_TOOL: ${{ inputs.exercise_approval && vars.NEXORA_STAGING_APPROVAL_TOOL || '' }}
           NEXORA_STAGING_REQUIRE_RETRIEVAL: ${{ inputs.require_retrieval }}
-          NEXORA_STAGING_REQUIRE_OBSERVABILITY: 'true'
+          NEXORA_STAGING_REQUIRE_OBSERVABILITY: ${{ inputs.verify_worker_metrics }}
           NEXORA_STAGING_ACCESS_TOKEN: ${{ secrets.NEXORA_STAGING_ACCESS_TOKEN }}
           NEXORA_STAGING_METRICS_TOKEN: ${{ secrets.NEXORA_STAGING_METRICS_TOKEN }}
         run: python scripts/staging_smoke.py
