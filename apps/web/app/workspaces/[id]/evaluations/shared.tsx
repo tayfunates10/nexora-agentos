@@ -1,37 +1,65 @@
 import { redirect } from "next/navigation";
 import { ApiError } from "../../../../lib/server/api";
-import { evalTimestamp, type EvalRunSummary } from "../../../../lib/evaluation-contracts";
+import type { EvalRunSummary } from "../../../../lib/evaluation-contracts";
+import type { Ui } from "../../../../lib/i18n/messages.ts";
+import { formatNumber, formatTimestamp } from "../../../../lib/i18n/format.ts";
+import { ConsoleShell, type ConsoleChrome } from "../../../../components/shell/ConsoleShell.tsx";
+import { Metric, Metrics, Notice } from "../../../../components/ui/primitives.tsx";
 
-export function EvaluationError({ error, back }: { error: unknown; back: string }) {
+export function EvaluationProblem({ chrome, error, back }: {
+  chrome: ConsoleChrome; error: unknown; back: { href: string; label: string };
+}) {
+  if (error instanceof ApiError && error.status === 401) redirect("/login?error=session_expired");
+  const { ui } = chrome;
+  const denied = error instanceof ApiError && [403, 404].includes(error.status);
+  return <ConsoleShell chrome={chrome} active="evaluations">
+    <h1 className="page-title">
+      {ui.t(denied ? "evaluations.deniedTitle" : "evaluations.unavailableTitle")}</h1>
+    <Notice live="alert" tone="danger">
+      {ui.t(denied ? "evaluations.deniedBody" : "evaluations.unavailableBody")}</Notice>
+    <p><a className="link" href={back.href}>{back.label}</a></p>
+  </ConsoleShell>;
+}
+
+/** The same failure, reported inside a page that otherwise loaded. */
+export function EvaluationInlineProblem({ ui, error }: { ui: Ui; error: unknown }) {
   if (error instanceof ApiError && error.status === 401) redirect("/login?error=session_expired");
   const denied = error instanceof ApiError && [403, 404].includes(error.status);
-  return <section className="workspace-content evaluation-content">
-    <h1>{denied ? "Evaluation not found or access denied" : "Evaluations unavailable"}</h1>
-    <p role="alert">{denied ? "Check your workspace access and the requested evaluation." : "The evaluation service could not be reached. Try again shortly."}</p>
-    <a href={back}>Back to evaluations</a>
-  </section>;
+  return <Notice live="alert" tone="danger">
+    {ui.t(denied ? "evaluations.deniedBody" : "evaluations.unavailableBody")}
+  </Notice>;
 }
 
-export function InvalidEvaluation({ back }: { back: string }) {
-  return <section className="workspace-content"><h1>Invalid evaluation link</h1>
-    <p role="alert">The requested identifier or page cursor is invalid.</p><a href={back}>Back</a>
-  </section>;
+/**
+ * A regression or improvement only means something against a baseline. Without one both
+ * counts read as not applicable rather than as zero.
+ */
+export function RunCounts({ ui, run }: { ui: Ui; run: EvalRunSummary }) {
+  return <Metrics>
+    <Metric label={ui.t("evaluations.passed")} value={ui.t("evaluations.passedOfTotal", {
+      passed: formatNumber(run.passed_count, ui.locale),
+      total: formatNumber(run.case_count, ui.locale),
+    })}/>
+    <Metric label={ui.t("evaluations.failed")} value={formatNumber(run.failed_count, ui.locale)}/>
+    <Metric label={ui.t("evaluations.regressions")} value={run.baseline_eval_run_id
+      ? formatNumber(run.regression_count, ui.locale) : ui.t("common.empty")}/>
+    <Metric label={ui.t("evaluations.improvements")} value={run.baseline_eval_run_id
+      ? formatNumber(run.improvement_count, ui.locale) : ui.t("common.empty")}/>
+  </Metrics>;
 }
 
-export function RunCounts({ run }: { run: EvalRunSummary }) {
-  return <dl className="eval-counts">
-    <div><dt>Passed</dt><dd>{run.passed_count} / {run.case_count}</dd></div>
-    <div><dt>Failed</dt><dd>{run.failed_count}</dd></div>
-    <div><dt>Regressions</dt><dd>{run.baseline_eval_run_id ? run.regression_count : "—"}</dd></div>
-    <div><dt>Improvements</dt><dd>{run.baseline_eval_run_id ? run.improvement_count : "—"}</dd></div>
-  </dl>;
-}
-
-export function RunCard({ run, workspaceId }: { run: EvalRunSummary; workspaceId: string }) {
-  return <article className="card eval-card">
-    <h3><a href={`/workspaces/${workspaceId}/evaluations/runs/${run.id}`}>{run.candidate_label}</a></h3>
-    <p><time dateTime={run.created_at}>{evalTimestamp(run.created_at)}</time></p>
-    <RunCounts run={run}/>
-    <p>{run.baseline_eval_run_id ? "Compared with a saved baseline." : "No baseline comparison."}</p>
+export function RunCard({ ui, run, workspaceId }: {
+  ui: Ui; run: EvalRunSummary; workspaceId: string;
+}) {
+  return <article className="card">
+    <h3 className="section-title">
+      <a className="link" href={`/workspaces/${workspaceId}/evaluations/runs/${run.id}`}>
+        {run.candidate_label}</a>
+    </h3>
+    <p className="field-help">
+      <time dateTime={run.created_at}>{formatTimestamp(run.created_at, ui.locale)}</time></p>
+    <RunCounts ui={ui} run={run}/>
+    <p className="notice">{ui.t(run.baseline_eval_run_id
+      ? "evaluations.baselineCompared" : "evaluations.baselineNone")}</p>
   </article>;
 }

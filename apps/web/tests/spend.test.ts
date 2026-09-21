@@ -1,16 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  formatUnits,
   microsToUnits,
   offeredThresholds,
   parseThresholds,
-  spendPeriod,
+  periodLastDay,
   spendRecordPageSchema,
   spendSummarySchema,
   unitsToMicros,
   usedRatio,
 } from "../lib/spend-contracts.ts";
+import { formatDate, formatUnitsFrom, toLimitInput } from "../lib/i18n/format.ts";
 
 const id = "a2bdca9e-e07d-4b4a-ae19-6cc4e06e2d4c";
 const summary = {
@@ -156,13 +156,22 @@ test("micros render back to units and survive a round trip", () => {
   assert.equal(microsToUnits(500_000), "0.50");
   assert.equal(microsToUnits(1), "0.000001");
   assert.equal(microsToUnits(12_345_678), "12.345678");
-  assert.equal(formatUnits(1_234_567_000_000), "1,234,567.00");
+  // Grouping and the decimal mark follow the language; the exact value never changes.
+  assert.equal(formatUnitsFrom(microsToUnits(1_234_567_000_000), "en"), "1,234,567.00");
+  assert.equal(formatUnitsFrom(microsToUnits(1_234_567_000_000), "tr"), "1.234.567,00");
+  assert.equal(formatUnitsFrom(microsToUnits(1), "tr"), "0,000001");
+  // The editable limit carries no thousands separator, only the language's decimal mark.
+  assert.equal(toLimitInput(microsToUnits(12_345_678), "tr"), "12,345678");
+  assert.equal(toLimitInput(microsToUnits(12_345_678), "en"), "12.345678");
   for (const micros of [0, 1, 999_999, 12_345_678, 1_000_000_000_000_000]) {
     assert.equal(unitsToMicros(microsToUnits(micros)), micros);
   }
 });
 
 test("the period label names the inclusive last day of the window", () => {
+  const parsed = spendSummarySchema.parse(summary);
   // Month spelling follows the runtime ICU data; the inclusive end date is the contract.
-  assert.match(spendPeriod(spendSummarySchema.parse(summary)), /^1 Sept? 2026 – 30 Sept? 2026 UTC$/);
+  assert.equal(periodLastDay(parsed).toISOString(), "2026-09-30T00:00:00.000Z");
+  assert.match(formatDate(parsed.period_start, "en"), /^1 Sept? 2026$/);
+  assert.match(formatDate(periodLastDay(parsed).toISOString(), "tr"), /^30 Eyl 2026$/);
 });

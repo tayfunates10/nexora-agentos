@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Page } from "@playwright/test";
 import type { startProvider } from "./fixtures/provider.ts";
+import { t } from "./ui-text.ts";
+import { expectNoHorizontalOverflow, settleReveals, sidebarLink } from "./shell.ts";
 
 export async function checkEvaluations(page: Page, provider: Awaited<ReturnType<typeof startProvider>>, detailUrl: string) {
   const workspace = [...provider.workspaces.values()][0];
   const root = detailUrl + "/evaluations";
-  await page.getByRole("link", { name: "Evaluation suites →" }).click();
-  await expect(page.getByRole("heading", { name: "No evaluation suites on this page" })).toBeVisible();
+  await sidebarLink(page, t("navigation.evaluations")).click();
+  await expect(page.getByRole("heading", { name: t("evaluations.emptyTitle") })).toBeVisible();
   const suiteId = randomUUID(), firstCase = randomUUID(), secondCase = randomUUID();
   provider.evalSuites.set(suiteId, {
     id: suiteId, workspace_id: workspace.id, name: "Support quality", version: 2,
@@ -20,7 +22,7 @@ export async function checkEvaluations(page: Page, provider: Awaited<ReturnType<
   });
   await page.reload();
   await page.getByRole("link", { name: "Support quality" }).click();
-  await expect(page.getByRole("heading", { name: "No evaluation runs on this page" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: t("evaluations.historyEmptyTitle") })).toBeVisible();
   const baselineId = randomUUID();
   const failedOutput = "  <script>window.evaluationInjected = true</script>\n" + "long-evidence-".repeat(80);
   let candidateId = "";
@@ -49,21 +51,25 @@ export async function checkEvaluations(page: Page, provider: Awaited<ReturnType<
     });
   }
   await page.reload();
-  await page.getByRole("link", { name: "Older results" }).click();
+  await page.getByRole("link", { name: t("evaluations.olderResults") }).click();
   await expect(page.getByRole("link", { name: "Baseline v1", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Older results" })).toHaveCount(0);
-  await page.getByRole("link", { name: "Newest results" }).click();
+  await expect(page.getByRole("link", { name: t("evaluations.olderResults") })).toHaveCount(0);
+  await page.getByRole("link", { name: t("evaluations.newestResults") }).click();
   await page.getByRole("link", { name: "Candidate v2", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Candidate v2" })).toBeVisible();
-  await expect(page.getByText("Failed · Regression", { exact: true })).toBeVisible();
-  await expect(page.getByText("Passed · Improvement", { exact: true })).toBeVisible();
-  await page.getByText("Failed output", { exact: true }).click();
-  await expect(page.locator(".eval-evidence")).toHaveText(failedOutput);
+  await expect(page.getByText(
+    `${t("evaluations.caseFailed")} · ${t("evaluations.caseRegression")}`, { exact: true },
+  )).toBeVisible();
+  await expect(page.getByText(
+    `${t("evaluations.casePassed")} · ${t("evaluations.caseImprovement")}`, { exact: true },
+  )).toBeVisible();
+  await page.getByText(t("evaluations.failedOutput"), { exact: true }).click();
+  await expect(page.locator(".codeblock").last()).toHaveText(failedOutput);
   expect(await page.evaluate(() => "evaluationInjected" in window)).toBe(false);
 
-  await page.getByRole("button", { name: "Run quality judge" }).click();
-  await expect(page.getByRole("status")).toContainText("quality judge was queued");
-  await expect(page.locator(".judge-panel")).toContainText("Judge queued");
+  await page.getByRole("button", { name: t("judge.run") }).click();
+  await expect(page.getByRole("status")).toContainText(t("judge.queued"));
+  await expect(page.getByTestId("judge-panel")).toContainText(t("judge.status.queued"));
   const queuedJudge = [...provider.evalJudgeRuns.values()].find(
     item => item.eval_run_id === candidateId,
   );
@@ -104,32 +110,36 @@ export async function checkEvaluations(page: Page, provider: Awaited<ReturnType<
     ],
   });
   await page.goto(root + "/runs/" + candidateId);
-  await expect(page.locator(".judge-panel")).toContainText("Judge succeeded");
-  await expect(page.locator(".judge-panel")).toContainText("87.5%");
-  await expect(page.locator(".judge-panel")).toContainText("+12.5 pts");
+  await expect(page.getByTestId("judge-panel")).toContainText(t("judge.status.succeeded"));
+  // Percentages and points follow Turkish number formatting.
+  await expect(page.getByTestId("judge-panel")).toContainText("%87,5");
+  await expect(page.getByTestId("judge-panel")).toContainText(t("format.points", { value: "+12,5" }));
   await expect(page.getByText("Strong grounded answer.", { exact: true })).toBeVisible();
 
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
-    await page.screenshot({ path: `/tmp/nexora-evaluations-${width}.png`, fullPage: true });
+    await expectNoHorizontalOverflow(page);
+    await settleReveals(page);
+    await page.screenshot({ path: `/tmp/nexora-evaluations-${width}.png`, fullPage: true, animations: "disabled" });
   }
-  await page.getByRole("link", { name: "View baseline evaluation" }).click();
+  // The sidebar is part of the desktop layout, so the rest of the flow needs it back.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("link", { name: t("evaluations.viewBaseline") }).click();
   await expect(page.getByRole("heading", { name: "Baseline v1" })).toBeVisible();
   await page.goto(root + "/suites/" + suiteId + "?cursor=invalid");
-  await expect(page.getByRole("heading", { name: "Invalid evaluation link" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: t("common.invalidLinkTitle") })).toBeVisible();
   provider.historyUnavailable(true);
   await page.goto(root + "/suites/" + suiteId);
   await expect(page.getByRole("heading", { name: "Support quality" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Evaluations unavailable" })).toBeVisible();
+  await expect(page.getByText(t("evaluations.unavailableBody"))).toBeVisible();
   provider.historyUnavailable(false);
   workspace.role = "member";
   await page.goto(root + "/suites/" + suiteId);
-  await expect(page.getByText("Only workspace owners and admins can view evaluation results.")).toBeVisible();
+  await expect(page.getByText(t("evaluations.historyMemberNotice"))).toBeVisible();
   await expect(page.getByRole("link", { name: "Candidate v2", exact: true })).toHaveCount(0);
   await page.goto(root + "/runs/" + candidateId);
-  await expect(page.getByRole("heading", { name: "Evaluation not found or access denied" })).toBeVisible();
-  await expect(page.locator(".eval-evidence")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: t("evaluations.deniedTitle") })).toBeVisible();
+  await expect(page.locator(".codeblock")).toHaveCount(0);
   workspace.role = "owner";
   await page.goto(detailUrl);
 }

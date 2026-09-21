@@ -4,15 +4,19 @@ import {
   approvalPageSchema,
   approvalSchema,
   decisionInput,
-  expiresIn,
+  remainingTime,
   formatArguments,
   forcesApproval,
   policyInput,
-  policyLabel,
+  policyLabelKey,
   policyTone,
   toolPageSchema,
   toolSchema,
 } from "../lib/tool-contracts.ts";
+import { createUi } from "../lib/i18n/messages.ts";
+
+const en = createUi("en");
+const tr = createUi("tr");
 
 const id = "2f3a5c7e-9b1d-4e6f-8a2c-3d4e5f6a7b8c";
 const other = "9a8b7c6d-5e4f-4a3b-8c1d-0e9f8a7b6c5d";
@@ -48,9 +52,10 @@ test("tool contract keeps a policy whole or absent", () => {
 test("an unpoliced tool reads as denied, never as allowed", () => {
   const unpoliced = { ...tool, policy_decision: null, policy_reason: null, policy_updated_at: null };
   const parsed = toolSchema.parse(unpoliced);
-  assert.equal(policyLabel(parsed), "No policy · denied by default");
+  assert.equal(en.t(policyLabelKey(parsed)), "No policy · denied by default");
+  assert.equal(tr.t(policyLabelKey(parsed)), "Politika yok · varsayılan olarak reddedilir");
   assert.equal(policyTone(parsed), "down");
-  assert.equal(policyLabel(toolSchema.parse(tool)), "Allow");
+  assert.equal(en.t(policyLabelKey(toolSchema.parse(tool))), "Allow");
   assert.equal(policyTone(toolSchema.parse(tool)), "up");
 });
 
@@ -89,10 +94,20 @@ test("only an approve or reject decision is submittable", () => {
 
 test("remaining approval time is reported without going negative", () => {
   const now = Date.parse("2026-09-20T15:50:00Z");
-  assert.equal(expiresIn(approval, now), "15m left");
-  assert.equal(expiresIn(approval, Date.parse("2026-09-20T16:04:30Z")), "30s left");
-  assert.equal(expiresIn(approval, Date.parse("2026-09-20T16:06:00Z")), "expired");
-  assert.equal(expiresIn({ expires_at: "2026-09-20T18:20:00Z" }, now), "2h left");
+  assert.deepEqual(remainingTime(approval, now), { unit: "minutes", count: 15 });
+  assert.deepEqual(
+    remainingTime(approval, Date.parse("2026-09-20T16:04:30Z")), { unit: "seconds", count: 30 },
+  );
+  // A closed window reports that it expired rather than counting into negative time.
+  assert.deepEqual(
+    remainingTime(approval, Date.parse("2026-09-20T16:06:00Z")), { unit: "expired" },
+  );
+  assert.deepEqual(
+    remainingTime({ expires_at: "2026-09-20T18:20:00Z" }, now), { unit: "hours", count: 2 },
+  );
+  assert.equal(en.t("approvals.minutesLeft", { count: 15 }), "15 minutes left");
+  assert.equal(en.t("approvals.minutesLeft", { count: 1 }), "1 minute left");
+  assert.equal(tr.t("approvals.minutesLeft", { count: 1 }), "1 dakika kaldı");
 });
 
 test("arguments are shown exactly as stored, as inert text", () => {

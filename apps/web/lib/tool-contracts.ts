@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { Tone } from "./i18n/tone.ts";
+import type { MessageKey } from "../messages/en.ts";
 
 const timestamp = z.iso.datetime({ offset: true });
 
@@ -61,51 +63,41 @@ export const decisionInput = z.object({ decision: z.enum(["approved", "rejected"
 export type Tool = z.infer<typeof toolSchema>;
 export type ToolApproval = z.infer<typeof approvalSchema>;
 
-export const SIDE_EFFECT_LABELS: Record<SideEffect, string> = {
-  read: "Read only",
-  write: "Writes data",
-  destructive: "Destructive",
-  external_communication: "Sends external communication",
-};
+export function sideEffectKey(value: SideEffect): MessageKey {
+  return `tools.sideEffect.${value}`;
+}
 
 // Two side effects always need a human decision, whatever the stored policy says.
 export const ALWAYS_APPROVED_SIDE_EFFECTS: SideEffect[] = ["destructive", "external_communication"];
 
-export const POLICY_LABELS: Record<PolicyDecision, string> = {
-  allow: "Allow",
-  deny: "Deny",
-  require_approval: "Require approval",
-};
-
-export const POLICY_TONES: Record<PolicyDecision, string> = {
-  allow: "up",
-  deny: "down",
-  require_approval: "unknown",
-};
-
-export const APPROVAL_STATUS_LABELS: Record<ApprovalStatus, string> = {
-  pending: "Waiting for a decision",
-  approved: "Approved",
-  rejected: "Rejected",
-  expired: "Expired without a decision",
-  cancelled: "Cancelled with its run",
-};
-
-export const APPROVAL_STATUS_TONES: Record<ApprovalStatus, string> = {
-  pending: "unknown",
-  approved: "up",
-  rejected: "down",
-  expired: "pending",
-  cancelled: "pending",
-};
-
-export function policyLabel(tool: Tool): string {
-  return tool.policy_decision === null
-    ? "No policy · denied by default"
-    : POLICY_LABELS[tool.policy_decision];
+export function policyKey(decision: PolicyDecision): MessageKey {
+  return `tools.policy.${decision}`;
 }
 
-export function policyTone(tool: Tool): string {
+export const POLICY_TONES: Record<PolicyDecision, Tone> = {
+  allow: "up",
+  deny: "down",
+  require_approval: "warn",
+};
+
+export function approvalStatusKey(status: ApprovalStatus): MessageKey {
+  return `approvals.status.${status}`;
+}
+
+export const APPROVAL_STATUS_TONES: Record<ApprovalStatus, Tone> = {
+  pending: "warn",
+  approved: "up",
+  rejected: "down",
+  expired: "neutral",
+  cancelled: "neutral",
+};
+
+/** A tool with no stored policy is denied; the label says so rather than staying blank. */
+export function policyLabelKey(tool: Tool): MessageKey {
+  return tool.policy_decision === null ? "tools.policy.none" : policyKey(tool.policy_decision);
+}
+
+export function policyTone(tool: Tool): Tone {
   return tool.policy_decision === null ? "down" : POLICY_TONES[tool.policy_decision];
 }
 
@@ -116,22 +108,29 @@ export function forcesApproval(tool: Tool): boolean {
     && ALWAYS_APPROVED_SIDE_EFFECTS.includes(tool.side_effect);
 }
 
-export function toolTimestamp(value: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium", timeStyle: "short", timeZone: "UTC",
-  }).format(new Date(value)) + " UTC";
-}
+/**
+ * How long a pending approval has left. An approval whose window has closed reports that
+ * it expired rather than counting into negative time.
+ */
+export type RemainingTime =
+  | { unit: "expired" }
+  | { unit: "seconds" | "minutes" | "hours"; count: number };
 
-export function expiresIn(approval: { expires_at: string }, now: number = Date.now()): string {
+export function remainingTime(
+  approval: { expires_at: string }, now: number = Date.now(),
+): RemainingTime {
   const seconds = Math.round((Date.parse(approval.expires_at) - now) / 1000);
-  if (seconds <= 0) return "expired";
-  if (seconds < 60) return `${seconds}s left`;
+  if (seconds <= 0) return { unit: "expired" };
+  if (seconds < 60) return { unit: "seconds", count: seconds };
   const minutes = Math.floor(seconds / 60);
-  return minutes < 60 ? `${minutes}m left` : `${Math.floor(minutes / 60)}h left`;
+  return minutes < 60
+    ? { unit: "minutes", count: minutes }
+    : { unit: "hours", count: Math.floor(minutes / 60) };
 }
 
 // Arguments are model-proposed values. An approver has to see them exactly as they were
-// normalized and stored, so they are pretty-printed as inert text, never interpreted.
+// normalized and stored, so they are pretty-printed as inert text, never interpreted and
+// never translated.
 export function formatArguments(value: Record<string, unknown>): string {
   return JSON.stringify(value, null, 2);
 }

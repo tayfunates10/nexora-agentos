@@ -4,9 +4,9 @@ import {
   ingestionSchema,
   knowledgeSourcePageSchema,
   knowledgeSourceSchema,
-  knowledgeTimestamp,
   sourceInput,
 } from "../lib/knowledge-contracts.ts";
+import { formatTimestamp } from "../lib/i18n/format.ts";
 
 const id = "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e7f";
 const other = "4d5e6f7a-8b9c-4d1e-9f2a-3b4c5d6e7f8a";
@@ -72,6 +72,7 @@ test("source input enforces the same bounds as the knowledge API", () => {
   }).success, false);
 });
 
-test("knowledge timestamps are reported in UTC", () => {
-  assert.equal(knowledgeTimestamp("2026-09-20T17:05:00Z"), "20 Sept 2026, 17:05 UTC");
+test("knowledge timestamps are reported in UTC in both languages", () => {
+  assert.equal(formatTimestamp("2026-09-20T17:05:00Z", "en"), "20 Sept 2026, 17:05 UTC");
+  assert.match(formatTimestamp("2026-09-20T17:05:00Z", "tr"), /^20 Eyl 2026,? 17:05 UTC$/);
 });

@@ -694,6 +694,35 @@ scenarios and response runbooks. It binds to loopback and requires operator cred
 The rules surface alerts in Prometheus; notification delivery and production monitoring
 infrastructure remain operator setup. See [ADR 0028](docs/architecture/0028-operations-monitoring.md).
 
+## Console design system, themes and languages
+
+The console is one component tree rendered in two themes and two languages.
+
+- **Themes.** Colour lives in CSS custom properties. Light is the base and dark applies
+  under `prefers-color-scheme: dark` or an explicit choice. The server renders `data-theme`
+  only for an explicit light or dark, so the first paint is already correct and there is no
+  flash to correct. The control sits at the foot of the sidebar and inside the mobile menu.
+- **Languages.** Turkish and English, resolved per request from the `nexora_locale` cookie,
+  then a quality-weighted `Accept-Language`, then Turkish. There is no URL prefix, so
+  sign-in callbacks, form actions and shared links with filters and cursors are unchanged.
+  Switching language re-renders the same route in place: the URL, open records, scroll
+  position and unsent form text all survive, and no request is replayed.
+- **Copy.** `apps/web/messages/en.ts` defines the key space and `messages/tr.ts` is typed
+  against it, so a key present in one language and missing in the other fails `typecheck`.
+  Messages are whole sentences; plurals and counts use a small ICU subset.
+- **What stays as stored.** API enums, identifiers, failure codes, provider and model names,
+  source keys, JSON arguments, and every value a person or a model wrote. Timestamps stay in
+  UTC and say so in both languages; accounting units keep exact integer micros and are only
+  grouped for display.
+
+Both languages and both themes are covered by the browser flow, together with the drawer
+navigation, keyboard dismissal and layouts down to 320 px. The i18n gate runs with the unit
+tests:
+
+```bash
+npm run typecheck && npm run test:web
+```
+
 ## Browser sign-in and workspace management
 
 The web now includes `/login`, `/workspaces`, workspace settings and team access forms.

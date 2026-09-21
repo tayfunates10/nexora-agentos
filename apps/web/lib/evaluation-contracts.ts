@@ -76,8 +76,3 @@ export type EvalJudgeRun = z.infer<typeof evalJudgeRunSchema>;
 export type EvalRunSummary = z.infer<typeof evalRunSummarySchema>;
 export type EvalRun = z.infer<typeof evalRunSchema>;
 export type EvalSuite = z.infer<typeof evalSuiteSchema>;
-export function evalTimestamp(value: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium", timeStyle: "short", timeZone: "UTC",
-  }).format(new Date(value)) + " UTC";
-}

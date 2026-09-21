@@ -1,34 +1,47 @@
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { agentPageSchema, runTimestamp } from "../../../../lib/agent-contracts";
+import { agentPageSchema } from "../../../../lib/agent-contracts";
 import { api } from "../../../../lib/server/api";
 import { currentSession } from "../../../../lib/server/session";
+import { consoleChrome } from "../../../../lib/server/chrome";
 import { workspaceSchema } from "../../../../lib/workspace-contracts";
-import { ConsoleError, Failed, InvalidLink, Saved } from "../console";
+import { formatTimestamp } from "../../../../lib/i18n/format.ts";
+import { ConsoleBreadcrumb, ConsoleShell } from "../../../../components/shell/ConsoleShell.tsx";
+import {
+  Badge, Disclosure, EmptyState, Field, Hint, Notice, PageHeader, Pagination, Panel,
+} from "../../../../components/ui/primitives.tsx";
+import { Reveal } from "../../../../components/ui/Reveal.tsx";
+import { ConsoleProblem, Failed, InvalidLinkPage, Saved } from "../console";
+import type { MessageKey } from "../../../../messages/en.ts";
 
-const MESSAGES: Record<string, string> = {
-  invalid: "Check the agent name, instructions and model profile, then try again.",
-  forbidden: "You do not have the access this action needs in this workspace.",
-  failed: "The request could not be completed. Check your current access and try again.",
+const MESSAGES: Record<string, MessageKey> = {
+  invalid: "agents.error.invalid",
+  forbidden: "agents.error.forbidden",
+  failed: "agents.error.failed",
 };
 
 export default async function Agents({ params, searchParams }: {
   params: Promise<{ id: string }>;
   searchParams: Promise<{ cursor?: string; saved?: string; error?: string }>;
 }) {
-  const { id } = await params;
-  const query = await searchParams;
+  const [{ id }, query] = await Promise.all([params, searchParams]);
   const session = await currentSession();
   if (!session) redirect("/login");
-  if (!z.uuid().safeParse(id).success
-    || (query.cursor !== undefined && !z.uuid().safeParse(query.cursor).success)) {
-    return <InvalidLink back="/workspaces" backLabel="Back to workspaces"/>;
-  }
 
   const root = `/workspaces/${id}/agents`;
+  let chrome = await consoleChrome(session);
+  if (!z.uuid().safeParse(id).success
+    || (query.cursor !== undefined && !z.uuid().safeParse(query.cursor).success)) {
+    return <InvalidLinkPage chrome={chrome} back={{
+      href: "/workspaces", label: chrome.ui.t("workspaces.backToWorkspaces"),
+    }}/>;
+  }
+
   try {
     const workspace = await api(session, `/api/v1/workspaces/${id}`, workspaceSchema);
+    chrome = await consoleChrome(session, workspace);
+    const { ui } = chrome;
     const agents = await api(
       session,
       `/api/v1/workspaces/${id}/agents?limit=25${query.cursor ? "&cursor=" + query.cursor : ""}`,
@@ -36,86 +49,110 @@ export default async function Agents({ params, searchParams }: {
     );
     const canManage = workspace.role !== "member";
 
-    return <section className="workspace-content evaluation-content">
-      <a href={`/workspaces/${id}`}>← {workspace.name}</a>
-      <p className="eyebrow">AGENTS / DEFINITIONS</p><h1>Agents</h1>
-      <p className="intro">
-        An agent is a named instruction set bound to an operator-approved model profile.
-        Any workspace member can start a run; only owners and admins can change what an agent is.
-      </p>
-      <p className="notice">
-        A run is queued in PostgreSQL and executed by the agent worker. If no worker is running
-        for this deployment, runs stay queued and no model provider is ever called.
-      </p>
-      <Saved message={query.saved === "agent" ? "The agent was created." : null}/>
-      <Failed message={query.error ? MESSAGES[query.error] ?? MESSAGES.failed : null}/>
+    return <ConsoleShell
+      chrome={chrome}
+      active="agents"
+      breadcrumb={<ConsoleBreadcrumb
+        ui={ui} workspace={workspace}
+        trail={[{ href: root, label: ui.t("navigation.agents") }]}
+      />}
+    >
+      <PageHeader
+        eyebrow={ui.t("agents.eyebrow")}
+        title={ui.t("agents.title")}
+        intro={ui.t("agents.intro")}
+      />
+      <Notice tone="warning">{ui.t("agents.workerNotice")}</Notice>
+      <Saved message={query.saved === "agent" ? ui.t("agents.created") : null}/>
+      <Failed message={query.error ? ui.t(MESSAGES[query.error] ?? MESSAGES.failed) : null}/>
 
       {agents.items.length === 0
-        ? <div className="empty"><h2>No agents on this page</h2>
-          <p>{canManage
-            ? "Create the first agent below. Its model profile must be one this deployment's worker allows."
-            : "Ask a workspace owner or admin to create an agent before starting a run."}</p></div>
-        : <div className="eval-list">{agents.items.map(agent => <article className="card eval-card" key={agent.id}>
-          <p className="eyebrow">PROFILE {agent.model_profile.toUpperCase()}</p>
-          <h2>{agent.name}</h2>
-          <p className="agent-instructions">{agent.instructions}</p>
-          <p><time dateTime={agent.created_at}>{runTimestamp(agent.created_at)}</time></p>
-          <details className="run-starter">
-            <summary>Start a run with {agent.name}</summary>
-            <form className="workspace-form" action="/workspaces/runs/start" method="post">
+        ? <EmptyState title={ui.t("agents.emptyTitle")}>
+          <p>{ui.t(canManage ? "agents.emptyManage" : "agents.emptyMember")}</p>
+        </EmptyState>
+        : <div className="card-list">{agents.items.map(agent => <article
+          className="card" key={agent.id}
+        >
+          <Badge>{ui.t("agents.profile", { profile: agent.model_profile })}</Badge>
+          <h2 className="section-title">{agent.name}</h2>
+          {/* The instruction text is what someone wrote; it is shown as stored. */}
+          <p className="notice" style={{ whiteSpace: "pre-wrap" }}>{agent.instructions}</p>
+          <p className="field-help">
+            <time dateTime={agent.created_at}>{formatTimestamp(agent.created_at, ui.locale)}</time>
+          </p>
+          <Disclosure summary={ui.t("agents.startWith", { agentName: agent.name })}>
+            <form className="form" action="/workspaces/runs/start" method="post">
               <input type="hidden" name="csrf" value={session.csrf}/>
               <input type="hidden" name="workspace" value={id}/>
               <input type="hidden" name="agent" value={agent.id}/>
               {/* Minted per render: submitting the same form twice replays one idempotency
                   key, so a double click returns the existing run instead of starting another. */}
               <input type="hidden" name="idempotency" value={randomUUID()}/>
-              <label htmlFor={`input-${agent.id}`}>What should this agent do?</label>
-              <textarea
-                id={`input-${agent.id}`} name="input" required rows={4} maxLength={20000}
-                aria-describedby={`input-help-${agent.id}`}
-              />
-              <p id={`input-help-${agent.id}`} className="notice">
-                Treated as untrusted input by the runtime. Tool calls still pass workspace policy
-                and, where required, human approval.
-              </p>
-              <button type="submit">Start run</button>
+              <Field
+                id={`input-${agent.id}`}
+                label={ui.t("agents.taskLabel")}
+                help={ui.t("agents.taskHelp")}
+              >
+                <textarea
+                  className="field-control" id={`input-${agent.id}`} name="input" required
+                  rows={4} maxLength={20000} aria-describedby={`input-${agent.id}-help`}
+                />
+              </Field>
+              <div><button type="submit" className="button">{ui.t("agents.startRun")}</button></div>
             </form>
-          </details>
+          </Disclosure>
         </article>)}</div>}
 
-      <nav className="pagination" aria-label="Agent pages">
-        {query.cursor && <a href={root}>First page</a>}
-        {agents.next_cursor && <a href={root + "?cursor=" + agents.next_cursor}>More agents →</a>}
-      </nav>
+      <Pagination
+        label={ui.t("agents.pagesLabel")}
+        previous={query.cursor ? { href: root, label: ui.t("common.firstPage") } : null}
+        next={agents.next_cursor
+          ? { href: `${root}?cursor=${agents.next_cursor}`, label: ui.t("agents.more") }
+          : null}
+      />
 
-      <h2 className="eval-section-title">Create an agent</h2>
-      {canManage
-        ? <form className="workspace-form" action="/workspaces/agents/create" method="post">
-          <input type="hidden" name="csrf" value={session.csrf}/>
-          <input type="hidden" name="workspace" value={id}/>
-          <label htmlFor="name">Agent name</label>
-          <input id="name" name="name" required maxLength={100} autoComplete="off"/>
-          <label htmlFor="instructions">Instructions</label>
-          <textarea id="instructions" name="instructions" required rows={6} maxLength={20000}/>
-          <label htmlFor="model_profile">Model profile</label>
-          <input
-            id="model_profile" name="model_profile" required maxLength={64} defaultValue="default"
-            pattern="[A-Za-z0-9._\-]+" autoComplete="off" aria-describedby="profile-help"
-          />
-          <p id="profile-help" className="notice">
-            The profile decides the provider, model and tools this agent may use. A run whose
-            workspace is not listed in that profile fails without reaching a provider.
-          </p>
-          <button type="submit">Create agent</button>
-        </form>
-        : <p className="notice">
-          You have read-only access to agent definitions. You can still start runs with the
-          agents listed above.
-        </p>}
-    </section>;
+      <Reveal>
+        <Panel labelledBy="create-agent-title">
+          <h2 id="create-agent-title" className="section-title">{ui.t("agents.createTitle")}</h2>
+          {canManage
+            ? <form className="form" action="/workspaces/agents/create" method="post">
+              <input type="hidden" name="csrf" value={session.csrf}/>
+              <input type="hidden" name="workspace" value={id}/>
+              <Field id="name" label={ui.t("agents.nameLabel")}>
+                <input
+                  className="field-control" id="name" name="name" required maxLength={100}
+                  autoComplete="off"
+                />
+              </Field>
+              <Field id="instructions" label={ui.t("agents.instructionsLabel")}>
+                <textarea
+                  className="field-control" id="instructions" name="instructions" required
+                  rows={6} maxLength={20000}
+                />
+              </Field>
+              <Field
+                id="model_profile"
+                label={ui.t("agents.profileLabel")}
+                help={ui.t("agents.profileHelp")}
+              >
+                <input
+                  className="field-control" id="model_profile" name="model_profile" required
+                  maxLength={64} defaultValue="default" pattern="[A-Za-z0-9._\-]+"
+                  autoComplete="off" aria-describedby="model_profile-help"
+                />
+              </Field>
+              <div>
+                <button type="submit" className="button">{ui.t("agents.createSubmit")}</button>
+              </div>
+            </form>
+            : <Hint>{ui.t("agents.readOnlyNotice")}</Hint>}
+        </Panel>
+      </Reveal>
+    </ConsoleShell>;
   } catch (error) {
-    return <ConsoleError
-      error={error} area="Agents" back={`/workspaces/${id}`} backLabel="Back to workspace"
+    return <ConsoleProblem
+      chrome={chrome} error={error} area={chrome.ui.t("agents.area")} active="agents"
+      back={{ href: `/workspaces/${id}`, label: chrome.ui.t("errors.backToWorkspace") }}
     />;
   }
 }

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { Tone } from "./i18n/tone.ts";
+import type { MessageKey } from "../messages/en.ts";
 
 const count = z.number().int().nonnegative();
 const timestamp = z.iso.datetime({ offset: true });
@@ -48,37 +50,22 @@ export const sourceInput = z.object({
 export type KnowledgeSource = z.infer<typeof knowledgeSourceSchema>;
 export type Ingestion = z.infer<typeof ingestionSchema>;
 
-export const SCOPE_LABELS: Record<AccessScope, string> = {
-  workspace: "Everyone in this workspace",
-  restricted: "Restricted to named accounts",
-};
+export function scopeKey(scope: AccessScope): MessageKey {
+  return `knowledge.scope.${scope}`;
+}
 
-export const INGESTION_STATUS_LABELS: Record<IngestionStatus, string> = {
-  queued: "Queued for the worker",
-  running: "Embedding and indexing",
-  succeeded: "Indexed",
-  failed: "Failed",
-  cancelled: "Cancelled",
-};
+export function ingestionStatusKey(status: IngestionStatus): MessageKey {
+  return `knowledge.ingestion.${status}`;
+}
 
-export const INGESTION_STATUS_TONES: Record<IngestionStatus, string> = {
-  queued: "pending",
-  running: "unknown",
+export function ingestionHelpKey(status: IngestionStatus): MessageKey {
+  return `knowledge.ingestionHelp.${status}`;
+}
+
+export const INGESTION_STATUS_TONES: Record<IngestionStatus, Tone> = {
+  queued: "neutral",
+  running: "warn",
   succeeded: "up",
   failed: "down",
-  cancelled: "pending",
+  cancelled: "neutral",
 };
-
-export const INGESTION_STATUS_HELP: Record<IngestionStatus, string> = {
-  queued: "Stored in PostgreSQL. A retrieval-enabled worker embeds it; nothing is sent to a provider until then.",
-  running: "A worker is embedding this version. Its cost is metered against the workspace budget.",
-  succeeded: "Indexed and retrievable, subject to this source's access scope.",
-  failed: "Nothing was indexed for this version. The recorded code says why.",
-  cancelled: "The job was cancelled, usually because the source was deleted before it ran.",
-};
-
-export function knowledgeTimestamp(value: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium", timeStyle: "short", timeZone: "UTC",
-  }).format(new Date(value)) + " UTC";
-}

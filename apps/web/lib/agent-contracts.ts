@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { Tone } from "./i18n/tone.ts";
+import type { MessageKey } from "../messages/en.ts";
 
 const count = z.number().int().nonnegative();
 const timestamp = z.iso.datetime({ offset: true });
@@ -81,91 +83,62 @@ export type AgentRunSummary = z.infer<typeof runSummarySchema>;
 export type RunEvent = z.infer<typeof runEventSchema>;
 export type RunResult = z.infer<typeof runResultSchema>;
 
-export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
-  queued: "Queued",
-  running: "Running",
-  waiting_for_approval: "Waiting for approval",
-  succeeded: "Succeeded",
-  failed: "Failed",
-  cancelled: "Cancelled",
-};
-
-// Colour never carries the message alone: every status is written out next to it.
-export const RUN_STATUS_TONES: Record<RunStatus, string> = {
-  queued: "pending",
-  running: "unknown",
-  waiting_for_approval: "unknown",
+// Colour never carries the message alone: every status is written out next to it, so
+// these tones stay presentational and never move into a message dictionary.
+export const RUN_STATUS_TONES: Record<RunStatus, Tone> = {
+  queued: "neutral",
+  running: "warn",
+  waiting_for_approval: "warn",
   succeeded: "up",
   failed: "down",
-  cancelled: "pending",
+  cancelled: "neutral",
 };
 
-export const RUN_STATUS_HELP: Record<RunStatus, string> = {
-  queued: "Waiting for a worker. Nothing runs unless an agent worker is configured and started.",
-  running: "A worker holds a lease on this run and is executing it.",
-  waiting_for_approval: "A governed tool needs a human decision before this run can continue.",
-  succeeded: "The run finished and recorded a final answer for the person who started it.",
-  failed: "The run stopped with a recorded failure code. No partial answer is published.",
-  cancelled: "The run was cancelled. No partial answer is published.",
-};
-
-// Run events are the append-only execution history. Types the console does not know
-// are still shown, so a new worker event never disappears from the timeline.
-export const RUN_EVENT_LABELS: Record<string, string> = {
-  "run.queued": "Queued",
-  "run.started": "Worker started the run",
-  "run.resumed": "Resumed after approval",
-  "run.retry_scheduled": "Retry scheduled",
-  "run.redis_requeued": "Requeued for delivery",
-  "run.recovered": "Recovered after a lost lease",
-  "run.waiting_for_approval": "Paused for approval",
-  "run.cancel_requested": "Cancellation requested",
-  "run.cancelled": "Cancelled",
-  "run.succeeded": "Succeeded",
-  "run.failed": "Failed",
-  "model.completed": "Model step recorded",
-  "retrieval.completed": "Retrieval completed",
-  "tool.call_planned": "Tool call planned",
-  "tool.approval_requested": "Approval requested",
-  "tool.approved": "Tool approved",
-  "tool.denied": "Tool denied by policy",
-  "tool.rejected": "Tool rejected by an approver",
-  "tool.started": "Tool started",
-  "tool.succeeded": "Tool succeeded",
-  "tool.failed": "Tool failed",
-  "tool.retry_scheduled": "Tool retry scheduled",
-  "tool.contract_changed": "Tool contract changed",
-  "spend.denied": "Stopped by the workspace budget",
-};
-
-export function runEventLabel(type: string): string {
-  return RUN_EVENT_LABELS[type] ?? type;
+export function runStatusKey(status: RunStatus): MessageKey {
+  return `runs.status.${status}`;
 }
 
-export function runTimestamp(value: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium", timeStyle: "short", timeZone: "UTC",
-  }).format(new Date(value)) + " UTC";
+export function runStatusHelpKey(status: RunStatus): MessageKey {
+  return `runs.statusHelp.${status}`;
 }
 
-export function runDuration(run: { created_at: string; finished_at: string | null }): string | null {
+// Run events are the append-only execution history. A type the console does not know is
+// still shown by its recorded identifier, so a new worker event never disappears from the
+// timeline just because no one has named it yet.
+export const KNOWN_RUN_EVENTS = [
+  "run.queued", "run.started", "run.resumed", "run.retry_scheduled", "run.redis_requeued",
+  "run.recovered", "run.waiting_for_approval", "run.cancel_requested", "run.cancelled",
+  "run.succeeded", "run.failed", "model.completed", "retrieval.completed",
+  "tool.call_planned", "tool.approval_requested", "tool.approved", "tool.denied",
+  "tool.rejected", "tool.started", "tool.succeeded", "tool.failed",
+  "tool.retry_scheduled", "tool.contract_changed", "spend.denied",
+] as const;
+
+export type KnownRunEvent = (typeof KNOWN_RUN_EVENTS)[number];
+
+export function runEventKey(type: string): MessageKey | null {
+  return (KNOWN_RUN_EVENTS as readonly string[]).includes(type)
+    ? (`runEvent.${type}` as MessageKey)
+    : null;
+}
+
+/** Elapsed seconds, or null while the run has not finished. Never negative. */
+export function runDurationSeconds(run: { created_at: string; finished_at: string | null }): number | null {
   if (!run.finished_at) return null;
-  const seconds = Math.max(0, Math.round((Date.parse(run.finished_at) - Date.parse(run.created_at)) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  return Math.max(0, Math.round((Date.parse(run.finished_at) - Date.parse(run.created_at)) / 1000));
 }
 
 // Payload values are worker-written identifiers, counts and codes. They are rendered as
-// text only: the timeline never interprets one as markup or as a link.
+// text only: the timeline never interprets one as markup or as a link, and the keys are
+// the API's own field names, which are not translated.
 export function eventDetail(payload: Record<string, unknown>): string {
   const parts = Object.entries(payload)
     .filter(([key]) => key !== "request_id")
     .map(([key, value]) => {
       const text = value === null || value === undefined
-        ? "—"
+        ? "\u2014"
         : typeof value === "object" ? JSON.stringify(value) : String(value);
-      return `${key}: ${text.length > 120 ? text.slice(0, 117) + "…" : text}`;
+      return `${key}: ${text.length > 120 ? text.slice(0, 117) + "\u2026" : text}`;
     });
-  return parts.join(" · ");
+  return parts.join(" \u00b7 ");
 }

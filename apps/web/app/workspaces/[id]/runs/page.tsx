@@ -1,40 +1,50 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import {
-  RUN_STATUS_LABELS,
-  runDuration,
-  runPageSchema,
-  runStatusSchema,
-  runTimestamp,
+  runDurationSeconds, runPageSchema, runStatusKey, runStatusSchema,
 } from "../../../../lib/agent-contracts";
 import { api } from "../../../../lib/server/api";
 import { currentSession } from "../../../../lib/server/session";
+import { consoleChrome } from "../../../../lib/server/chrome";
 import { workspaceSchema } from "../../../../lib/workspace-contracts";
-import { ConsoleError, InvalidLink, RunStatusBadge } from "../console";
+import { formatDuration, formatNumber, formatTimestamp } from "../../../../lib/i18n/format.ts";
+import { ConsoleBreadcrumb, ConsoleShell } from "../../../../components/shell/ConsoleShell.tsx";
+import {
+  EmptyState, FilterLink, Filters, Hint, PageHeader, Pagination, RefreshLink, SectionHead,
+} from "../../../../components/ui/primitives.tsx";
+import { TextWithLink } from "../../../../components/ui/RichText.tsx";
+import { ConsoleProblem, InvalidLinkPage, RunStatusBadge } from "../console";
 
 export default async function Runs({ params, searchParams }: {
   params: Promise<{ id: string }>;
   searchParams: Promise<{ cursor?: string; status?: string; mine?: string }>;
 }) {
-  const { id } = await params;
-  const query = await searchParams;
+  const [{ id }, query] = await Promise.all([params, searchParams]);
   const session = await currentSession();
   if (!session) redirect("/login");
 
   const status = query.status ? runStatusSchema.safeParse(query.status) : null;
   const mine = query.mine === "1";
+  const root = `/workspaces/${id}/runs`;
+  let chrome = await consoleChrome(session);
   if (!z.uuid().safeParse(id).success
     || (query.cursor !== undefined && !z.uuid().safeParse(query.cursor).success)
     || (status !== null && !status.success)
     || (query.mine !== undefined && query.mine !== "1")) {
-    return <InvalidLink back={`/workspaces/${id}`} backLabel="Back to workspace"/>;
+    return <InvalidLinkPage chrome={chrome} back={{
+      href: `/workspaces/${id}`, label: chrome.ui.t("errors.backToWorkspace"),
+    }}/>;
   }
 
-  const root = `/workspaces/${id}/runs`;
+  // Filters live in the URL, so the language switch, a refresh and the back button all
+  // return to exactly the same view.
   const filters = (status?.success ? `&status=${status.data}` : "") + (mine ? "&mine=1" : "");
   const link = (extra: string) => root + (filters || extra ? "?" + (filters + extra).slice(1) : "");
+
   try {
     const workspace = await api(session, `/api/v1/workspaces/${id}`, workspaceSchema);
+    chrome = await consoleChrome(session, workspace);
+    const { ui } = chrome;
     const runs = await api(
       session,
       `/api/v1/workspaces/${id}/runs?limit=25`
@@ -44,67 +54,93 @@ export default async function Runs({ params, searchParams }: {
       runPageSchema,
     );
 
-    return <section className="workspace-content evaluation-content">
-      <a href={`/workspaces/${id}`}>← {workspace.name}</a>
-      <p className="eyebrow">EXECUTION / HISTORY</p><h1>Agent runs</h1>
-      <p className="intro">
-        Every run this workspace has started, newest first. Answers stay with the person who
-        started the run; this history shows status, timing and which agent ran.
-      </p>
-      <div className="section-head">
-        <p className="notice">Runs update as the worker progresses.</p>
-        <a href={link("")}>Refresh ↗</a>
-      </div>
+    return <ConsoleShell
+      chrome={chrome}
+      active="runs"
+      breadcrumb={<ConsoleBreadcrumb
+        ui={ui} workspace={workspace} trail={[{ href: root, label: ui.t("navigation.runs") }]}
+      />}
+    >
+      <PageHeader
+        eyebrow={ui.t("runs.eyebrow")}
+        title={ui.t("runs.title")}
+        intro={ui.t("runs.intro")}
+      />
+      <SectionHead
+        title={ui.t("runs.filterLabel")}
+        action={<RefreshLink href={link("")} label={ui.t("common.refresh")}/>}
+      />
+      <Hint>{ui.t("runs.updateNotice")} {ui.t("common.utcNote")}</Hint>
 
-      <nav className="spend-filters" aria-label="Filter runs">
-        <a href={root + (mine ? "?mine=1" : "")} aria-current={status === null ? "page" : undefined}>
-          All statuses
-        </a>
-        {runStatusSchema.options.map(option => <a
+      <Filters label={ui.t("runs.filterLabel")}>
+        <FilterLink href={root + (mine ? "?mine=1" : "")} current={status === null}>
+          {ui.t("runs.allStatuses")}
+        </FilterLink>
+        {runStatusSchema.options.map(option => <FilterLink
           key={option}
           href={`${root}?status=${option}` + (mine ? "&mine=1" : "")}
-          aria-current={status?.success && status.data === option ? "page" : undefined}
-        >{RUN_STATUS_LABELS[option]}</a>)}
-        <a
-          href={mine ? root + (status?.success ? `?status=${status.data}` : "")
+          current={Boolean(status?.success && status.data === option)}
+        >{ui.t(runStatusKey(option))}</FilterLink>)}
+        <FilterLink
+          href={mine
+            ? root + (status?.success ? `?status=${status.data}` : "")
             : `${root}?mine=1` + (status?.success ? `&status=${status.data}` : "")}
-          aria-current={mine ? "page" : undefined}
-        >{mine ? "Started by me ✓" : "Started by me"}</a>
-      </nav>
+          current={mine}
+        >{ui.t(mine ? "runs.startedByMeActive" : "runs.startedByMe")}</FilterLink>
+      </Filters>
 
       {runs.items.length === 0
-        ? <div className="empty"><h2>No runs on this page</h2>
-          <p>Start one from the <a href={`/workspaces/${id}/agents`}>agents page</a>. A queued run
-            executes only when an agent worker is configured and running.</p></div>
-        : <table className="spend-table run-table">
-          <caption>Run history for this workspace. Each row links to its execution timeline.</caption>
+        ? <EmptyState title={ui.t("runs.emptyTitle")}>
+          <p><TextWithLink
+            ui={ui} message="runs.emptyBody" link="runs.emptyBodyLink"
+            href={`/workspaces/${id}/agents`}
+          /></p>
+        </EmptyState>
+        : <div className="table-scroll"><table className="table">
+          <caption>{ui.t("runs.tableCaption")}</caption>
           <thead><tr>
-            <th scope="col">Started</th><th scope="col">Agent</th><th scope="col">Status</th>
-            <th scope="col">Attempts</th><th scope="col">Duration</th><th scope="col">Run</th>
+            <th scope="col">{ui.t("runs.column.started")}</th>
+            <th scope="col">{ui.t("runs.column.agent")}</th>
+            <th scope="col">{ui.t("runs.column.status")}</th>
+            <th scope="col">{ui.t("runs.column.attempts")}</th>
+            <th scope="col">{ui.t("runs.column.duration")}</th>
+            <th scope="col">{ui.t("runs.column.run")}</th>
           </tr></thead>
-          <tbody>{runs.items.map(run => <tr key={run.id}>
-            <td data-label="Started">
-              <time dateTime={run.created_at}>{runTimestamp(run.created_at)}</time></td>
-            <td data-label="Agent">{run.agent_name}</td>
-            <td data-label="Status">
-              <RunStatusBadge status={run.status}/>
-              {run.failure_code && <span className="run-code"><code>{run.failure_code}</code></span>}
-            </td>
-            <td data-label="Attempts">{run.attempt_count}</td>
-            <td data-label="Duration">{runDuration(run) ?? "—"}</td>
-            <td data-label="Run">
-              <a href={`${root}/${run.id}`}>Open{run.requested_by_me ? " · yours" : ""}</a></td>
-          </tr>)}</tbody>
-        </table>}
+          <tbody>{runs.items.map(run => {
+            const seconds = runDurationSeconds(run);
+            return <tr key={run.id}>
+              <td data-label={ui.t("runs.column.started")}>
+                <time dateTime={run.created_at}>{formatTimestamp(run.created_at, ui.locale)}</time>
+              </td>
+              <td data-label={ui.t("runs.column.agent")}>{run.agent_name}</td>
+              <td data-label={ui.t("runs.column.status")}>
+                <RunStatusBadge chrome={chrome} status={run.status}/>
+                {/* A failure code is an API identifier, shown exactly as recorded. */}
+                {run.failure_code && <p className="field-help"><code>{run.failure_code}</code></p>}
+              </td>
+              <td data-label={ui.t("runs.column.attempts")}>
+                {formatNumber(run.attempt_count, ui.locale)}</td>
+              <td data-label={ui.t("runs.column.duration")}>
+                {seconds === null ? ui.t("common.empty") : formatDuration(seconds, ui.t)}</td>
+              <td data-label={ui.t("runs.column.run")}>
+                <a className="link" href={`${root}/${run.id}`}>
+                  {ui.t(run.requested_by_me ? "runs.openRunMine" : "runs.openRun")}</a></td>
+            </tr>;
+          })}</tbody>
+        </table></div>}
 
-      <nav className="pagination" aria-label="Run history pages">
-        {query.cursor && <a href={link("")}>Newest runs</a>}
-        {runs.next_cursor && <a href={link(`&cursor=${runs.next_cursor}`)}>Older runs →</a>}
-      </nav>
-    </section>;
+      <Pagination
+        label={ui.t("runs.pagesLabel")}
+        previous={query.cursor ? { href: link(""), label: ui.t("runs.newest") } : null}
+        next={runs.next_cursor
+          ? { href: link(`&cursor=${runs.next_cursor}`), label: ui.t("runs.older") }
+          : null}
+      />
+    </ConsoleShell>;
   } catch (error) {
-    return <ConsoleError
-      error={error} area="Runs" back={`/workspaces/${id}`} backLabel="Back to workspace"
+    return <ConsoleProblem
+      chrome={chrome} error={error} area={chrome.ui.t("runs.area")} active="runs"
+      back={{ href: `/workspaces/${id}`, label: chrome.ui.t("errors.backToWorkspace") }}
     />;
   }
 }
