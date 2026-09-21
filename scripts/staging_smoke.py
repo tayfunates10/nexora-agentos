@@ -108,14 +108,14 @@ class Config:
         if approval_tool and not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", approval_tool):
             raise SmokeError("NEXORA_STAGING_APPROVAL_TOOL is not a valid tool name")
         require_observability = _env_bool("NEXORA_STAGING_REQUIRE_OBSERVABILITY", False)
-        worker_admin_url = _base_url(
-            "NEXORA_STAGING_WORKER_ADMIN_URL", required=require_observability
-        )
-        metrics_token = (
-            _required("NEXORA_STAGING_METRICS_TOKEN")
-            if require_observability
-            else os.getenv("NEXORA_STAGING_METRICS_TOKEN", "").strip() or None
-        )
+        if require_observability:
+            worker_admin_url = _base_url("NEXORA_STAGING_WORKER_ADMIN_URL")
+            metrics_token = _required("NEXORA_STAGING_METRICS_TOKEN")
+        else:
+            # Hosted runners must not opportunistically reach a private worker endpoint
+            # merely because environment variables happen to exist.
+            worker_admin_url = None
+            metrics_token = None
         prompt = (
             os.getenv("NEXORA_STAGING_PROMPT", "").strip()
             or "Answer this staging health-check request concisely."
