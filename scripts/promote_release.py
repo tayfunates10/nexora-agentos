@@ -16,6 +16,8 @@ DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_ENTRY = re.compile(r"^(\s*)-\s+name:\s*(\S+)\s*$")
 FIELD = re.compile(r"^(\s*)(newName|digest|newTag):\s*(\S+)\s*$")
 OVERLAY = Path("infra/k8s/overlays/production/kustomization.yaml")
+STAGING_OVERLAY = Path("infra/k8s/overlays/staging/kustomization.yaml")
+STAGING_MIGRATE_OVERLAY = Path("infra/k8s/overlays/staging-migrate/kustomization.yaml")
 
 
 class PromotionError(ValueError):
@@ -57,23 +59,63 @@ def pin_digest(document: str, image: str, digest: str, new_name: str | None = No
     return "".join(updated)
 
 
+def promotion_targets(
+    image: str,
+    *,
+    environment: str | None,
+    overlay: Path | None,
+) -> list[Path]:
+    if overlay is not None:
+        return [overlay]
+    if environment in (None, "production"):
+        return [OVERLAY]
+    if environment == "staging":
+        targets = [STAGING_OVERLAY]
+        if image == "nexora/api":
+            targets.append(STAGING_MIGRATE_OVERLAY)
+        return targets
+    raise PromotionError(f"unknown environment: {environment}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, help="image name as the overlay declares it")
     parser.add_argument("--digest", required=True, help="sha256:... digest published by CI")
     parser.add_argument("--new-name", help="registry path to publish under, when it changes")
-    parser.add_argument("--overlay", type=Path, default=OVERLAY)
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument("--overlay", type=Path)
+    target.add_argument("--environment", choices=("staging", "production"))
     arguments = parser.parse_args()
 
     try:
-        document = arguments.overlay.read_text()
-        promoted = pin_digest(document, arguments.image, arguments.digest, arguments.new_name)
+        targets = promotion_targets(
+            arguments.image,
+            environment=arguments.environment,
+            overlay=arguments.overlay,
+        )
+        # Validate every target before writing any of them. In staging this keeps the
+        # API workload and migration Job on the same immutable artifact.
+        promoted = []
+        for path in targets:
+            document = path.read_text()
+            promoted.append(
+                (
+                    path,
+                    pin_digest(
+                        document,
+                        arguments.image,
+                        arguments.digest,
+                        arguments.new_name,
+                    ),
+                )
+            )
     except (OSError, PromotionError) as error:
         print(f"Promotion refused: {error}", file=sys.stderr)
         return 1
 
-    arguments.overlay.write_text(promoted)
-    print(f"Pinned {arguments.image} to {arguments.digest} in {arguments.overlay}.")
+    for path, document in promoted:
+        path.write_text(document)
+        print(f"Pinned {arguments.image} to {arguments.digest} in {path}.")
     return 0
 
 
