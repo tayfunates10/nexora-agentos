@@ -72,7 +72,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [hybrid RAG retrieval](docs/architecture/0033-hybrid-retrieval.md), and
 [retrieval evals and HNSW](docs/architecture/0034-retrieval-evals-hnsw.md), and
 [release supply-chain verification](docs/architecture/0035-release-supply-chain-verification.md), and
-[deployed staging E2E smoke](docs/architecture/0036-staging-e2e-smoke.md).
+[deployed staging E2E smoke](docs/architecture/0036-staging-e2e-smoke.md), and
+[staging rollout/rollback acceptance](docs/architecture/0037-staging-rollout-rollback.md).
 
 ## Run locally with Docker Compose
 
@@ -142,11 +143,18 @@ real worker/model activity, requester-scoped results and run events. Retrieval i
 worker metric delta; optional approval mode approves a configured staging tool and requires the
 worker to resume the run. See [ADR 0036](docs/architecture/0036-staging-e2e-smoke.md).
 
+A separate protected **Staging Rollout Rollback** workflow takes the immutable release digests,
+rolls API/worker/web to the candidate, runs the same deployed smoke, executes Kubernetes rollback,
+proves the exact previous image references were restored, and smokes the rolled-back release again.
+Any failure after mutation triggers an exact-image emergency restore. The drill intentionally leaves
+staging on the previous release; promotion remains a reviewed digest edit. See
+[ADR 0037](docs/architecture/0037-staging-rollout-rollback.md).
+
 ## Quality checks
 
 ```bash
 python scripts/sync_skills.py --check
-python -m unittest discover -s scripts -p 'test_staging_smoke.py'
+python -m unittest discover -s scripts -p 'test_staging_*.py'
 .venv/bin/ruff check apps/api
 .venv/bin/ruff format --check apps/api
 .venv/bin/pytest apps/api/tests -m 'not integration'
