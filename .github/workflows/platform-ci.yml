@@ -130,6 +130,15 @@ jobs:
           assert 'All foundation services are reachable.' in html
           assert 'No agent runs yet' in html
           PY
+      - name: Verify web runtime omits build package managers
+        run: |
+          docker compose run --rm --no-deps web sh -ceu '
+            test ! -e /usr/local/lib/node_modules/npm
+            test ! -e /usr/local/lib/node_modules/corepack
+            ! command -v npm
+            ! command -v npx
+            ! command -v corepack
+          '
       - name: Verify guarded metrics exposition
         run: |
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/metrics)" = 401
