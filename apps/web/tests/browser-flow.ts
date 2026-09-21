@@ -4,6 +4,7 @@ import { startProvider } from "./fixtures/provider.ts";
 import { checkAgentRuns } from "./agent-browser.ts";
 import { checkEvaluations } from "./evaluation-browser.ts";
 import { checkGovernance } from "./governance-browser.ts";
+import { checkKnowledge } from "./knowledge-browser.ts";
 import { checkSpend } from "./spend-browser.ts";
 
 const provider = await startProvider();
@@ -54,6 +55,7 @@ try {
   }
   await checkAgentRuns(page, provider, detailUrl);
   await checkGovernance(page, provider, detailUrl);
+  await checkKnowledge(page, provider, detailUrl);
   await checkEvaluations(page, provider, detailUrl);
   await checkSpend(page, provider, detailUrl);
   const workspace = [...provider.workspaces.values()][0]; workspace.role = "member";
@@ -66,7 +68,7 @@ try {
   await context.addCookies([session!]);
   await page.goto(origin + "/workspaces");
   await expect(page).toHaveURL(origin + "/login");
-  console.log("Browser flow passed: OIDC sign-in, create, rename, membership, CSRF, agent and run console, tool policy and approval decisions, spend and budget console, responsive layouts, role UI and logout replay rejection");
+  console.log("Browser flow passed: OIDC sign-in, create, rename, membership, CSRF, agent and run console, tool policy and approval decisions, knowledge ingestion, spend and budget console, responsive layouts, role UI and logout replay rejection");
 } finally {
   await browser?.close(); child.kill("SIGTERM"); await provider.close();
 }

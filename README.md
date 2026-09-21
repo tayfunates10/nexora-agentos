@@ -416,6 +416,14 @@ See [ADR 0006](docs/architecture/0006-mcp-tool-governance.md) and
 
 ## Knowledge ingestion API
 
+The workspace panel links to **Knowledge sources**. Owners and admins add a text or Markdown
+source there and land on its ingestion job, which states whether the text is merely stored, being
+embedded and metered, indexed, or failed with its recorded code. The list shows each indexed
+version with its key, chunk count and access scope, and deleting a source is a row action that
+reports the 409 a running ingestion returns rather than racing it. The browser form creates
+workspace-scoped sources; restricted sources need exact issuer/subject pairs and stay an API
+action. See [ADR 0041](docs/architecture/0041-knowledge-console.md).
+
 Owners and admins can queue text or Markdown knowledge sources without giving the API process
 provider network access. Ingestion is durable and idempotent: the API stores validated source
 content and ACL metadata in PostgreSQL, then a retrieval-enabled worker embeds and indexes it

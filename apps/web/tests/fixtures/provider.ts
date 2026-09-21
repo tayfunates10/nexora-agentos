@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
 import type { AddressInfo } from "node:net";
 import type { Agent, RunEvent, RunResult } from "../../lib/agent-contracts.ts";
+import type { Ingestion, KnowledgeSource } from "../../lib/knowledge-contracts.ts";
 import type { Tool, ToolApproval } from "../../lib/tool-contracts.ts";
 import type { EvalJudgeRun, EvalRun, EvalSuite } from "../../lib/evaluation-contracts.ts";
 import type { SpendRecord } from "../../lib/spend-contracts.ts";
@@ -25,6 +26,9 @@ export async function startProvider() {
   const runEvents = new Map<string, RunEvent[]>();
   const runResults = new Map<string, RunResult>();
   const runIdempotency = new Map<string, string>();
+  const sources = new Map<string, KnowledgeSource & { workspace_id: string }>();
+  const ingestions = new Map<string, Ingestion>();
+  const ingestionIdempotency = new Map<string, string>();
   const tools = new Map<string, Tool>();
   const approvals = new Map<string, ToolApproval>();
   const evalSuites = new Map<string, EvalSuite>();
@@ -229,6 +233,66 @@ export async function startProvider() {
         }
         return send({ items: rows.slice(0, limit), next_cursor: rows.length > limit ? rows[limit - 1].id : null });
       }
+      const knowledgeRoute = url.pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/knowledge\/(sources|ingestions)(?:\/(.+))?$/,
+      );
+      if (knowledgeRoute) {
+        const [, workspaceId, kind, resource] = knowledgeRoute;
+        const scope = workspaces.get(workspaceId);
+        if (!scope) return send({}, 404);
+        if (kind === "ingestions") {
+          const job = ingestions.get(resource);
+          return job?.workspace_id === workspaceId ? send(job) : send({}, 404);
+        }
+        if (request.method === "POST") {
+          // Adding or removing a source is knowledge:manage; reading the list is not.
+          if (scope.role === "member") return send({}, 403);
+          const key = request.headers["idempotency-key"];
+          if (typeof key !== "string" || key.length < 8) return send({}, 400);
+          const scopedKey = workspaceId + ":" + key;
+          const existingId = ingestionIdempotency.get(scopedKey);
+          if (existingId) return send(ingestions.get(existingId), 200);
+          const input = JSON.parse(body);
+          const job: Ingestion = {
+            id: randomUUID(), workspace_id: workspaceId, source_key: input.source_key,
+            version: input.version, title: input.title, access_scope: input.access_scope,
+            status: "queued", attempt_count: 0, source_id: null, chunk_count: null,
+            embedding_input_tokens: null, error_code: null,
+            created_at: "2026-09-20T17:00:00Z", updated_at: "2026-09-20T17:00:00Z",
+            finished_at: null,
+          };
+          ingestions.set(job.id, job);
+          ingestionIdempotency.set(scopedKey, job.id);
+          return send(job, 202);
+        }
+        if (request.method === "DELETE") {
+          if (scope.role === "member") return send({}, 403);
+          const key = decodeURIComponent(resource ?? "");
+          const existing = [...sources.values()].find(
+            row => row.workspace_id === workspaceId && row.source_key === key,
+          );
+          if (!existing) return send({}, 404);
+          sources.delete(existing.id);
+          response.writeHead(204);
+          response.end();
+          return;
+        }
+        let rows = [...sources.values()]
+          .filter(row => row.workspace_id === workspaceId)
+          .sort((a, b) => a.id.localeCompare(b.id));
+        const cursor = url.searchParams.get("cursor");
+        if (cursor) {
+          const index = rows.findIndex(row => row.id === cursor);
+          if (index < 0) return send({}, 404);
+          rows = rows.slice(index + 1);
+        }
+        const limit = Number(url.searchParams.get("limit") ?? "25");
+        return send({
+          items: rows.slice(0, limit),
+          next_cursor: rows.length > limit ? rows[limit - 1].id : null,
+        });
+      }
+
       const toolRoute = url.pathname.match(
         /^\/api\/v1\/workspaces\/([^/]+)\/tools(?:\/([^/]+))?(\/policy)?$/,
       );
@@ -428,6 +492,7 @@ export async function startProvider() {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   return { issuer, workspaces, agents, runs, runEvents, runResults, tools, approvals,
+    sources, ingestions,
     evalSuites, evalRuns, evalJudgeRuns, spendRecords, budgets,
     spendAlerts,
     historyUnavailable: (value: boolean) => { historyUnavailable = value; },
