@@ -28,16 +28,20 @@ This is a second, independent chain of custody; it complements rather than repla
 BuildKit provenance and SBOM already attached to the image. See ADR 0035.
 
 ## Promotion is an edit, not an event
-The digest is written into the production overlay by a script and merged like any other
-change, so promotion is reviewable, revertible and visible in history. The script edits
-the file in place rather than re-serializing it, so comments and ordering survive, and it
-refuses anything that would make the deployed artifact ambiguous: a malformed digest, an
-image the overlay does not declare, or a tag left beside a digest. The release job prints
-the exact command for the digest it just published.
+The digest is written into an environment overlay by a script and merged like any other
+change, so promotion is reviewable, revertible and visible in history. The release summary
+prints staging-first and production commands for the exact digest it just published.
+Staging promotion updates the API workload and migration overlays together; production is
+given the same digest only after staging acceptance. There is no rebuild between
+environments.
+
+The script edits files in place rather than re-serializing them, so comments and ordering
+survive, and it refuses anything that would make the deployed artifact ambiguous: a
+malformed digest, an image the overlay does not declare, or a tag left beside a digest.
 
 Deployment itself stays outside this repository. Cluster credentials belong to the
 environment that owns the cluster, and a deploy workflow here would either hold them or
-pretend to. The apply and rollback sequence is documented instead.
+pretend to. The staging rollout/rollback acceptance sequence is documented in ADR 0037.
 
 ## Migration history is append-only
 The runtime already refuses to apply a migration whose checksum no longer matches the
@@ -52,8 +56,9 @@ moves code back but not schema, so the previous release must tolerate the curren
 and that only holds while old migrations stay exactly as they were applied.
 
 ## Boundaries
-Registry retention, cluster credentials and the deploy step, and staging promotion
-between environments remain outside this repository. Published image digests are now
+Registry retention, cluster credentials and the deploy step remain outside this repository.
+Environment promotion is represented only as reviewed digest edits; no workflow here owns a
+cluster credential. Published image digests are now
 scanned and receive signed GitHub provenance before promotion, as specified in ADR 0035.
 The scripts and scanner are build-time tools kept out of the runtime package, so nothing
 in a published image depends on them.
