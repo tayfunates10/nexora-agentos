@@ -116,15 +116,18 @@ class Config:
             if require_observability
             else os.getenv("NEXORA_STAGING_METRICS_TOKEN", "").strip() or None
         )
+        prompt = (
+            os.getenv("NEXORA_STAGING_PROMPT", "").strip()
+            or "Answer this staging health-check request concisely."
+        )
+        if len(prompt) > 20000:
+            raise SmokeError("NEXORA_STAGING_PROMPT must be at most 20000 characters")
         return cls(
             api_url=_base_url("NEXORA_STAGING_API_URL") or "",
             access_token=_required("NEXORA_STAGING_ACCESS_TOKEN"),
             workspace_id=_uuid("NEXORA_STAGING_WORKSPACE_ID"),
             agent_id=_uuid("NEXORA_STAGING_AGENT_ID"),
-            prompt=os.getenv(
-                "NEXORA_STAGING_PROMPT",
-                "Answer this staging health-check request concisely.",
-            ).strip(),
+            prompt=prompt,
             expected_text=os.getenv("NEXORA_STAGING_EXPECT_TEXT", "").strip() or None,
             expected_source_key=os.getenv(
                 "NEXORA_STAGING_EXPECT_SOURCE_KEY", ""
