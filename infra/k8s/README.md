@@ -135,13 +135,39 @@ safe `require_approval` MCP fixture. See ADR 0036 for the exact variables and tr
 
 A green staging smoke is deployment evidence, not permission to skip rollback preparation.
 
+For a release candidate, the manual `Staging Rollout Rollback` workflow turns that preparation into
+an acceptance test. Configure the protected `staging` environment with
+`NEXORA_STAGING_API_IMAGE`, `NEXORA_STAGING_WEB_IMAGE` and a least-privilege
+`NEXORA_STAGING_KUBECONFIG`. Supply the API and web `sha256:...` digests from the release
+summary. The workflow patches all three workloads to those immutable references, waits for the
+rollout, runs the deployed smoke, executes `kubectl rollout undo`, verifies the exact original
+image references and runs the smoke again.
+
+The Kubernetes identity needs only get/watch/patch on deployments and get/list on replica sets in
+the `nexora` namespace. It does not need Secret read, pod exec, provider credentials or database
+credentials. Prefer a short-lived environment-scoped identity when the cluster provider supports
+one. The drill shares a concurrency group with the read-only smoke so the two cannot race.
+
+The drill does not run migrations. Apply a candidate migration first when required; the rollback
+smoke then proves the previous application version still tolerates the current schema. A successful
+drill intentionally leaves staging on the previous release. See ADR 0037.
+
 ## Rollback
 
 Deployments keep three revisions, so a bad rollout is reversed without rebuilding:
 
 ```bash
 kubectl rollout undo deployment/nexora-api -n nexora
+kubectl rollout undo deployment/nexora-worker -n nexora
+kubectl rollout undo deployment/nexora-web -n nexora
+kubectl rollout status deployment/nexora-api -n nexora --timeout=300s
+kubectl rollout status deployment/nexora-worker -n nexora --timeout=300s
+kubectl rollout status deployment/nexora-web -n nexora --timeout=300s
 ```
+
+For staging release acceptance, prefer `scripts/staging_rollout_rollback.py` through the protected
+workflow because it snapshots and verifies the exact previous images and performs an emergency
+exact-image restore if the ordinary rollback path fails.
 
 A rollback moves the code back, not the schema. Reverting a migration is a forward-fix:
 write and apply a new migration. This is why an expand/contract migration that the
