@@ -41,6 +41,19 @@ patches:
         path: /spec/maxReplicas
         value: 2
   - target:
+      kind: ConfigMap
+      name: nexora-config
+    patch: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: nexora-config
+      data:
+        # Replace the issuer before deploying. example.invalid deliberately fails closed.
+        NEXORA_AUTH_ISSUER: https://idp.example.invalid/
+        NEXORA_AUTH_AUDIENCE: nexora-staging
+        NEXORA_OTEL_SAMPLE_RATIO: "1.0"
+  - target:
       kind: Deployment
       name: nexora-web
     patch: |
