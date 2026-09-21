@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: nexora
+# Bootstrap creates the production security/configuration boundary without starting
+# a migration or any application workload. Secrets are injected after this step.
+resources:
+  - ../../base/namespace.yaml
+  - ../../base/serviceaccount.yaml
+  - ../../base/configmap.yaml
+  - ../../base/networkpolicy.yaml
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/environment: production
