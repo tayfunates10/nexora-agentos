@@ -113,6 +113,18 @@ def _previous_for(previous: Images, key: str) -> str:
     return getattr(previous, key)
 
 
+def _changed_deployments(
+    previous: Images,
+    api_image: str,
+    web_image: str,
+) -> tuple[tuple[str, str, str], ...]:
+    return tuple(
+        (deployment, container, key)
+        for deployment, container, key in DEPLOYMENTS
+        if _previous_for(previous, key) != _candidate_for(key, api_image, web_image)
+    )
+
+
 def _set_image(
     runner: CommandRunner,
     namespace: str,
@@ -155,6 +167,7 @@ def _preflight(
     namespace: str,
     api_image: str,
     web_image: str,
+    deployments: Sequence[tuple[str, str, str]],
 ) -> None:
     permissions = (
         ("get", "deployments.apps"),
@@ -179,7 +192,7 @@ def _preflight(
             raise DrillError(
                 f"staging identity cannot {verb} {resource} in namespace {namespace}"
             )
-    for deployment, container, key in DEPLOYMENTS:
+    for deployment, container, key in deployments:
         _set_image(
             runner,
             namespace,
@@ -195,8 +208,9 @@ def _apply_candidate(
     namespace: str,
     api_image: str,
     web_image: str,
+    deployments: Sequence[tuple[str, str, str]],
 ) -> None:
-    for deployment, container, key in DEPLOYMENTS:
+    for deployment, container, key in deployments:
         _set_image(
             runner,
             namespace,
@@ -205,12 +219,16 @@ def _apply_candidate(
             _candidate_for(key, api_image, web_image),
             server_dry_run=False,
         )
-    for deployment, _, _ in DEPLOYMENTS:
+    for deployment, _, _ in deployments:
         _wait(runner, namespace, deployment)
 
 
-def _rollback(runner: CommandRunner, namespace: str) -> None:
-    for deployment, _, _ in DEPLOYMENTS:
+def _rollback(
+    runner: CommandRunner,
+    namespace: str,
+    deployments: Sequence[tuple[str, str, str]],
+) -> None:
+    for deployment, _, _ in deployments:
         runner(
             [
                 "kubectl",
@@ -221,7 +239,7 @@ def _rollback(runner: CommandRunner, namespace: str) -> None:
                 namespace,
             ]
         )
-    for deployment, _, _ in DEPLOYMENTS:
+    for deployment, _, _ in deployments:
         _wait(runner, namespace, deployment)
 
 
@@ -229,9 +247,10 @@ def _restore_exact(
     runner: CommandRunner,
     namespace: str,
     previous: Images,
+    deployments: Sequence[tuple[str, str, str]],
 ) -> None:
     errors: list[str] = []
-    for deployment, container, key in DEPLOYMENTS:
+    for deployment, container, key in deployments:
         try:
             _set_image(
                 runner,
@@ -243,7 +262,7 @@ def _restore_exact(
             )
         except DrillError as exc:
             errors.append(str(exc))
-    for deployment, _, _ in DEPLOYMENTS:
+    for deployment, _, _ in deployments:
         try:
             _wait(runner, namespace, deployment)
         except DrillError as exc:
@@ -280,22 +299,23 @@ def run_drill(
     previous = snapshot_images(runner, namespace)
     for current in (previous.api, previous.worker, previous.web):
         validate_image_reference(current, label="currently deployed")
-    if previous.api == api_image and previous.worker == api_image and previous.web == web_image:
+    changed = _changed_deployments(previous, api_image, web_image)
+    if not changed:
         raise DrillError("candidate images are already deployed; rollback would prove nothing")
 
-    _preflight(runner, namespace, api_image, web_image)
+    _preflight(runner, namespace, api_image, web_image, changed)
     mutated = False
     try:
         mutated = True
-        _apply_candidate(runner, namespace, api_image, web_image)
+        _apply_candidate(runner, namespace, api_image, web_image, changed)
         smoke()
-        _rollback(runner, namespace)
+        _rollback(runner, namespace, changed)
         assert_restored(runner, namespace, previous)
         smoke()
     except Exception as exc:
         if mutated:
             try:
-                _restore_exact(runner, namespace, previous)
+                _restore_exact(runner, namespace, previous, changed)
             except Exception as restore_exc:
                 raise DrillError(
                     f"drill failed ({exc}); emergency restore also failed ({restore_exc})"
