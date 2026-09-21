@@ -15,6 +15,8 @@ export default async function WorkspaceDetail({ params, searchParams }: { params
     <div className="grid console-links">{[
       { slug: "agents", name: "Agents", detail: "Define agents and start runs." },
       { slug: "runs", name: "Agent runs", detail: "Follow execution, events and results." },
+      { slug: "approvals", name: "Tool approvals", detail: "Decide the calls policy holds for a human." },
+      { slug: "tools", name: "Tools and policy", detail: "Review tool contracts and set their policy." },
       { slug: "evaluations", name: "Evaluation suites", detail: "Compare versioned quality results." },
       { slug: "spend", name: "Spend and budget", detail: "Track model cost and set the cap." },
     ].map(area => <article className="card" key={area.slug}>

@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
 import type { AddressInfo } from "node:net";
 import type { Agent, RunEvent, RunResult } from "../../lib/agent-contracts.ts";
+import type { Tool, ToolApproval } from "../../lib/tool-contracts.ts";
 import type { EvalJudgeRun, EvalRun, EvalSuite } from "../../lib/evaluation-contracts.ts";
 import type { SpendRecord } from "../../lib/spend-contracts.ts";
 
@@ -24,6 +25,8 @@ export async function startProvider() {
   const runEvents = new Map<string, RunEvent[]>();
   const runResults = new Map<string, RunResult>();
   const runIdempotency = new Map<string, string>();
+  const tools = new Map<string, Tool>();
+  const approvals = new Map<string, ToolApproval>();
   const evalSuites = new Map<string, EvalSuite>();
   const evalRuns = new Map<string, EvalRun>();
   const evalJudgeRuns = new Map<string, EvalJudgeRun>();
@@ -226,6 +229,80 @@ export async function startProvider() {
         }
         return send({ items: rows.slice(0, limit), next_cursor: rows.length > limit ? rows[limit - 1].id : null });
       }
+      const toolRoute = url.pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/tools(?:\/([^/]+))?(\/policy)?$/,
+      );
+      if (toolRoute) {
+        const [, workspaceId, toolName, policy] = toolRoute;
+        const scope = workspaces.get(workspaceId);
+        if (!scope) return send({}, 404);
+        if (!toolName) {
+          const rows = [...tools.values()]
+            .filter(tool => tool.workspace_id === workspaceId)
+            .sort((a, b) => a.name.localeCompare(b.name));
+          const limit = Number(url.searchParams.get("limit") ?? "25");
+          return send({
+            items: rows.slice(0, limit),
+            next_cursor: rows.length > limit ? rows[limit - 1].name : null,
+          });
+        }
+        const tool = [...tools.values()].find(
+          item => item.workspace_id === workspaceId && item.name === toolName,
+        );
+        if (!tool) return send({}, 404);
+        if (policy) {
+          // Reading a policy is a membership right; setting one is tool:manage.
+          if (request.method !== "PUT") return send({}, 405);
+          if (scope.role === "member") return send({}, 403);
+          const input = JSON.parse(body);
+          tool.policy_decision = input.decision;
+          tool.policy_reason = input.reason;
+          tool.policy_updated_at = "2026-09-20T16:00:00Z";
+          return send({
+            workspace_id: workspaceId, tool_id: tool.id, decision: input.decision,
+            reason: input.reason, updated_at: tool.policy_updated_at,
+          });
+        }
+        return send(tool);
+      }
+
+      const approvalRoute = url.pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/approvals(?:\/([^/]+)\/decision)?$/,
+      );
+      if (approvalRoute) {
+        const [, workspaceId, approvalId] = approvalRoute;
+        const scope = workspaces.get(workspaceId);
+        if (!scope) return send({}, 404);
+        // Deciding and listing both require tool:approve, which a member never has.
+        if (scope.role === "member") return send({}, 403);
+        if (approvalId) {
+          if (request.method !== "POST") return send({}, 405);
+          const approval = approvals.get(approvalId);
+          if (!approval || approval.workspace_id !== workspaceId) return send({}, 404);
+          if (approval.status !== "pending") return send({}, 409);
+          approval.status = JSON.parse(body).decision;
+          approval.decided_at = "2026-09-20T16:05:00Z";
+          approval.approver_subject = "fixture-alice";
+          return send(approval);
+        }
+        const status = url.searchParams.get("status");
+        let rows = [...approvals.values()]
+          .filter(row => row.workspace_id === workspaceId)
+          .filter(row => !status || row.status === status)
+          .sort((a, b) => a.id.localeCompare(b.id));
+        const cursor = url.searchParams.get("cursor");
+        if (cursor) {
+          const index = rows.findIndex(row => row.id === cursor);
+          if (index < 0) return send({}, 404);
+          rows = rows.slice(index + 1);
+        }
+        const limit = Number(url.searchParams.get("limit") ?? "25");
+        return send({
+          items: rows.slice(0, limit),
+          next_cursor: rows.length > limit ? rows[limit - 1].id : null,
+        });
+      }
+
       const agentRoute = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/agents$/);
       if (agentRoute) {
         const [, workspaceId] = agentRoute;
@@ -350,7 +427,7 @@ export async function startProvider() {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  return { issuer, workspaces, agents, runs, runEvents, runResults,
+  return { issuer, workspaces, agents, runs, runEvents, runResults, tools, approvals,
     evalSuites, evalRuns, evalJudgeRuns, spendRecords, budgets,
     spendAlerts,
     historyUnavailable: (value: boolean) => { historyUnavailable = value; },

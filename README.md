@@ -359,6 +359,14 @@ create evaluations. See [ADR 0019](docs/architecture/0019-agent-run-results.md).
 
 ## Governed MCP tools and approvals
 
+The workspace panel links to **Tool approvals** and **Tools and policy**. Owners and admins decide
+held calls in the browser: each pending approval shows the tool, the policy reason, the requester,
+the run, the time left before it expires and the exact normalized arguments, with approve and
+reject as explicit actions. The tools page lists every contract with its side effect and current
+policy — a tool with no policy is shown as denied — and lets owners and admins set that policy with
+a recorded reason. Registering a contract stays an API action, because it carries a JSON schema and
+a server key. See [ADR 0040](docs/architecture/0040-tool-governance-console.md).
+
 Owners and admins can register workspace tool contracts and set an explicit policy. Missing policy
 means deny. Destructive and external-communication tools require approval even when their stored
 policy says allow. Non-read tool schemas must require an idempotency key.
@@ -366,9 +374,9 @@ policy says allow. Non-read tool schemas must require an idempotency key.
 Core endpoints are:
 
 - `PUT /api/v1/workspaces/{workspace_id}/tools/{tool_name}`
-- `GET /api/v1/workspaces/{workspace_id}/tools`
+- `GET /api/v1/workspaces/{workspace_id}/tools` (contracts with their current policy)
 - `PUT /api/v1/workspaces/{workspace_id}/tools/{tool_name}/policy`
-- `GET /api/v1/workspaces/{workspace_id}/approvals`
+- `GET /api/v1/workspaces/{workspace_id}/approvals` (optional `status` filter)
 - `POST /api/v1/workspaces/{workspace_id}/approvals/{approval_id}/decision`
 
 An agent executor calls the internal `McpGateway` with a stable per-run call key. The gateway

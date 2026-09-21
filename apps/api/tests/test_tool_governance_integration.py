@@ -403,3 +403,134 @@ def test_contract_change_invalidates_pending_approval(keys, auth_settings):
         run = client.get(base + "/runs/" + run_id, headers=auth_headers(keys, member))
         assert run.json()["status"] == "cancelled"
         assert adapter.calls == []
+
+
+def test_governance_console_reads_policy_and_filters_approvals(keys, auth_settings):
+    """The console needs the stored policy beside each tool and only the open decisions."""
+    migrate(auth_settings)
+    clear_unpublished_outbox(auth_settings)
+    prefix = "tool-console-" + str(uuid4())
+    owner, admin, member = (prefix + suffix for suffix in ("-owner", "-admin", "-member"))
+    adapter = FakeMcpAdapter()
+
+    with TestClient(create_app(settings=auth_settings)) as client:
+        _workspace_id, base, agent_id = create_runtime(
+            client, keys, owner, admin, member, "Console workspace"
+        )
+        register_tool(client, keys, base, admin, "console-read", "read")
+        register_tool(client, keys, base, admin, "console-delete", "destructive")
+        # A registered tool with no policy row at all stays default-deny.
+        unpoliced = client.put(
+            base + "/tools/console-unpoliced",
+            json={
+                "server_key": "integration",
+                "remote_name": "remote_unpoliced",
+                "description": "Registered but never given a policy.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string", "maxLength": 100}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+                "side_effect": "read",
+                "enabled": True,
+            },
+            headers=auth_headers(keys, admin),
+        )
+        assert unpoliced.status_code == 200, unpoliced.text
+
+        tools = client.get(base + "/tools", headers=auth_headers(keys, member))
+        assert tools.status_code == 200, tools.text
+        listed = {item["name"]: item for item in tools.json()["items"]}
+        assert listed["console-read"]["policy_decision"] == "allow"
+        assert listed["console-read"]["policy_reason"] == "Allowed by integration policy."
+        assert listed["console-read"]["policy_updated_at"] is not None
+        assert listed["console-unpoliced"]["policy_decision"] is None
+        assert listed["console-unpoliced"]["policy_reason"] is None
+        assert listed["console-delete"]["side_effect"] == "destructive"
+
+        run_id = create_run(client, keys, base, member, agent_id, "tool-console")
+
+        async def clear_stream():
+            redis = Redis.from_url(auth_settings.redis_url.get_secret_value())
+            try:
+                await redis.delete(QUEUE_STREAM)
+            finally:
+                await redis.aclose()
+
+        asyncio.run(clear_stream())
+        gateway = McpGateway(auth_settings, {"integration": adapter})
+        executor = GatewayExecutor(
+            gateway,
+            "console-delete",
+            {"query": "delete archived record", "idempotency_key": "console-delete-0001"},
+        )
+        assert process_once(auth_settings, executor, "console-worker")
+
+        pending = client.get(base + "/approvals?status=pending", headers=auth_headers(keys, admin))
+        assert pending.status_code == 200, pending.text
+        open_items = [item for item in pending.json()["items"] if item["run_id"] == run_id]
+        assert len(open_items) == 1
+        approval = open_items[0]
+        assert approval["requested_action"] == "console-delete"
+        assert approval["requester_subject"] == member
+
+        assert (
+            client.get(
+                base + "/approvals?status=rejected", headers=auth_headers(keys, admin)
+            ).json()["items"]
+            == []
+        )
+        assert (
+            client.get(
+                base + "/approvals?status=not-a-status", headers=auth_headers(keys, admin)
+            ).status_code
+            == 422
+        )
+
+        rejected = client.post(
+            base + f"/approvals/{approval['id']}/decision",
+            json={"decision": "rejected"},
+            headers=auth_headers(keys, admin),
+        )
+        assert rejected.status_code == 200, rejected.text
+        assert adapter.calls == []
+
+        assert [
+            item["id"]
+            for item in client.get(
+                base + "/approvals?status=pending", headers=auth_headers(keys, admin)
+            ).json()["items"]
+            if item["run_id"] == run_id
+        ] == []
+        decided = [
+            item
+            for item in client.get(
+                base + "/approvals?status=rejected", headers=auth_headers(keys, admin)
+            ).json()["items"]
+            if item["run_id"] == run_id
+        ]
+        assert len(decided) == 1
+        assert decided[0]["approver_subject"] == admin
+
+        # Reading a policy is a membership right; changing one is tool:manage.
+        denied = client.put(
+            base + "/tools/console-read/policy",
+            json={"decision": "deny", "reason": "Member attempt."},
+            headers=auth_headers(keys, member),
+        )
+        assert denied.status_code == 403
+        changed = client.put(
+            base + "/tools/console-read/policy",
+            json={"decision": "require_approval", "reason": "Now needs a human."},
+            headers=auth_headers(keys, admin),
+        )
+        assert changed.status_code == 200, changed.text
+        after = {
+            item["name"]: item
+            for item in client.get(base + "/tools", headers=auth_headers(keys, member)).json()[
+                "items"
+            ]
+        }
+        assert after["console-read"]["policy_decision"] == "require_approval"
+        assert after["console-read"]["policy_reason"] == "Now needs a human."

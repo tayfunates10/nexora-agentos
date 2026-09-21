@@ -56,7 +56,7 @@ export async function checkAgentRuns(
       payload: { request_id: "fixture-request" }, created_at: "2026-09-20T10:00:00Z",
     },
     {
-      id: randomUUID(), event_no: 2, event_type: "model.step",
+      id: randomUUID(), event_no: 2, event_type: "model.completed",
       payload: { step_no: 0, provider: "openai" }, created_at: "2026-09-20T10:01:00Z",
     },
     {
