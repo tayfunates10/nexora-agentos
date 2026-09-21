@@ -86,6 +86,16 @@ export async function checkGovernance(
   await page.goto(stale.headers()["location"]);
   await expect(page.getByText("That approval is no longer open.", { exact: false })).toBeVisible();
 
+  // The decision surface has to be usable on a phone: an approver is often not at a desk.
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${detailUrl}/approvals?status=rejected`);
+    await expect(page.getByRole("heading", { name: "delete-record" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: `/tmp/nexora-approvals-${width}.png`, fullPage: true });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   // A member may not read approvals at all, and may not change a tool policy.
   workspace.role = "member";
   await page.goto(`${detailUrl}/approvals`);

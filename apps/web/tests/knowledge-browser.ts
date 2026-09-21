@@ -50,6 +50,15 @@ export async function checkKnowledge(
   await expect(page.getByRole("status")).toContainText("The source was deleted");
   await expect(page.getByRole("heading", { name: "No indexed sources on this page" })).toBeVisible();
 
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${detailUrl}/knowledge`);
+    await expect(page.getByRole("heading", { name: "Add a source" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: `/tmp/nexora-knowledge-${width}.png`, fullPage: true });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   // A member reads the list and cannot change it.
   provider.sources.set(source.id, source);
   workspace.role = "member";
