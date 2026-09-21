@@ -16,6 +16,7 @@ DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_ENTRY = re.compile(r"^(\s*)-\s+name:\s*(\S+)\s*$")
 FIELD = re.compile(r"^(\s*)(newName|digest|newTag):\s*(\S+)\s*$")
 OVERLAY = Path("infra/k8s/overlays/production/kustomization.yaml")
+PRODUCTION_MIGRATE_OVERLAY = Path("infra/k8s/overlays/production-migrate/kustomization.yaml")
 STAGING_OVERLAY = Path("infra/k8s/overlays/staging/kustomization.yaml")
 STAGING_MIGRATE_OVERLAY = Path("infra/k8s/overlays/staging-migrate/kustomization.yaml")
 
@@ -68,7 +69,10 @@ def promotion_targets(
     if overlay is not None:
         return [overlay]
     if environment in (None, "production"):
-        return [OVERLAY]
+        targets = [OVERLAY]
+        if image == "nexora/api":
+            targets.append(PRODUCTION_MIGRATE_OVERLAY)
+        return targets
     if environment == "staging":
         targets = [STAGING_OVERLAY]
         if image == "nexora/api":
