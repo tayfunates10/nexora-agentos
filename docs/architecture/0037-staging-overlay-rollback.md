@@ -25,10 +25,11 @@ worker administration.
 
 ## Migration-first bootstrap
 
-`infra/k8s/overlays/staging-migrate` contains only the namespace, service account, non-secret
-configuration, NetworkPolicies and migration Job. It deliberately excludes API/web/worker
-Deployments. This allows a first installation to create the minimum platform boundary, inject the
-out-of-band staging Secret, run migrations, and only then start application workloads.
+`infra/k8s/overlays/staging-bootstrap` creates only the namespace, service account, non-secret
+configuration and NetworkPolicies. It contains neither a migration Job nor application Deployments.
+A first installation applies this boundary, injects the out-of-band staging Secret, and only then
+applies `infra/k8s/overlays/staging-migrate`, which composes the bootstrap boundary with the
+migration Job. API/web/worker still remain absent until migration succeeds.
 
 Staging must use a distinct PostgreSQL database/cluster and Redis/session namespace from production.
 The migration credential for `nexora-staging` must never point at the production database. This is
@@ -49,13 +50,14 @@ overlay. There is no rebuild between environments.
 For a candidate whose staging overlay has already been updated:
 
 1. verify GitHub/Sigstore provenance for both image digests;
-2. create/update the `nexora-secrets` Secret in `nexora-staging` out of band;
-3. delete the previous staging migration Job;
-4. apply `overlays/staging-migrate` and wait for the Job to complete;
-5. apply `overlays/staging`;
-6. wait for API, web and worker rollouts;
-7. run `Staging E2E Smoke` with retrieval enabled;
-8. optionally run the safe approval fixture.
+2. apply `overlays/staging-bootstrap`;
+3. create/update the `nexora-secrets` Secret in `nexora-staging` out of band;
+4. delete the previous staging migration Job;
+5. apply `overlays/staging-migrate` and wait for the Job to complete;
+6. apply `overlays/staging`;
+7. wait for API, web and worker rollouts;
+8. run `Staging E2E Smoke` with retrieval enabled;
+9. optionally run the safe approval fixture.
 
 No repository workflow receives cluster credentials. The operator or deployment platform that owns
 the cluster performs these steps.
@@ -82,7 +84,7 @@ contract.
 
 ## CI verification
 
-Platform CI renders base, migrate, staging-migrate, staging and production Kustomize targets and
+Platform CI renders base, migrate, staging-bootstrap, staging-migrate, staging and production Kustomize targets and
 validates each rendered document with kubeconform. Repository tests additionally assert staging
 namespace isolation, bounded replicas/HPA, staging service DNS, hybrid retrieval and digest pinning.
 
