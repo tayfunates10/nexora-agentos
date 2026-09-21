@@ -1,13 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: nexora-staging
-# This target is safe for first bootstrap: it creates only the namespace/configuration
-# needed by the migration Job, not the API/web/worker Deployments.
+# Reapply the bootstrap boundary and add only the migration Job. Application
+# Deployments remain excluded until the migration succeeds.
 resources:
-  - ../../base/namespace.yaml
-  - ../../base/serviceaccount.yaml
-  - ../../base/configmap.yaml
-  - ../../base/networkpolicy.yaml
+  - ../staging-bootstrap
   - ../../migrate/job.yaml
 labels:
   - includeSelectors: false
@@ -17,11 +14,3 @@ images:
   - name: nexora/api
     newName: REPLACE_WITH_REGISTRY/nexora-api
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-patches:
-  - target:
-      kind: Namespace
-      name: nexora
-    patch: |
-      - op: replace
-        path: /metadata/name
-        value: nexora-staging
