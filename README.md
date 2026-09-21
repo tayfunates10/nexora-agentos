@@ -72,7 +72,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [hybrid RAG retrieval](docs/architecture/0033-hybrid-retrieval.md), and
 [retrieval evals and HNSW](docs/architecture/0034-retrieval-evals-hnsw.md), and
 [release supply-chain verification](docs/architecture/0035-release-supply-chain-verification.md), and
-[deployed staging E2E smoke](docs/architecture/0036-staging-e2e-smoke.md).
+[deployed staging E2E smoke](docs/architecture/0036-staging-e2e-smoke.md), and
+[staging overlay and rollback acceptance](docs/architecture/0037-staging-overlay-rollback.md).
 
 ## Run locally with Docker Compose
 
@@ -119,8 +120,9 @@ The panel still starts with an unavailable state if the API is offline.
 ## Deploying to Kubernetes
 
 `infra/k8s` holds plain Kustomize manifests for the API, worker and web: restricted pod
-security, default-deny networking, a migration Job applied before each rollout, and
-digest-pinned images in the production overlay. No credential is committed; the Secret is
+security, default-deny networking, migration-first rollout targets, and digest-pinned
+staging/production overlays. Staging is isolated in the `nexora-staging` namespace and
+uses a separate migration bootstrap target. No credential is committed; Secrets are
 created out of band. See [infra/k8s/README.md](infra/k8s/README.md) for the apply and
 rollback sequence and [ADR 0012](docs/architecture/0012-kubernetes-deployment.md) for the
 boundaries these manifests enforce.
@@ -135,18 +137,21 @@ deployed database has already applied, which is what makes `kubectl rollout undo
 See [ADR 0013](docs/architecture/0013-release-pipeline.md) and
 [ADR 0035](docs/architecture/0035-release-supply-chain-verification.md).
 
-A manually triggered **Staging E2E Smoke** workflow validates a real deployed environment without
-placing provider credentials in GitHub Actions. It uses a short-lived API access token and a
-pre-provisioned staging fixture to prove workspace/agent access, idempotent durable execution,
-real worker/model activity, requester-scoped results and run events. Retrieval is verified by a
-worker metric delta; optional approval mode approves a configured staging tool and requires the
-worker to resume the run. See [ADR 0036](docs/architecture/0036-staging-e2e-smoke.md).
+Release digests are promoted to the isolated staging overlay first, with the API digest
+kept identical between the staging migration Job and staging workloads. A manually triggered
+**Staging E2E Smoke** then proves real identity, durable worker/model execution and retrieval
+through a pre-provisioned source/sentinel fixture without exposing the worker admin port.
+Private runners may additionally verify worker metric deltas. Optional approval mode exercises a
+safe governed tool and requires the worker to resume the run. After the documented rollback drill,
+the same digest can be promoted to production without rebuilding. See
+[ADR 0036](docs/architecture/0036-staging-e2e-smoke.md) and
+[ADR 0037](docs/architecture/0037-staging-overlay-rollback.md).
 
 ## Quality checks
 
 ```bash
 python scripts/sync_skills.py --check
-python -m unittest discover -s scripts -p 'test_staging_smoke.py'
+python -m unittest discover -s scripts -p 'test_*.py'
 .venv/bin/ruff check apps/api
 .venv/bin/ruff format --check apps/api
 .venv/bin/pytest apps/api/tests -m 'not integration'
