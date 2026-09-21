@@ -87,7 +87,13 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Render Kustomize targets
         run: |
-          for target in infra/k8s/base infra/k8s/migrate infra/k8s/overlays/production; do
+          for target in \
+            infra/k8s/base \
+            infra/k8s/migrate \
+            infra/k8s/overlays/staging-migrate \
+            infra/k8s/overlays/staging \
+            infra/k8s/overlays/production
+          do
             kubectl kustomize "$target" > "/tmp/$(basename "$target").yaml"
           done
       - name: Install kubeconform
@@ -97,7 +103,13 @@ jobs:
           echo "$KUBECONFORM_SHA256  /tmp/kubeconform.tgz" | sha256sum --check --strict
           tar -xzf /tmp/kubeconform.tgz -C /tmp kubeconform
       - name: Validate rendered manifests
-        run: /tmp/kubeconform -strict -summary -kubernetes-version 1.31.0 /tmp/base.yaml /tmp/migrate.yaml /tmp/production.yaml
+        run: >-
+          /tmp/kubeconform -strict -summary -kubernetes-version 1.31.0
+          /tmp/base.yaml
+          /tmp/migrate.yaml
+          /tmp/staging-migrate.yaml
+          /tmp/staging.yaml
+          /tmp/production.yaml
   monitoring-rules:
     runs-on: ubuntu-latest
     steps:
