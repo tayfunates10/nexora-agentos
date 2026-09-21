@@ -245,16 +245,29 @@ def test_staging_overlay_is_isolated_bounded_and_retrieval_enabled():
     assert runtime["retrieval"]["dimensions"] == 1536
 
 
-def test_staging_migration_bootstrap_is_separate_and_digest_pinned():
+def test_staging_bootstrap_contains_no_job_or_application_workloads():
+    overlay = yaml.safe_load(
+        (MANIFEST_ROOT / "overlays" / "staging-bootstrap" / "kustomization.yaml").read_text()
+    )
+
+    assert overlay["namespace"] == "nexora-staging"
+    assert set(overlay["resources"]) == {
+        "../../base/namespace.yaml",
+        "../../base/serviceaccount.yaml",
+        "../../base/configmap.yaml",
+        "../../base/networkpolicy.yaml",
+    }
+    assert not any("deployment" in resource for resource in overlay["resources"])
+    assert not any("job.yaml" in resource for resource in overlay["resources"])
+
+
+def test_staging_migration_is_separate_and_digest_pinned():
     overlay = yaml.safe_load(
         (MANIFEST_ROOT / "overlays" / "staging-migrate" / "kustomization.yaml").read_text()
     )
 
     assert overlay["namespace"] == "nexora-staging"
-    assert "../../migrate/job.yaml" in overlay["resources"]
-    assert "../../base/api-deployment.yaml" not in overlay["resources"]
-    assert "../../base/web-deployment.yaml" not in overlay["resources"]
-    assert "../../base/worker-deployment.yaml" not in overlay["resources"]
+    assert overlay["resources"] == ["../staging-bootstrap", "../../migrate/job.yaml"]
     _assert_digest_pins(overlay, {"nexora/api"})
 
 
