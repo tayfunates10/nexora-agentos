@@ -90,6 +90,7 @@ jobs:
           for target in \
             infra/k8s/base \
             infra/k8s/migrate \
+            infra/k8s/overlays/staging-bootstrap \
             infra/k8s/overlays/staging-migrate \
             infra/k8s/overlays/staging \
             infra/k8s/overlays/production
@@ -107,6 +108,7 @@ jobs:
           /tmp/kubeconform -strict -summary -kubernetes-version 1.31.0
           /tmp/base.yaml
           /tmp/migrate.yaml
+          /tmp/staging-bootstrap.yaml
           /tmp/staging-migrate.yaml
           /tmp/staging.yaml
           /tmp/production.yaml
