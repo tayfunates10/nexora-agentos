@@ -128,10 +128,21 @@ jobs:
             echo ""
             echo "Release gates: immutable-digest CVE scan passed and signed provenance verified."
             echo ""
-            echo "Promote with:"
+            echo "Promote to staging first:"
             echo ""
             printf '%s\n' '```bash'
             echo "python scripts/promote_release.py \\"
+            echo "  --environment staging \\"
+            echo "  --image nexora/${IMAGE#nexora-} \\"
+            echo "  --new-name $REPOSITORY \\"
+            echo "  --digest $DIGEST"
+            printf '%s\n' '```'
+            echo ""
+            echo "After staging acceptance, promote the same digest to production:"
+            echo ""
+            printf '%s\n' '```bash'
+            echo "python scripts/promote_release.py \\"
+            echo "  --environment production \\"
             echo "  --image nexora/${IMAGE#nexora-} \\"
             echo "  --new-name $REPOSITORY \\"
             echo "  --digest $DIGEST"
