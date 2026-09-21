@@ -26,7 +26,7 @@ The workflow runs two vulnerability passes against the immutable digest:
 2. fail the release when a HIGH or CRITICAL finding has a published fix.
 
 An image that fails the second pass remains an unpromoted registry artifact. The workflow
-does not print a production promotion command for it.
+does not print staging or production promotion commands for it.
 
 After the vulnerability gate passes, `actions/attest` is pinned to the exact v4.2.1
 commit and receives only short-lived GitHub Actions OIDC authority. It creates a signed
@@ -40,8 +40,8 @@ verification pins all three identities that matter:
 - signer workflow: `.github/workflows/release.yml`;
 - source digest: the exact Git commit being released.
 
-Only after scan and provenance verification succeed does the job summary expose the digest
-promotion command.
+Only after scan and provenance verification succeed does the job summary expose staging-first
+and production promotion commands for the same digest.
 
 ## Threat model
 
@@ -73,10 +73,10 @@ cluster admission policy, or runtime hardening.
 
 ## Rollback
 
-Rollback remains digest/revision based. A failed security gate does not alter the
-production overlay, so there is nothing to roll back. If a promoted digest later becomes
-unacceptable, revert the overlay to a previously verified digest and follow the existing
-forward-fix migration rules.
+Rollback remains digest/revision based. A failed security gate alters no environment overlay,
+so there is nothing to roll back. Staging acceptance and the application rollback drill happen
+before production promotion; if a promoted digest later becomes unacceptable, revert to a
+previously verified digest and follow the forward-fix migration rules in ADR 0037.
 
 ## Skills applied
 
