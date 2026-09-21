@@ -122,23 +122,30 @@ class Config:
         )
         if len(prompt) > 20000:
             raise SmokeError("NEXORA_STAGING_PROMPT must be at most 20000 characters")
+        expected_text = os.getenv("NEXORA_STAGING_EXPECT_TEXT", "").strip() or None
+        expected_source_key = (
+            os.getenv("NEXORA_STAGING_EXPECT_SOURCE_KEY", "").strip() or None
+        )
+        require_retrieval = _env_bool("NEXORA_STAGING_REQUIRE_RETRIEVAL", True)
+        if require_retrieval and (not expected_text or not expected_source_key):
+            raise SmokeError(
+                "retrieval smoke requires NEXORA_STAGING_EXPECT_SOURCE_KEY and "
+                "NEXORA_STAGING_EXPECT_TEXT"
+            )
         return cls(
             api_url=_base_url("NEXORA_STAGING_API_URL") or "",
             access_token=_required("NEXORA_STAGING_ACCESS_TOKEN"),
             workspace_id=_uuid("NEXORA_STAGING_WORKSPACE_ID"),
             agent_id=_uuid("NEXORA_STAGING_AGENT_ID"),
             prompt=prompt,
-            expected_text=os.getenv("NEXORA_STAGING_EXPECT_TEXT", "").strip() or None,
-            expected_source_key=os.getenv(
-                "NEXORA_STAGING_EXPECT_SOURCE_KEY", ""
-            ).strip()
-            or None,
+            expected_text=expected_text,
+            expected_source_key=expected_source_key,
             approval_tool=approval_tool,
             timeout_seconds=_bounded_float(
                 "NEXORA_STAGING_TIMEOUT_SECONDS", 180.0, 10.0, 600.0
             ),
             poll_seconds=_bounded_float("NEXORA_STAGING_POLL_SECONDS", 2.0, 0.25, 10.0),
-            require_retrieval=_env_bool("NEXORA_STAGING_REQUIRE_RETRIEVAL", True),
+            require_retrieval=require_retrieval,
             require_observability=require_observability,
             worker_admin_url=worker_admin_url,
             metrics_token=metrics_token,
@@ -497,11 +504,6 @@ def run(config: Config) -> dict[str, Any]:
             if config.approval_tool:
                 required_metrics.append("nexora_tool_calls_total")
             _wait_metric_deltas(worker, metrics_before, required_metrics)
-        elif config.require_retrieval:
-            raise SmokeError(
-                "retrieval verification requires NEXORA_STAGING_WORKER_ADMIN_URL "
-                "and NEXORA_STAGING_METRICS_TOKEN"
-            )
 
         steps = result.get("model_steps", [])
         return {
