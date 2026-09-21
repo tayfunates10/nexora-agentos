@@ -2,6 +2,7 @@ import { chromium, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { startProvider } from "./fixtures/provider.ts";
 import { checkAgentRuns } from "./agent-browser.ts";
+import { checkCatalogAndIntegrations, checkCatalogReadOnly } from "./catalog-browser.ts";
 import { checkEvaluations } from "./evaluation-browser.ts";
 import { checkGovernance } from "./governance-browser.ts";
 import { checkKnowledge } from "./knowledge-browser.ts";
@@ -69,6 +70,7 @@ try {
   await checkKnowledge(page, provider, detailUrl);
   await checkEvaluations(page, provider, detailUrl);
   await checkSpend(page, provider, detailUrl);
+  await checkCatalogAndIntegrations(page, provider, detailUrl);
   const workspace = [...provider.workspaces.values()][0];
   // An admin manages the workspace name but never team access; a member manages neither.
   workspace.role = "admin";
@@ -81,6 +83,7 @@ try {
   await expect(page.getByText(t("settings.memberNotice")).first()).toBeVisible();
   await expect(page.getByRole("button", { name: t("settings.saveName"), exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: t("settings.saveAccess"), exact: true })).toHaveCount(0);
+  await checkCatalogReadOnly(page, detailUrl);
   workspace.role = "owner";
   await checkPublicShell(page, origin);
   await checkLanguageNegotiation(context, origin);
@@ -90,7 +93,7 @@ try {
   await context.addCookies([session!]);
   await page.goto(origin + "/workspaces");
   await expect(page).toHaveURL(origin + "/login");
-  console.log("Browser flow passed: OIDC sign-in, create, rename, membership, CSRF, agent and run console, tool policy and approval decisions, knowledge ingestion, spend and budget console, Turkish and English interface, light and dark themes, drawer navigation, 320px layouts, role UI and logout replay rejection");
+  console.log("Browser flow passed: OIDC sign-in, create, rename, membership, CSRF, agent and run console, tool policy and approval decisions, knowledge ingestion, spend and budget console, integration vault and agent catalog, Turkish and English interface, light and dark themes, drawer navigation, 320px layouts, role UI and logout replay rejection");
 } finally {
   await browser?.close(); child.kill("SIGTERM"); await provider.close();
 }

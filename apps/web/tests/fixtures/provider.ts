@@ -8,6 +8,8 @@ import type { Ingestion, KnowledgeSource } from "../../lib/knowledge-contracts.t
 import type { Tool, ToolApproval } from "../../lib/tool-contracts.ts";
 import type { EvalJudgeRun, EvalRun, EvalSuite } from "../../lib/evaluation-contracts.ts";
 import type { SpendRecord } from "../../lib/spend-contracts.ts";
+import type { IntegrationDefinition, TenantIntegration } from "../../lib/integration-contracts.ts";
+import type { CatalogEntry, TenantAgent } from "../../lib/catalog-contracts.ts";
 
 export async function startProvider() {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
@@ -43,10 +45,50 @@ export async function startProvider() {
     threshold_percent: number; monthly_limit_micros: number;
     consumed_micros: number; enforcement: string; created_at: string;
   }>();
+  // The integration vault, modelled the way the API models it: the plaintext a tenant
+  // submits is turned into a masked hint at the boundary and is never stored or returned.
+  const integrations = new Map<string, TenantIntegration>();
+  const catalogAgents = new Map<string, CatalogEntry & { manifest: TenantAgent["manifest"] }>();
+  const tenantAgents = new Map<string, TenantAgent>();
+  const agentHistory = new Map<string, {
+    id: string; action: "installed" | "updated" | "rolled_back";
+    from_version: string | null; to_version: string; actor_subject: string; created_at: string;
+  }[]>();
+  const updatePolicies = new Map<string, { channel: string; mode: string }>();
+  // Instances a person paused. The API distinguishes these from ones it paused for
+  // want of a connection, and never resumes them on its own.
+  const pausedByOperator = new Set<string>();
+  const connectors = new Map<string, IntegrationDefinition>();
   let historyUnavailable = false;
   let spendUnavailable = false;
   let issuer = "";
   let wrongNonce = false;
+  // Readiness follows from the manifest and the bindings, so a fixture can never claim an
+  // agent is runnable while a required connection is missing or switched off.
+  const refreshReadiness = (agent: TenantAgent) => {
+    const declared: [string, boolean][] = [
+      ...agent.manifest.required_integrations.map(name => [name, true] as [string, boolean]),
+      ...agent.manifest.optional_integrations.map(name => [name, false] as [string, boolean]),
+    ];
+    const requirements = declared.map(([name, required]) => {
+      const binding = agent.bindings.find(item => item.binding_key === name);
+      const target = binding && integrations.get(binding.tenant_integration_id);
+      const satisfied = Boolean(target && target.status === "connected");
+      return {
+        integration_definition_id: name, name, required,
+        bound_integration_id: binding?.tenant_integration_id ?? null,
+        bound_display_name: target?.display_name ?? null,
+        bound_status: target?.status ?? null,
+        satisfied,
+      };
+    });
+    const missing = requirements.filter(item => item.required && !item.satisfied)
+      .map(item => item.integration_definition_id);
+    agent.readiness = { ready: missing.length === 0, requirements, missing_required: missing };
+    if (agent.status === "disabled") return;
+    if (missing.length > 0) { agent.status = "paused"; return; }
+    if (!pausedByOperator.has(agent.id)) agent.status = "active";
+  };
   // Mirrors the API: a threshold is recorded once per workspace per period.
   const raiseAlerts = (workspaceId: string) => {
     const budget = budgets.get(workspaceId);
@@ -481,6 +523,253 @@ export async function startProvider() {
         return send(run);
       }
 
+      if (url.pathname === "/api/v1/integration-catalog") {
+        return send({ items: [...connectors.values()], next_cursor: null });
+      }
+
+      const vault = url.pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/integrations(?:\/([^/]+))?(\/credential|\/test)?$/,
+      );
+      if (vault) {
+        const [, workspaceId, integrationId, resource] = vault;
+        const scope = workspaces.get(workspaceId);
+        if (!scope) return send({}, 404);
+        const managing = request.method !== "GET";
+        if (managing && scope.role === "member") return send({}, 403);
+
+        if (!integrationId) {
+          if (request.method === "POST") {
+            const input = JSON.parse(body);
+            const definition = connectors.get(input.integration_definition_id);
+            if (!definition) return send({}, 404);
+            const secretKeys = definition.credential_fields
+              .filter(field => field.secret).map(field => field.key);
+            const secret = secretKeys.map(key => input.credentials[key]).find(Boolean) ?? "";
+            if (!secret) return send({}, 422);
+            const entry: TenantIntegration = {
+              id: randomUUID(), workspace_id: workspaceId,
+              integration_definition_id: definition.id,
+              display_name: input.display_name, account_identifier: input.account_identifier,
+              auth_type: definition.auth_type, status: "connected",
+              scopes: definition.scopes, granted_scopes: [],
+              config: Object.fromEntries(Object.entries(input.credentials as Record<string, string>)
+                .filter(([key]) => !secretKeys.includes(key))),
+              // The only representation that leaves the fixture, as in the real vault.
+              credential_hint: "\u2022".repeat(8) + (secret.length >= 12 ? secret.slice(-4) : ""),
+              credential_expires_at: null,
+              created_at: "2026-09-20T09:00:00Z", updated_at: "2026-09-20T09:00:00Z",
+              last_tested_at: null, last_success_at: null, last_error: null,
+            };
+            integrations.set(entry.id, entry);
+            return send(entry, 201);
+          }
+          return send({
+            items: [...integrations.values()].filter(item => item.workspace_id === workspaceId),
+            next_cursor: null,
+          });
+        }
+
+        const integration = integrations.get(integrationId);
+        if (!integration || integration.workspace_id !== workspaceId) return send({}, 404);
+        if (resource === "/credential") {
+          const input = JSON.parse(body);
+          const definition = connectors.get(integration.integration_definition_id)!;
+          // The hint describes the secret a person recognises, not whichever declared
+          // field happened to be submitted first.
+          const secret = definition.credential_fields
+            .filter(field => field.secret)
+            .map(field => (input.credentials as Record<string, string>)[field.key])
+            .find(Boolean) ?? "";
+          if (!secret) return send({}, 422);
+          integration.credential_hint = "\u2022".repeat(8)
+            + (secret.length >= 12 ? secret.slice(-4) : "");
+          integration.config = Object.fromEntries(
+            Object.entries(input.credentials as Record<string, string>)
+              .filter(([key]) => !definition.credential_fields
+                .some(field => field.secret && field.key === key)),
+          );
+          return send(integration);
+        }
+        if (resource === "/test") {
+          integration.last_tested_at = "2026-09-21T00:31:00Z";
+          integration.last_success_at = "2026-09-21T00:31:00Z";
+          return send({
+            integration_id: integration.id, status: integration.status, ok: true,
+            checked_at: "2026-09-21T00:31:00Z", granted_scopes: integration.scopes,
+            missing_scopes: [], error_code: null,
+          });
+        }
+        if (request.method === "PATCH") {
+          const input = JSON.parse(body);
+          if (input.enabled === false) integration.status = "disabled";
+          if (input.enabled === true) integration.status = "connected";
+          if (input.display_name) integration.display_name = input.display_name;
+          for (const agent of tenantAgents.values()) refreshReadiness(agent);
+          return send(integration);
+        }
+        if (request.method === "DELETE") {
+          const bound = [...tenantAgents.values()].some(
+            agent => agent.bindings.some(item => item.tenant_integration_id === integration.id),
+          );
+          if (bound) return send({}, 409);
+          integrations.delete(integration.id);
+          response.writeHead(204); response.end(); return;
+        }
+        return send(integration);
+      }
+
+      const policy = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/agent-update-policy$/);
+      if (policy) {
+        const scope = workspaces.get(policy[1]);
+        if (!scope) return send({}, 404);
+        if (request.method === "PUT") {
+          if (scope.role === "member") return send({}, 403);
+          updatePolicies.set(policy[1], JSON.parse(body));
+        }
+        const current = updatePolicies.get(policy[1]) ?? { channel: "stable", mode: "manual" };
+        return send({ workspace_id: policy[1], ...current, updated_at: "2026-09-20T09:00:00Z" });
+      }
+
+      const browse = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)\/agent-catalog$/);
+      if (browse) {
+        if (!workspaces.get(browse[1])) return send({}, 404);
+        return send({
+          items: [...catalogAgents.values()].map(({ manifest, ...entry }) => ({
+            ...entry,
+            installed_count: [...tenantAgents.values()].filter(
+              agent => agent.workspace_id === browse[1] && agent.slug === entry.slug,
+            ).length,
+          })),
+          next_cursor: null,
+        });
+      }
+
+      const instances = url.pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/tenant-agents(?:\/([^/]+))?(\/update|\/rollback|\/history|\/fork|\/bindings\/[a-z0-9-]+)?$/,
+      );
+      if (instances) {
+        const [, workspaceId, agentId, resource] = instances;
+        const scope = workspaces.get(workspaceId);
+        if (!scope) return send({}, 404);
+        if (request.method !== "GET" && scope.role === "member") return send({}, 403);
+
+        if (!agentId) {
+          if (request.method === "POST") {
+            const input = JSON.parse(body);
+            const entry = [...catalogAgents.values()].find(item => item.slug === input.slug);
+            if (!entry) return send({}, 404);
+            const agent: TenantAgent = {
+              id: randomUUID(), workspace_id: workspaceId,
+              catalog_agent_id: entry.catalog_agent_id, slug: entry.slug,
+              display_name: input.display_name ?? entry.name,
+              version: entry.available_version!, available_version: entry.available_version,
+              status: "paused", update_channel: "stable", update_mode: "manual",
+              instructions_override: null, settings: {}, manifest: entry.manifest, bindings: [],
+              readiness: { ready: false, requirements: [], missing_required: [] },
+              created_at: "2026-09-20T09:00:00Z", updated_at: "2026-09-20T09:00:00Z",
+            };
+            refreshReadiness(agent);
+            tenantAgents.set(agent.id, agent);
+            agentHistory.set(agent.id, [{
+              id: randomUUID(), action: "installed", from_version: null,
+              to_version: agent.version, actor_subject: "fixture-alice",
+              created_at: "2026-09-20T09:00:00Z",
+            }]);
+            return send(agent, 201);
+          }
+          return send({
+            items: [...tenantAgents.values()]
+              .filter(item => item.workspace_id === workspaceId)
+              .map(({ manifest, bindings, readiness, instructions_override, settings, ...rest }) =>
+                ({ ...rest, ready: readiness.ready })),
+            next_cursor: null,
+          });
+        }
+
+        const agent = tenantAgents.get(agentId);
+        if (!agent || agent.workspace_id !== workspaceId) return send({}, 404);
+        if (resource === "/history") {
+          return send({ items: agentHistory.get(agent.id) ?? [], next_cursor: null });
+        }
+        if (resource?.startsWith("/bindings/")) {
+          const key = resource.slice("/bindings/".length);
+          if (request.method === "DELETE") {
+            agent.bindings = agent.bindings.filter(item => item.binding_key !== key);
+          } else {
+            const target = integrations.get(JSON.parse(body).tenant_integration_id);
+            if (!target || target.workspace_id !== workspaceId) return send({}, 404);
+            if (target.integration_definition_id !== key) return send({}, 422);
+            agent.bindings = [
+              ...agent.bindings.filter(item => item.binding_key !== key),
+              {
+                binding_key: key, tenant_integration_id: target.id,
+                display_name: target.display_name, status: target.status,
+                created_at: "2026-09-20T09:00:00Z", updated_at: "2026-09-20T09:00:00Z",
+              },
+            ];
+          }
+          refreshReadiness(agent);
+          return send(agent);
+        }
+        if (resource === "/update" || resource === "/rollback") {
+          const history = agentHistory.get(agent.id) ?? [];
+          if (resource === "/update") {
+            if (!agent.available_version || agent.available_version === agent.version) {
+              return send(agent);
+            }
+            history.push({
+              id: randomUUID(), action: "updated", from_version: agent.version,
+              to_version: agent.available_version, actor_subject: "fixture-alice",
+              created_at: "2026-09-21T09:00:00Z",
+            });
+            agent.version = agent.available_version;
+          } else {
+            const previous = [...history].reverse().find(item => item.from_version !== null);
+            if (!previous) return send({}, 409);
+            history.push({
+              id: randomUUID(), action: "rolled_back", from_version: agent.version,
+              to_version: previous.from_version!, actor_subject: "fixture-alice",
+              created_at: "2026-09-21T10:00:00Z",
+            });
+            agent.version = previous.from_version!;
+          }
+          agentHistory.set(agent.id, history);
+          return send(agent);
+        }
+        if (resource === "/fork") {
+          const fork: Agent = {
+            id: randomUUID(), workspace_id: workspaceId, name: JSON.parse(body).name,
+            instructions: agent.manifest.system_instructions, model_profile: "default",
+            created_at: "2026-09-21T09:00:00Z",
+          };
+          agents.set(fork.id, fork);
+          return send({
+            ...fork, origin_slug: agent.slug, origin_version: agent.version,
+          }, 201);
+        }
+        if (request.method === "PATCH") {
+          const input = JSON.parse(body);
+          if (input.status === "active" && !agent.readiness.ready) return send({}, 409);
+          if (input.status === "paused") pausedByOperator.add(agent.id);
+          if (input.status === "active") pausedByOperator.delete(agent.id);
+          if (input.status) agent.status = input.status;
+          if (input.display_name) agent.display_name = input.display_name;
+          if (input.settings) agent.settings = input.settings;
+          if (input.instructions_override !== undefined) {
+            agent.instructions_override = input.instructions_override;
+          }
+          return send(agent);
+        }
+        if (request.method === "DELETE") {
+          agent.status = "disabled";
+          pausedByOperator.delete(agent.id);
+          agent.bindings = [];
+          refreshReadiness(agent);
+          response.writeHead(204); response.end(); return;
+        }
+        return send(agent);
+      }
+
       const match = url.pathname.match(/^\/api\/v1\/workspaces\/([^/]+)(\/members)?$/);
       const workspace = match && workspaces.get(match[1]);
       if (!workspace) return send({}, 404);
@@ -492,6 +781,7 @@ export async function startProvider() {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   return { issuer, workspaces, agents, runs, runEvents, runResults, tools, approvals,
+    integrations, connectors, catalogAgents, tenantAgents, agentHistory,
     sources, ingestions,
     evalSuites, evalRuns, evalJudgeRuns, spendRecords, budgets,
     spendAlerts,

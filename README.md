@@ -85,6 +85,17 @@ Observability now adds durable run traces, guarded Prometheus exposition and str
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
 2026-07-28 Streamable HTTP servers over public TLS; remote transport remains opt-in.
+Standard agents are now a catalog Nexora publishes and versions on its own clock. A standard
+agent is a manifest, not console code, so a new one reaches customers without a web release; a
+published version is immutable, and staged rollouts reach a percentage of the estate at a time
+with a rollback that restores the version it replaced. A workspace installs an instance, pins
+its own version and keeps its display name, prompt override, settings and integration bindings
+through every update and rollback, or forks the agent into a private copy that later releases
+cannot change. Tenant credentials live in an integration vault: each secret is sealed with its
+own data key under an operator-held master key, bound by associated data to its workspace and
+integration, and only ever returned as a masked hint. Agents hold a binding to one of the
+workspace's own connections, never a credential, and an instance stays paused until every
+integration its manifest requires is connected.
 See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [agent run architecture](docs/architecture/0004-agent-runs-outbox.md),
 [worker architecture](docs/architecture/0005-worker-state-machine.md), and
@@ -118,7 +129,9 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [agent operations console](docs/architecture/0039-agent-operations-console.md), and
 [tool governance console](docs/architecture/0040-tool-governance-console.md), and
 [knowledge console](docs/architecture/0041-knowledge-console.md), and
-[staging deployment](docs/architecture/0042-staging-deployment.md).
+[staging deployment](docs/architecture/0042-staging-deployment.md), and
+[console design system and localisation](docs/architecture/0043-console-design-system-and-localisation.md), and
+[standard agents and the integration vault](docs/architecture/0044-standard-agents-and-integration-vault.md).
 
 ## Run locally with Docker Compose
 
@@ -209,7 +222,8 @@ staging on the previous release; promotion remains a reviewed digest edit. See
 
 ```bash
 python scripts/sync_skills.py --check
-python -m unittest discover -s scripts -p 'test_staging_*.py'
+python -m unittest discover -s scripts -p 'test_*.py'
+python scripts/publish_catalog.py --check
 .venv/bin/ruff check apps/api
 .venv/bin/ruff format --check apps/api
 .venv/bin/pytest apps/api/tests -m 'not integration'
@@ -221,6 +235,49 @@ npm run build
 For real dependency integration, start PostgreSQL/Redis, export the connection variables
 above, then run `NEXORA_INTEGRATION=1 .venv/bin/pytest apps/api/tests -m integration`.
 The CI workflow also runs this test against service containers.
+
+## Standard agents, tenant instances and the integration vault
+
+Three things move on separate clocks, and the repository keeps them apart.
+
+`agents/<slug>/manifest.json` holds the standard agents Nexora publishes. A manifest is the
+whole contract: instructions, model policy, reasoning, memory, retrieval, budget and rate
+limits, the tools and integrations it needs, the capabilities it exposes and the actions that
+require a human decision. No console screen names a particular agent, so publishing an
+Accounting or HR agent needs no web release. `connectors/<id>/connector.json` does the same
+for services a workspace can connect.
+
+```bash
+python scripts/publish_catalog.py --check
+python scripts/publish_catalog.py --publish \
+  --base-url https://api.example --token "$NEXORA_PLATFORM_TOKEN"
+```
+
+A published version is immutable: republishing a number is refused, and a new one must sort
+above every existing version. Release state moves instead — a status and a channel (`stable`,
+`beta`, `canary`), where a workspace sees its channel and everything more stable. A rollout
+serves a version to a percentage of the estate; widening one only adds workspaces, and a
+rollback restores the version the channel served before it. Platform administrators do this
+from **Agent Studio** (`/platform/agents`), which answers 404 to everyone else.
+
+A workspace installs an instance from **Agents → Catalog**, pins its own version and keeps its
+display name, prompt override, settings and bindings through every update and rollback, or
+forks the agent into a workspace-owned copy that later releases cannot change.
+
+**Settings → Integrations** connects the accounts agents act on. Each secret is sealed with
+its own 256-bit data key under an operator-held master key, bound by associated data to its
+workspace, integration and purpose, and only ever shown as a masked hint. Set
+`NEXORA_SECRET_VAULT_KEYS` and `NEXORA_SECRET_VAULT_ACTIVE_KEY`; without them the API refuses
+to store a credential rather than keeping it readable. `NEXORA_PLATFORM_ADMIN_SUBJECTS` lists
+the verified subjects that may publish standard agents — no API call and no workspace role
+grants it.
+
+An agent holds a binding to one of the workspace's own connections, never a credential. The
+connector runtime resolves the binding, opens the secret inside the process, and makes the
+request; the secret is never an argument, a return value, a log field or part of a prompt. An
+instance stays paused until every integration its manifest requires is bound to a connected
+account. See [ADR 0044](docs/architecture/0044-standard-agents-and-integration-vault.md),
+[agents/README.md](agents/README.md) and [connectors/README.md](connectors/README.md).
 
 ## Identity and workspace API
 

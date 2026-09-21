@@ -1,0 +1,55 @@
+{
+  "id": "meta-ads",
+  "name": "Meta Ads",
+  "category": "advertising",
+  "icon": "target",
+  "description": "Meta Marketing API: campaign, ad set and creative performance for a connected ad account. Spend changes always travel through approval.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "oauth2",
+  "capabilities": [
+    "campaigns.read",
+    "insights.read",
+    "budgets.read",
+    "budgets.update",
+    "campaigns.update"
+  ],
+  "test_capability": "campaigns.read",
+  "scopes": [
+    "ads_read",
+    "ads_management",
+    "business_management"
+  ],
+  "oauth": {
+    "authorize_url": "https://www.facebook.com/v21.0/dialog/oauth",
+    "token_url": "https://graph.facebook.com/v21.0/oauth/access_token",
+    "default_scopes": [
+      "ads_read"
+    ],
+    "refreshable": true,
+    "refresh_margin_seconds": 604800
+  },
+  "base_url": "https://graph.facebook.com",
+  "credential_placement": {
+    "kind": "bearer_header",
+    "value_field": "access_token"
+  },
+  "endpoints": [
+    {
+      "capability": "campaigns.read",
+      "method": "GET",
+      "path": "/v21.0/me/adaccounts"
+    },
+    {
+      "capability": "insights.read",
+      "method": "GET",
+      "path": "/v21.0/me/adaccounts"
+    },
+    {
+      "capability": "budgets.read",
+      "method": "GET",
+      "path": "/v21.0/me/adaccounts"
+    }
+  ],
+  "credential_fields": []
+}

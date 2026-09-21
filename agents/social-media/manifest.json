@@ -1,0 +1,144 @@
+{
+  "id": "nexora.social-media",
+  "slug": "social-media",
+  "name": "Social Media Management",
+  "description": "Plans, drafts and schedules social content, reads insights and triages comments and direct messages for the accounts a workspace has connected.",
+  "category": "marketing",
+  "icon": "megaphone",
+  "version": "1.0.0",
+  "min_runtime_version": "1.0.0",
+  "status": "stable",
+  "channel": "stable",
+  "changelog": "First stable release: Instagram insights, comment triage, content planning and approval-gated publishing.",
+  "system_instructions": "You manage social media accounts on behalf of a business.\n\nWork only from data returned by your tools. Never invent metrics, comment text or audience numbers, and say plainly when a figure is unavailable for the requested period.\n\nMatch the brand voice held in your settings. Keep captions within the platform's limits and keep hashtags relevant rather than numerous.\n\nPublishing, replying, messaging and deleting are irreversible in public. Propose them, state exactly what will be posted and to which account, and wait for the approval decision. Never describe an action as done before the platform reports it succeeded.",
+  "model_policy": {
+    "primary": "economical",
+    "escalation": "advanced",
+    "fallback": "default"
+  },
+  "reasoning": {
+    "effort": "medium",
+    "max_steps": 12,
+    "escalate_after_steps": 6
+  },
+  "required_integrations": [
+    "instagram"
+  ],
+  "optional_integrations": [
+    "facebook",
+    "google-analytics"
+  ],
+  "required_tools": [
+    "instagram.insights.read",
+    "instagram.comments.read"
+  ],
+  "optional_tools": [
+    "instagram.media.publish",
+    "instagram.comments.reply",
+    "facebook.posts.read",
+    "google-analytics.reports.read"
+  ],
+  "capabilities": [
+    "social.analytics.read",
+    "social.content.generate",
+    "social.content.plan",
+    "social.comments.read",
+    "social.comments.classify",
+    "social.messages.read"
+  ],
+  "permissions": [
+    "workspace.read",
+    "knowledge.read"
+  ],
+  "approval_required": [
+    "social.post.publish",
+    "social.comment.reply",
+    "social.message.send",
+    "social.post.delete"
+  ],
+  "memory": {
+    "enabled": true,
+    "scope": "agent",
+    "retention_days": 90,
+    "max_items": 500
+  },
+  "rag": {
+    "enabled": true,
+    "top_k": 5,
+    "min_score": 0.2,
+    "source_tags": [
+      "brand",
+      "campaign"
+    ]
+  },
+  "budget": {
+    "max_run_micros": 2000000,
+    "daily_micros": 40000000,
+    "max_tokens_per_run": 200000
+  },
+  "rate_limits": {
+    "runs_per_hour": 60,
+    "tool_calls_per_run": 40
+  },
+  "settings_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "brand_voice": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "primary_language": {
+        "type": "string",
+        "enum": [
+          "tr",
+          "en"
+        ]
+      },
+      "posting_window": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "banned_topics": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "maxItems": 50
+      }
+    },
+    "required": [
+      "primary_language"
+    ]
+  },
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "task": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "task"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "summary": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "proposals": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

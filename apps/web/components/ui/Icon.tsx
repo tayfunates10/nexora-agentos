@@ -5,7 +5,7 @@ export type IconName =
   | "overview" | "agents" | "runs" | "approvals" | "tools" | "knowledge"
   | "evaluations" | "spend" | "workspaces" | "signOut" | "chevronRight"
   | "chevronDown" | "menu" | "close" | "light" | "dark" | "system" | "language"
-  | "refresh" | "arrowRight" | "arrowLeft";
+  | "refresh" | "arrowRight" | "arrowLeft" | "integrations" | "catalog";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   overview: <><path d="M4 10.5 12 4l8 6.5"/><path d="M6 10v9h12v-9"/><path d="M10 19v-5h4v5"/></>,
@@ -29,6 +29,8 @@ const PATHS: Record<IconName, React.ReactNode> = {
   refresh: <><path d="M19 12a7 7 0 1 1-2.1-5"/><path d="M19 4v4h-4"/></>,
   arrowRight: <><path d="M4 12h15"/><path d="m14 7 5 5-5 5"/></>,
   arrowLeft: <><path d="M20 12H5"/><path d="m10 17-5-5 5-5"/></>,
+  integrations: <><path d="M9 3v5"/><path d="M15 3v5"/><path d="M6.5 8h11v4a5.5 5.5 0 0 1-11 0z"/><path d="M12 17.5V21"/></>,
+  catalog: <><rect x="3.5" y="4.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="4.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="14" width="7" height="5.5" rx="1.8"/><path d="M13.5 14h7"/><path d="M13.5 17h7"/><path d="M13.5 20h4"/></>,
 };
 
 export function Icon({ name, size = 20, className }: {

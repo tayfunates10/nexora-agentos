@@ -3,7 +3,11 @@ import re
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from nexora_api.secret_vault import SecretVault, VaultUnavailable, build_vault, parse_master_keys
+
 LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+SUBJECT_RE = re.compile(r"^[^\s,]{1,255}$")
 
 
 class Settings(BaseSettings):
@@ -45,6 +49,74 @@ class Settings(BaseSettings):
     worker_shutdown_grace_seconds: float = Field(default=25.0, ge=1.0, le=300.0)
     worker_admin_port: int = Field(default=8001, ge=1, le=65535)
     openai_api_key: SecretStr | None = None
+    # Integration vault. Master keys are supplied by the operator's secret store as a JSON
+    # object of base64 256-bit keys; several may be present so a rotation can still read
+    # credentials sealed under the previous one. Without them the platform refuses to
+    # store tenant credentials rather than keeping them readable.
+    secret_vault_keys: SecretStr | None = None
+    secret_vault_active_key: str | None = None
+    # Platform administrators run the standard agent catalog. Membership is deployment
+    # configuration: no API grants it, and no tenant role implies it.
+    platform_admin_subjects: str = ""
+    # OAuth client registrations per connector, as a JSON object keyed by integration id.
+    # Client secrets belong to the operator and never reach the database or a tenant.
+    integration_oauth_clients: SecretStr | None = None
+    integration_request_timeout_seconds: float = Field(default=5.0, gt=0.0, le=30.0)
+    # The runtime contract standard agents declare a minimum against. It moves with the
+    # platform, independently of any agent version.
+    agent_runtime_version: str = "1.0.0"
+
+    @field_validator("secret_vault_keys")
+    @classmethod
+    def _vault_keys(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None or not value.get_secret_value():
+            return None
+        try:
+            parse_master_keys(value.get_secret_value())
+        except VaultUnavailable as error:
+            # Reported as configuration invalid, the same way every other bad setting is.
+            raise ValueError(str(error)) from None
+        return value
+
+    @field_validator("secret_vault_active_key")
+    @classmethod
+    def _vault_active_key(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value):
+            raise ValueError("secret_vault_active_key must be a short key identifier")
+        return value
+
+    @field_validator("agent_runtime_version")
+    @classmethod
+    def _runtime_version(cls, value: str) -> str:
+        if not SEMVER.fullmatch(value):
+            raise ValueError("agent_runtime_version must be a semantic version")
+        return value
+
+    @field_validator("platform_admin_subjects")
+    @classmethod
+    def _platform_admins(cls, value: str) -> str:
+        for subject in filter(None, (part.strip() for part in value.split(","))):
+            if not SUBJECT_RE.fullmatch(subject):
+                raise ValueError("platform_admin_subjects must be comma-separated subjects")
+        return value
+
+    @property
+    def platform_admins(self) -> frozenset[str]:
+        """Verified token subjects allowed to publish and roll out standard agents."""
+        return frozenset(
+            subject.strip()
+            for subject in self.platform_admin_subjects.split(",")
+            if subject.strip()
+        )
+
+    def build_secret_vault(self) -> SecretVault:
+        """The process-wide vault. Unconfigured deployments get one that refuses work."""
+        keys = self.secret_vault_keys.get_secret_value() if self.secret_vault_keys else None
+        if keys and not self.secret_vault_active_key:
+            raise VaultUnavailable("secret_vault_active_key must be set alongside vault keys")
+        return build_vault(keys, self.secret_vault_active_key)
 
     @field_validator("database_api_role", "database_worker_role", mode="before")
     @classmethod

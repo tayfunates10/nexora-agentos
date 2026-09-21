@@ -1,0 +1,51 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "category": "engineering",
+  "icon": "code",
+  "description": "GitHub REST API with a fine-grained token: issues, pull requests and repository activity for the repositories the token can reach.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "bearer_token",
+  "capabilities": [
+    "issues.read",
+    "issues.write",
+    "pulls.read",
+    "repos.read",
+    "actions.read"
+  ],
+  "test_capability": "repos.read",
+  "scopes": [],
+  "credential_fields": [
+    {
+      "key": "access_token",
+      "label": "Fine-grained access token",
+      "secret": true,
+      "required": true,
+      "help": "Grant only the repositories and permissions this workspace needs."
+    },
+    {
+      "key": "organization",
+      "label": "Organisation or owner",
+      "secret": false,
+      "required": false
+    }
+  ],
+  "base_url": "https://api.github.com",
+  "credential_placement": {
+    "kind": "bearer_header",
+    "value_field": "access_token"
+  },
+  "endpoints": [
+    {
+      "capability": "repos.read",
+      "method": "GET",
+      "path": "/user/repos"
+    },
+    {
+      "capability": "issues.read",
+      "method": "GET",
+      "path": "/issues"
+    }
+  ]
+}

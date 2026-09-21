@@ -1,0 +1,41 @@
+{
+  "id": "google-analytics",
+  "name": "Google Analytics 4",
+  "category": "analytics",
+  "icon": "chart",
+  "description": "GA4 Data API: sessions, acquisition, conversions and audience reports for a selected property.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "oauth2",
+  "capabilities": [
+    "reports.read",
+    "realtime.read",
+    "audiences.read"
+  ],
+  "test_capability": "reports.read",
+  "scopes": [
+    "https://www.googleapis.com/auth/analytics.readonly"
+  ],
+  "oauth": {
+    "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_url": "https://oauth2.googleapis.com/token",
+    "default_scopes": [
+      "https://www.googleapis.com/auth/analytics.readonly"
+    ],
+    "refreshable": true,
+    "refresh_margin_seconds": 300
+  },
+  "base_url": "https://analyticsadmin.googleapis.com",
+  "credential_placement": {
+    "kind": "bearer_header",
+    "value_field": "access_token"
+  },
+  "endpoints": [
+    {
+      "capability": "reports.read",
+      "method": "GET",
+      "path": "/v1beta/accountSummaries"
+    }
+  ],
+  "credential_fields": []
+}

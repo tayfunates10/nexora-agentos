@@ -1,0 +1,42 @@
+{
+  "id": "custom-rest",
+  "name": "Custom REST API",
+  "category": "custom",
+  "icon": "plug",
+  "description": "A tenant-owned HTTPS API reached with a bearer token. The tenant declares the base URL; the runtime never widens it.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "bearer_token",
+  "capabilities": [
+    "request.read",
+    "request.write"
+  ],
+  "test_capability": "request.read",
+  "scopes": [],
+  "credential_fields": [
+    {
+      "key": "base_url",
+      "label": "API base URL",
+      "secret": false,
+      "required": true
+    },
+    {
+      "key": "access_token",
+      "label": "Bearer token",
+      "secret": true,
+      "required": true
+    }
+  ],
+  "base_url_field": "base_url",
+  "credential_placement": {
+    "kind": "bearer_header",
+    "value_field": "access_token"
+  },
+  "endpoints": [
+    {
+      "capability": "request.read",
+      "method": "GET",
+      "path": "/"
+    }
+  ]
+}

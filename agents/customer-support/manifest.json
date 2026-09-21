@@ -1,0 +1,136 @@
+{
+  "id": "nexora.customer-support",
+  "slug": "customer-support",
+  "name": "Customer Support",
+  "description": "Answers customer questions from the workspace's own knowledge sources, classifies incoming messages and drafts replies for a human to send.",
+  "category": "support",
+  "icon": "message",
+  "version": "1.0.0",
+  "min_runtime_version": "1.0.0",
+  "status": "stable",
+  "channel": "stable",
+  "changelog": "First stable release: grounded answers with citations and approval-gated outbound replies.",
+  "system_instructions": "You help a business answer its customers.\n\nAnswer only from the workspace's knowledge sources and the conversation itself. Cite the source behind every factual claim. When the sources do not answer the question, say so and hand over to a person rather than guessing.\n\nNever state or imply a commitment about refunds, delivery dates, prices or legal obligations unless a retrieved source says it.\n\nSending a message to a customer is an external communication: draft it, submit it and wait.",
+  "model_policy": {
+    "primary": "economical",
+    "escalation": "advanced",
+    "fallback": "default"
+  },
+  "reasoning": {
+    "effort": "medium",
+    "max_steps": 10,
+    "escalate_after_steps": 5
+  },
+  "required_integrations": [],
+  "optional_integrations": [
+    "whatsapp",
+    "smtp",
+    "instagram",
+    "facebook"
+  ],
+  "required_tools": [],
+  "optional_tools": [
+    "whatsapp.messages.read",
+    "whatsapp.messages.send",
+    "smtp.mail.send",
+    "instagram.comments.read",
+    "facebook.comments.read"
+  ],
+  "capabilities": [
+    "support.messages.read",
+    "support.intent.classify",
+    "support.answer.draft",
+    "support.escalation.suggest"
+  ],
+  "permissions": [
+    "workspace.read",
+    "knowledge.read"
+  ],
+  "approval_required": [
+    "support.message.send",
+    "support.ticket.close",
+    "support.refund.promise"
+  ],
+  "memory": {
+    "enabled": true,
+    "scope": "agent",
+    "retention_days": 90,
+    "max_items": 500
+  },
+  "rag": {
+    "enabled": true,
+    "top_k": 8,
+    "min_score": 0.25,
+    "source_tags": [
+      "support",
+      "policy",
+      "product"
+    ]
+  },
+  "budget": {
+    "max_run_micros": 1500000,
+    "daily_micros": 60000000,
+    "max_tokens_per_run": 150000
+  },
+  "rate_limits": {
+    "runs_per_hour": 200,
+    "tool_calls_per_run": 30
+  },
+  "settings_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "primary_language": {
+        "type": "string",
+        "enum": [
+          "tr",
+          "en"
+        ]
+      },
+      "tone": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "escalation_contact": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "service_hours": {
+        "type": "string",
+        "maxLength": 200
+      }
+    },
+    "required": [
+      "primary_language"
+    ]
+  },
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "task": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "task"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "answer": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "citations": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

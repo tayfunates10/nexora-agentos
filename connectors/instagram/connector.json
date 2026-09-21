@@ -1,0 +1,66 @@
+{
+  "id": "instagram",
+  "name": "Instagram",
+  "category": "social",
+  "icon": "instagram",
+  "description": "Instagram Graph API: read insights and comments, publish and schedule media for a connected professional account.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "oauth2",
+  "capabilities": [
+    "media.read",
+    "media.publish",
+    "media.delete",
+    "comments.read",
+    "comments.reply",
+    "insights.read",
+    "messages.read"
+  ],
+  "test_capability": "insights.read",
+  "scopes": [
+    "instagram_basic",
+    "instagram_content_publish",
+    "instagram_manage_comments",
+    "instagram_manage_insights",
+    "pages_show_list"
+  ],
+  "oauth": {
+    "authorize_url": "https://www.facebook.com/v21.0/dialog/oauth",
+    "token_url": "https://graph.facebook.com/v21.0/oauth/access_token",
+    "default_scopes": [
+      "instagram_basic",
+      "instagram_manage_insights",
+      "pages_show_list"
+    ],
+    "refreshable": true,
+    "refresh_margin_seconds": 604800
+  },
+  "base_url": "https://graph.facebook.com",
+  "credential_placement": {
+    "kind": "bearer_header",
+    "value_field": "access_token"
+  },
+  "endpoints": [
+    {
+      "capability": "insights.read",
+      "method": "GET",
+      "path": "/v21.0/me"
+    },
+    {
+      "capability": "media.read",
+      "method": "GET",
+      "path": "/v21.0/me/media"
+    },
+    {
+      "capability": "comments.read",
+      "method": "GET",
+      "path": "/v21.0/me/media"
+    },
+    {
+      "capability": "messages.read",
+      "method": "GET",
+      "path": "/v21.0/me/conversations"
+    }
+  ],
+  "credential_fields": []
+}

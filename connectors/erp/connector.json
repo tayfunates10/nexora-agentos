@@ -1,0 +1,54 @@
+{
+  "id": "erp",
+  "name": "Generic ERP",
+  "category": "erp",
+  "icon": "database",
+  "description": "Any ERP exposing an HTTPS API with a static key. Used where a dedicated connector does not exist yet.",
+  "version": "1.0.0",
+  "status": "beta",
+  "auth": "api_key",
+  "capabilities": [
+    "records.read",
+    "documents.read",
+    "orders.read"
+  ],
+  "test_capability": "records.read",
+  "scopes": [],
+  "credential_fields": [
+    {
+      "key": "base_url",
+      "label": "API base URL",
+      "secret": false,
+      "required": true
+    },
+    {
+      "key": "api_key",
+      "label": "API key",
+      "secret": true,
+      "required": true
+    }
+  ],
+  "base_url_field": "base_url",
+  "credential_placement": {
+    "kind": "header",
+    "header": "X-API-Key",
+    "value_field": "api_key"
+  },
+  "endpoints": [
+    {
+      "capability": "records.read",
+      "method": "GET",
+      "path": "/records"
+    },
+    {
+      "capability": "documents.read",
+      "method": "GET",
+      "path": "/documents"
+    },
+    {
+      "capability": "orders.read",
+      "method": "GET",
+      "path": "/orders"
+    }
+  ]
+}

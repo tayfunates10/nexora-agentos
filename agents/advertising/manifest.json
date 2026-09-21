@@ -1,0 +1,123 @@
+{
+  "id": "nexora.advertising",
+  "slug": "advertising",
+  "name": "Advertising",
+  "description": "Analyses paid campaign performance across Google Ads and Meta Ads. Budget and campaign changes are proposals that must be approved before execution.",
+  "category": "advertising",
+  "icon": "target",
+  "version": "1.0.0",
+  "min_runtime_version": "1.0.0",
+  "status": "stable",
+  "channel": "stable",
+  "changelog": "First stable release: read-only analysis with approval-gated change proposals.",
+  "system_instructions": "You analyse paid advertising performance.\n\nYou operate read-only by default. Reading campaign structure, spend and results needs no permission; changing anything does.\n\nWhen a change would help, produce a proposal: the exact campaign, the current value, the proposed value, the expected effect and the evidence behind it. Submit it for approval and stop there. Never apply a budget or campaign change yourself, and never treat an unanswered proposal as an approved one.\n\nMoney is involved in every recommendation. State your uncertainty rather than rounding it away.",
+  "model_policy": {
+    "primary": "economical",
+    "escalation": "advanced",
+    "fallback": "default"
+  },
+  "reasoning": {
+    "effort": "high",
+    "max_steps": 14,
+    "escalate_after_steps": 5
+  },
+  "required_integrations": [],
+  "optional_integrations": [
+    "google-ads",
+    "meta-ads",
+    "google-analytics"
+  ],
+  "required_tools": [],
+  "optional_tools": [
+    "google-ads.campaigns.read",
+    "google-ads.insights.read",
+    "meta-ads.campaigns.read",
+    "meta-ads.insights.read",
+    "google-analytics.reports.read"
+  ],
+  "capabilities": [
+    "ads.performance.read",
+    "ads.structure.read",
+    "ads.budget.propose",
+    "ads.campaign.propose"
+  ],
+  "permissions": [
+    "workspace.read",
+    "spend.read"
+  ],
+  "approval_required": [
+    "ads.budget.update",
+    "ads.campaign.update",
+    "ads.campaign.pause",
+    "ads.campaign.create"
+  ],
+  "memory": {
+    "enabled": true,
+    "scope": "agent",
+    "retention_days": 180,
+    "max_items": 300
+  },
+  "rag": {
+    "enabled": false,
+    "top_k": 5,
+    "min_score": 0.0,
+    "source_tags": []
+  },
+  "budget": {
+    "max_run_micros": 3000000,
+    "daily_micros": 60000000,
+    "max_tokens_per_run": 250000
+  },
+  "rate_limits": {
+    "runs_per_hour": 30,
+    "tool_calls_per_run": 50
+  },
+  "settings_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "currency": {
+        "type": "string",
+        "maxLength": 3
+      },
+      "max_daily_budget_change_percent": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100
+      },
+      "target_cpa_micros": {
+        "type": "integer",
+        "minimum": 0
+      }
+    }
+  },
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "task": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "task"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "summary": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "proposals": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

@@ -9,16 +9,21 @@ import { ThemeControl } from "./ThemeControl.tsx";
 import type { MessageKey } from "../../messages/en.ts";
 
 export type NavKey =
-  | "overview" | "agents" | "runs" | "approvals" | "tools" | "knowledge"
-  | "evaluations" | "spend";
+  | "overview" | "agents" | "catalog" | "integrations" | "runs" | "approvals" | "tools"
+  | "knowledge" | "evaluations" | "spend";
 
 const NAV: { key: NavKey; slug: string; icon: IconName; label: MessageKey }[] = [
   { key: "overview", slug: "", icon: "overview", label: "navigation.overview" },
   { key: "agents", slug: "/agents", icon: "agents", label: "navigation.agents" },
+  { key: "catalog", slug: "/catalog", icon: "catalog", label: "navigation.catalog" },
   { key: "runs", slug: "/runs", icon: "runs", label: "navigation.runs" },
   { key: "approvals", slug: "/approvals", icon: "approvals", label: "navigation.approvals" },
   { key: "tools", slug: "/tools", icon: "tools", label: "navigation.tools" },
   { key: "knowledge", slug: "/knowledge", icon: "knowledge", label: "navigation.knowledge" },
+  {
+    key: "integrations", slug: "/integrations", icon: "integrations",
+    label: "navigation.integrations",
+  },
   { key: "evaluations", slug: "/evaluations", icon: "evaluations", label: "navigation.evaluations" },
   { key: "spend", slug: "/spend", icon: "spend", label: "navigation.spend" },
 ];

@@ -13,6 +13,8 @@ from redis.asyncio import Redis
 from starlette.exceptions import HTTPException
 
 from nexora_api import metrics
+from nexora_api.agent_catalog import router as agent_studio_router
+from nexora_api.agent_catalog_repository import AgentCatalogRepository
 from nexora_api.agent_repository import AgentRuntimeRepository
 from nexora_api.agents import router as agent_router
 from nexora_api.config import Settings
@@ -21,6 +23,9 @@ from nexora_api.evaluation_judges import router as evaluation_judge_router
 from nexora_api.evaluation_repository import EvaluationRepository
 from nexora_api.evaluations import router as evaluation_router
 from nexora_api.health import DependencyProbe, HealthResponse, Probe
+from nexora_api.integration_repository import IntegrationRepository
+from nexora_api.integrations import platform_router as integration_registry_router
+from nexora_api.integrations import router as integration_router
 from nexora_api.knowledge import router as knowledge_router
 from nexora_api.logs import configure_logging, context, logger
 from nexora_api.mcp_gateway import McpGateway
@@ -30,6 +35,8 @@ from nexora_api.rate_limit import IdentityRateLimiter
 from nexora_api.spend import router as spend_router
 from nexora_api.spend_repository import SpendRepository
 from nexora_api.telemetry import configure_telemetry, record, record_error, span
+from nexora_api.tenant_agent_repository import TenantAgentRepository
+from nexora_api.tenant_agents import router as tenant_agent_router
 from nexora_api.tooling import router as tool_router
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import router as workspace_router
@@ -59,6 +66,9 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         app.state.oidc_keys = OidcKeyResolver(settings)
         app.state.workspaces = WorkspaceRepository(settings)
         app.state.agent_runtime = AgentRuntimeRepository(settings)
+        app.state.agent_catalog = AgentCatalogRepository(settings)
+        app.state.tenant_agents = TenantAgentRepository(settings)
+        app.state.integrations = IntegrationRepository(settings)
         app.state.evaluations = EvaluationRepository(settings)
         app.state.eval_judges = EvaluationJudgeRepository(settings)
         app.state.mcp_gateway = McpGateway(settings)
@@ -183,6 +193,10 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
     app.include_router(tool_router)
     app.include_router(knowledge_router)
     app.include_router(spend_router)
+    app.include_router(agent_studio_router)
+    app.include_router(integration_registry_router)
+    app.include_router(integration_router)
+    app.include_router(tenant_agent_router)
     return app
 
 

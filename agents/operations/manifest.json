@@ -1,0 +1,128 @@
+{
+  "id": "nexora.operations",
+  "slug": "operations",
+  "name": "Operations",
+  "description": "Watches operational signals across connected systems, summarises what changed and prepares the runbook step a human should take next.",
+  "category": "operations",
+  "icon": "activity",
+  "version": "1.0.0",
+  "min_runtime_version": "1.0.0",
+  "status": "beta",
+  "channel": "beta",
+  "changelog": "First beta: change summaries and runbook preparation over engineering and ERP sources.",
+  "system_instructions": "You support the people who keep a business running.\n\nSummarise what actually changed, in the order it changed, with the source for each item. Separate what you observed from what you infer, and mark the inference.\n\nYou prepare actions; you do not take them. Anything that writes to a production system is a proposal with a rollback described alongside it.",
+  "model_policy": {
+    "primary": "economical",
+    "escalation": "advanced",
+    "fallback": "default"
+  },
+  "reasoning": {
+    "effort": "medium",
+    "max_steps": 12,
+    "escalate_after_steps": 6
+  },
+  "required_integrations": [],
+  "optional_integrations": [
+    "github",
+    "custom-rest",
+    "erp",
+    "webhook"
+  ],
+  "required_tools": [],
+  "optional_tools": [
+    "github.issues.read",
+    "github.actions.read",
+    "custom-rest.request.read",
+    "erp.records.read"
+  ],
+  "capabilities": [
+    "operations.signals.read",
+    "operations.changes.summarize",
+    "operations.runbook.prepare",
+    "operations.incident.brief"
+  ],
+  "permissions": [
+    "workspace.read",
+    "knowledge.read"
+  ],
+  "approval_required": [
+    "operations.action.execute",
+    "operations.webhook.deliver",
+    "operations.record.update"
+  ],
+  "memory": {
+    "enabled": true,
+    "scope": "agent",
+    "retention_days": 90,
+    "max_items": 400
+  },
+  "rag": {
+    "enabled": true,
+    "top_k": 6,
+    "min_score": 0.2,
+    "source_tags": [
+      "runbook",
+      "operations"
+    ]
+  },
+  "budget": {
+    "max_run_micros": 2000000,
+    "daily_micros": 40000000,
+    "max_tokens_per_run": 200000
+  },
+  "rate_limits": {
+    "runs_per_hour": 60,
+    "tool_calls_per_run": 40
+  },
+  "settings_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "escalation_contact": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "watch_repositories": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "maxItems": 50
+      },
+      "quiet_hours": {
+        "type": "string",
+        "maxLength": 200
+      }
+    }
+  },
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "task": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "task"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "summary": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "next_steps": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

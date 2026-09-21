@@ -1,0 +1,59 @@
+{
+  "id": "facebook",
+  "name": "Facebook Pages",
+  "category": "social",
+  "icon": "facebook",
+  "description": "Facebook Pages API: page insights, posts, and comment moderation for pages the tenant administers.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "oauth2",
+  "capabilities": [
+    "posts.read",
+    "posts.publish",
+    "comments.read",
+    "comments.reply",
+    "insights.read"
+  ],
+  "test_capability": "insights.read",
+  "scopes": [
+    "pages_show_list",
+    "pages_read_engagement",
+    "pages_manage_posts",
+    "pages_manage_engagement",
+    "read_insights"
+  ],
+  "oauth": {
+    "authorize_url": "https://www.facebook.com/v21.0/dialog/oauth",
+    "token_url": "https://graph.facebook.com/v21.0/oauth/access_token",
+    "default_scopes": [
+      "pages_show_list",
+      "pages_read_engagement",
+      "read_insights"
+    ],
+    "refreshable": true,
+    "refresh_margin_seconds": 604800
+  },
+  "base_url": "https://graph.facebook.com",
+  "credential_placement": {
+    "kind": "bearer_header",
+    "value_field": "access_token"
+  },
+  "endpoints": [
+    {
+      "capability": "insights.read",
+      "method": "GET",
+      "path": "/v21.0/me/accounts"
+    },
+    {
+      "capability": "posts.read",
+      "method": "GET",
+      "path": "/v21.0/me/feed"
+    },
+    {
+      "capability": "comments.read",
+      "method": "GET",
+      "path": "/v21.0/me/feed"
+    }
+  ],
+  "credential_fields": []
+}
