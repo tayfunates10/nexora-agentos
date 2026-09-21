@@ -337,10 +337,29 @@ def _worker_metrics(config: Config) -> tuple[Client | None, dict[str, float]]:
     return worker, {name: metric_sum(metrics, name) for name in names}
 
 
-def _assert_metric_delta(before: dict[str, float], after_text: str, name: str) -> None:
-    after = metric_sum(after_text, name)
-    if after <= before.get(name, 0.0):
-        raise SmokeError(f"expected {name} to increase during the smoke run")
+def _wait_metric_deltas(
+    worker: Client,
+    before: dict[str, float],
+    required: list[str],
+    *,
+    timeout_seconds: float = 15.0,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    missing = list(required)
+    while time.monotonic() < deadline:
+        metrics = worker.request_text("/metrics", auth=True)
+        missing = [
+            name
+            for name in required
+            if metric_sum(metrics, name) <= before.get(name, 0.0)
+        ]
+        if not missing:
+            return
+        time.sleep(0.5)
+    raise SmokeError(
+        "expected worker metrics to increase during the smoke run: "
+        + ", ".join(missing)
+    )
 
 
 def run(config: Config) -> dict[str, Any]:
@@ -464,15 +483,15 @@ def run(config: Config) -> dict[str, Any]:
             raise SmokeError("approval flow completed without this smoke gate deciding the approval")
 
         if worker:
-            metrics_after = worker.request_text("/metrics", auth=True)
-            _assert_metric_delta(metrics_before, metrics_after, "nexora_agent_runs_total")
-            _assert_metric_delta(metrics_before, metrics_after, "nexora_model_calls_total")
+            required_metrics = [
+                "nexora_agent_runs_total",
+                "nexora_model_calls_total",
+            ]
             if config.require_retrieval:
-                _assert_metric_delta(
-                    metrics_before, metrics_after, "nexora_retrieval_queries_total"
-                )
+                required_metrics.append("nexora_retrieval_queries_total")
             if config.approval_tool:
-                _assert_metric_delta(metrics_before, metrics_after, "nexora_tool_calls_total")
+                required_metrics.append("nexora_tool_calls_total")
+            _wait_metric_deltas(worker, metrics_before, required_metrics)
         elif config.require_retrieval:
             raise SmokeError(
                 "retrieval verification requires NEXORA_STAGING_WORKER_ADMIN_URL "
