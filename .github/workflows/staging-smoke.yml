@@ -39,7 +39,7 @@ jobs:
       - name: Run deployed staging smoke
         env:
           NEXORA_STAGING_API_URL: ${{ vars.NEXORA_STAGING_API_URL }}
-          NEXORA_STAGING_WORKER_ADMIN_URL: ${{ vars.NEXORA_STAGING_WORKER_ADMIN_URL }}
+          NEXORA_STAGING_WORKER_ADMIN_URL: ${{ inputs.verify_worker_metrics && vars.NEXORA_STAGING_WORKER_ADMIN_URL || '' }}
           NEXORA_STAGING_WORKSPACE_ID: ${{ vars.NEXORA_STAGING_WORKSPACE_ID }}
           NEXORA_STAGING_AGENT_ID: ${{ vars.NEXORA_STAGING_AGENT_ID }}
           NEXORA_STAGING_PROMPT: ${{ inputs.exercise_approval && vars.NEXORA_STAGING_APPROVAL_PROMPT || vars.NEXORA_STAGING_PROMPT }}
@@ -49,5 +49,5 @@ jobs:
           NEXORA_STAGING_REQUIRE_RETRIEVAL: ${{ inputs.require_retrieval }}
           NEXORA_STAGING_REQUIRE_OBSERVABILITY: ${{ inputs.verify_worker_metrics }}
           NEXORA_STAGING_ACCESS_TOKEN: ${{ secrets.NEXORA_STAGING_ACCESS_TOKEN }}
-          NEXORA_STAGING_METRICS_TOKEN: ${{ secrets.NEXORA_STAGING_METRICS_TOKEN }}
+          NEXORA_STAGING_METRICS_TOKEN: ${{ inputs.verify_worker_metrics && secrets.NEXORA_STAGING_METRICS_TOKEN || '' }}
         run: python scripts/staging_smoke.py
