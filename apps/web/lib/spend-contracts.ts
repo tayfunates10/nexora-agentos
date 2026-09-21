@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { MessageKey } from "../messages/en.ts";
 
 const count = z.number().int().nonnegative();
 // Micros are millionths of one unit of the operator accounting currency. The API
@@ -90,14 +91,18 @@ export type SpendAlert = z.infer<typeof spendAlertSchema>;
 export type SpendRecord = z.infer<typeof spendRecordSchema>;
 export type SpendCategory = z.infer<typeof spendCategorySchema>;
 
-export const CATEGORY_LABELS: Record<SpendCategory, string> = {
-  agent_run: "Agent runs",
-  evaluation_judge: "Quality judge",
-  embedding: "Embeddings",
-};
+export function categoryKey(category: SpendCategory): MessageKey {
+  return `spend.category.${category}`;
+}
 
-// Operators think in accounting units, the ledger stores exact micros. Both
-// conversions use integer arithmetic so a budget is never off by a rounding step.
+// The accounting unit has a name, not a symbol: the API never states a currency, so this
+// console never adds one and never converts between currencies.
+export const LIMIT_DECIMALS = 6;
+export const MAX_LIMIT_UNITS = 1_000_000_000;
+
+// Operators think in accounting units, the ledger stores exact micros. Both conversions
+// use integer arithmetic so a budget is never off by a rounding step, and a single
+// decimal separator is accepted in either of the forms the two languages write.
 const UNITS = /^(\d{1,10})(?:[.,](\d{1,6}))?$/;
 
 export function unitsToMicros(value: string): number {
@@ -108,6 +113,7 @@ export function unitsToMicros(value: string): number {
   return Number(total);
 }
 
+/** The exact value in canonical form: a dot separator and no grouping. */
 export function microsToUnits(value: number): string {
   const total = BigInt(value);
   const whole = total / BigInt(MICROS_PER_UNIT);
@@ -115,28 +121,9 @@ export function microsToUnits(value: number): string {
   return `${whole}.${fraction.replace(/(\d\d)(\d*?)0*$/, "$1$2")}`;
 }
 
-export function formatUnits(value: number): string {
-  const [whole, fraction] = microsToUnits(value).split(".");
-  return `${Number(whole).toLocaleString("en-GB")}.${fraction}`;
-}
-
-export function formatMicros(value: number): string {
-  return `${value.toLocaleString("en-GB")} micros`;
-}
-
-export function spendTimestamp(value: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium", timeStyle: "short", timeZone: "UTC",
-  }).format(new Date(value)) + " UTC";
-}
-
-export function spendPeriod(summary: SpendSummary): string {
-  const format = new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium", timeZone: "UTC",
-  });
-  // The period end is exclusive; label the last day operators actually see.
-  const lastDay = new Date(Date.parse(summary.period_end) - 86_400_000);
-  return `${format.format(new Date(summary.period_start))} – ${format.format(lastDay)} UTC`;
+/** The last day operators actually see: the stored period end is exclusive. */
+export function periodLastDay(summary: SpendSummary): Date {
+  return new Date(Date.parse(summary.period_end) - 86_400_000);
 }
 
 export function parseThresholds(values: string[]): number[] {
@@ -152,8 +139,8 @@ export function parseThresholds(values: string[]): number[] {
 }
 
 export function offeredThresholds(configured: number[]): number[] {
-  // A threshold an operator set through the API stays on screen, so saving the
-  // form cannot silently drop it.
+  // A threshold an operator set through the API stays on screen, so saving the form
+  // cannot silently drop it.
   return [...new Set([...STANDARD_THRESHOLDS, ...configured])].sort((a, b) => a - b);
 }
 

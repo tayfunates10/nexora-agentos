@@ -1,25 +1,35 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import {
-  RUN_STATUS_HELP,
   TERMINAL_STATUSES,
   eventDetail,
-  runDuration,
-  runEventLabel,
+  runDurationSeconds,
+  runEventKey,
   runEventPageSchema,
   runResultSchema,
   runSchema,
-  runTimestamp,
+  runStatusHelpKey,
   type RunResult,
 } from "../../../../../lib/agent-contracts";
 import { api, ApiError } from "../../../../../lib/server/api";
 import { currentSession } from "../../../../../lib/server/session";
+import { consoleChrome } from "../../../../../lib/server/chrome";
 import { workspaceSchema } from "../../../../../lib/workspace-contracts";
-import { ConsoleError, Failed, InvalidLink, RunStatusBadge, Saved } from "../../console";
+import {
+  formatDuration, formatNumber, formatTimestamp,
+} from "../../../../../lib/i18n/format.ts";
+import { ConsoleBreadcrumb, ConsoleShell } from "../../../../../components/shell/ConsoleShell.tsx";
+import {
+  CodeBlock, Detail, DetailList, EmptyState, Hint, Metric, Metrics, Notice,
+  PageHeader, Panel, RefreshLink, SectionHead,
+} from "../../../../../components/ui/primitives.tsx";
+import { TextWithLink } from "../../../../../components/ui/RichText.tsx";
+import { ConsoleProblem, Failed, InvalidLinkPage, RunStatusBadge, Saved } from "../../console";
+import type { MessageKey } from "../../../../../messages/en.ts";
 
-const MESSAGES: Record<string, string> = {
-  forbidden: "Only the person who started this run, or a workspace owner or admin, can cancel it.",
-  failed: "The cancellation could not be recorded. Refresh the run and try again.",
+const MESSAGES: Record<string, MessageKey> = {
+  forbidden: "runDetail.error.forbidden",
+  failed: "runDetail.error.failed",
 };
 
 // The answer belongs to the requester (retrieval evidence can be ACL-bound to them), and it
@@ -34,17 +44,23 @@ export default async function RunDetail({ params, searchParams }: {
   params: Promise<{ id: string; runId: string }>;
   searchParams: Promise<{ cancelled?: string; error?: string }>;
 }) {
-  const { id, runId } = await params;
-  const query = await searchParams;
+  const [{ id, runId }, query] = await Promise.all([params, searchParams]);
   const session = await currentSession();
   if (!session) redirect("/login");
+
+  let chrome = await consoleChrome(session);
   if (!z.uuid().safeParse(id).success || !z.uuid().safeParse(runId).success) {
-    return <InvalidLink back={`/workspaces/${id}/runs`} backLabel="Back to runs"/>;
+    return <InvalidLinkPage chrome={chrome} back={{
+      href: `/workspaces/${id}/runs`, label: chrome.ui.t("runs.backToRuns"),
+    }}/>;
   }
 
   const base = `/api/v1/workspaces/${id}/runs/${runId}`;
+  const runsRoot = `/workspaces/${id}/runs`;
   try {
     const workspace = await api(session, `/api/v1/workspaces/${id}`, workspaceSchema);
+    chrome = await consoleChrome(session, workspace);
+    const { ui } = chrome;
     const run = await api(session, base, runSchema);
     const events = await api(session, base + "/events?limit=100", runEventPageSchema);
     const terminal = TERMINAL_STATUSES.includes(run.status);
@@ -60,128 +76,174 @@ export default async function RunDetail({ params, searchParams }: {
         else throw error;
       }
     }
+    // Cancellation is offered only where it can still do something. The API decides who
+    // may actually cancel; hiding the button never stands in for that check.
     const canCancel = !terminal && run.cancel_requested_at === null;
+    const seconds = runDurationSeconds(run);
 
-    return <section className="workspace-content evaluation-content">
-      <a href={`/workspaces/${id}/runs`}>← Runs in {workspace.name}</a>
-      <p className="eyebrow">EXECUTION / RUN</p><h1>Agent run</h1>
-      <Saved message={query.cancelled ? "Cancellation was recorded for this run." : null}/>
-      <Failed message={query.error ? MESSAGES[query.error] ?? MESSAGES.failed : null}/>
+    return <ConsoleShell
+      chrome={chrome}
+      active="runs"
+      breadcrumb={<ConsoleBreadcrumb
+        ui={ui} workspace={workspace} trail={[{ href: runsRoot, label: ui.t("navigation.runs") }]}
+      />}
+    >
+      <PageHeader eyebrow={ui.t("runDetail.eyebrow")} title={ui.t("runDetail.title")}/>
+      <Saved message={query.cancelled ? ui.t("runDetail.cancelRecorded") : null}/>
+      <Failed message={query.error ? ui.t(MESSAGES[query.error] ?? MESSAGES.failed) : null}/>
 
-      <div className="card run-panel">
-        <RunStatusBadge status={run.status}/>
-        <p className="notice">{RUN_STATUS_HELP[run.status]}</p>
-        <dl className="eval-counts run-counts">
-          <div><dt>Started</dt>
-            <dd><time dateTime={run.created_at}>{runTimestamp(run.created_at)}</time></dd></div>
-          <div><dt>Attempts</dt><dd>{run.attempt_count}</dd></div>
-          <div><dt>Duration</dt><dd>{runDuration(run) ?? "—"}</dd></div>
-          <div><dt>Events</dt><dd>{events.items.length}{events.next_cursor ? "+" : ""}</dd></div>
-        </dl>
-        <dl className="eval-expectations">
-          <dt>Run</dt><dd><code>{run.id}</code></dd>
-          <dt>Trace</dt><dd><code>{run.trace_id}</code></dd>
-          <dt>Agent</dt><dd><a href={`/workspaces/${id}/agents`}><code>{run.agent_id}</code></a></dd>
-          {run.failure_code && <><dt>Failure code</dt><dd><code>{run.failure_code}</code></dd></>}
-          {run.cancel_requested_at && <><dt>Cancellation requested</dt>
-            <dd><time dateTime={run.cancel_requested_at}>
-              {runTimestamp(run.cancel_requested_at)}</time></dd></>}
-        </dl>
+      <Panel label={ui.t("runDetail.summaryLabel")} testId="run-summary">
+        <RunStatusBadge chrome={chrome} status={run.status}/>
+        <p className="notice">{ui.t(runStatusHelpKey(run.status))}</p>
+        <Metrics>
+          <Metric label={ui.t("runDetail.metric.started")} value={
+            <time dateTime={run.created_at}>{formatTimestamp(run.created_at, ui.locale)}</time>
+          }/>
+          <Metric
+            label={ui.t("runDetail.metric.attempts")}
+            value={formatNumber(run.attempt_count, ui.locale)}
+          />
+          <Metric
+            label={ui.t("runDetail.metric.duration")}
+            value={seconds === null ? ui.t("common.empty") : formatDuration(seconds, ui.t)}
+          />
+          <Metric
+            label={ui.t("runDetail.metric.events")}
+            value={formatNumber(events.items.length, ui.locale) + (events.next_cursor ? "+" : "")}
+          />
+        </Metrics>
+        {/* Identifiers are the API's own; they are shown verbatim in both languages. */}
+        <DetailList>
+          <Detail label={ui.t("runDetail.identity.run")}><code>{run.id}</code></Detail>
+          <Detail label={ui.t("runDetail.identity.trace")}><code>{run.trace_id}</code></Detail>
+          <Detail label={ui.t("runDetail.identity.agent")}>
+            <a className="link" href={`/workspaces/${id}/agents`}><code>{run.agent_id}</code></a>
+          </Detail>
+          {run.failure_code && <Detail label={ui.t("runDetail.identity.failureCode")}>
+            <code>{run.failure_code}</code></Detail>}
+          {run.cancel_requested_at && <Detail label={ui.t("runDetail.identity.cancelRequested")}>
+            <time dateTime={run.cancel_requested_at}>
+              {formatTimestamp(run.cancel_requested_at, ui.locale)}</time></Detail>}
+        </DetailList>
         <div className="section-head">
-          <p className="notice">This page reflects the run as of the last page load.</p>
-          <a href={`/workspaces/${id}/runs/${runId}`}>Refresh ↗</a>
+          <p className="notice">{ui.t("runDetail.asOfNotice")}</p>
+          <RefreshLink href={`${runsRoot}/${runId}`} label={ui.t("common.refresh")}/>
         </div>
-        {run.status === "waiting_for_approval" && <p role="alert">
-          This run is paused on a tool approval. Owners and admins decide it on the{" "}
-          <a href={`/workspaces/${id}/approvals`}>approvals page</a>; nothing executes until then.
-        </p>}
-        {canCancel && <form className="workspace-form run-cancel" action="/workspaces/runs/cancel" method="post">
+        {run.status === "waiting_for_approval" && <Notice live="alert" tone="warning">
+          <TextWithLink
+            ui={ui} message="runDetail.waitingApproval" link="runDetail.waitingApprovalLink"
+            href={`/workspaces/${id}/approvals`}
+          />
+        </Notice>}
+        {canCancel && <form className="form" action="/workspaces/runs/cancel" method="post">
           <input type="hidden" name="csrf" value={session.csrf}/>
           <input type="hidden" name="workspace" value={id}/>
           <input type="hidden" name="run" value={runId}/>
-          <p>
-            Cancelling closes any pending approval for this run. A run already executing stops at
-            its next checkpoint; work already committed is not undone.
-          </p>
-          <button type="submit">Cancel this run</button>
+          <Notice tone="danger">{ui.t("runDetail.cancelExplain")}</Notice>
+          <div>
+            <button type="submit" className="button danger">{ui.t("runDetail.cancelSubmit")}</button>
+          </div>
         </form>}
-        {!terminal && run.cancel_requested_at !== null && <p className="notice">
-          Cancellation has been requested. The worker finishes its current step and then stops.
-        </p>}
-      </div>
+        {!terminal && run.cancel_requested_at !== null
+          && <Hint>{ui.t("runDetail.cancelPending")}</Hint>}
+      </Panel>
 
-      <h2 className="eval-section-title">Result</h2>
-      {result.kind === "pending" && <div className="empty"><h3>No result yet</h3>
-        <p>A final answer is published only once the run reaches a terminal status.</p></div>}
-      {result.kind === "not_requester" && <div className="empty"><h3>Result not available to you</h3>
-        <p>Only the person who started this run can read its answer, because a run can include
-          retrieved content that is shared with them alone. Workspace admin does not override it.</p></div>}
-      {result.kind === "not_ready" && <div className="empty"><h3>No publishable result</h3>
-        <p>This run ended without a complete recorded answer. The timeline below still shows what
-          happened.</p></div>}
-      {result.kind === "result" && <div className="card run-panel">
+      <SectionHead id="run-result-title" title={ui.t("runDetail.resultTitle")}/>
+      {result.kind !== "result" && <EmptyState title={ui.t(
+        result.kind === "pending" ? "runDetail.result.pendingTitle"
+          : result.kind === "not_requester" ? "runDetail.result.notRequesterTitle"
+          : "runDetail.result.notReadyTitle",
+      )}>
+        <p>{ui.t(
+          result.kind === "pending" ? "runDetail.result.pendingBody"
+            : result.kind === "not_requester" ? "runDetail.result.notRequesterBody"
+            : "runDetail.result.notReadyBody",
+        )}</p>
+      </EmptyState>}
+      {result.kind === "result" && <Panel labelledBy="run-result-title">
         {result.result.output_text === null
-          ? <p className="notice">
-            This run published no answer. Failed and cancelled runs never return partial output.
-          </p>
+          ? <Hint>{ui.t("runDetail.result.noOutput")}</Hint>
           : <>
-            <p className="notice">
-              Final answer{result.result.finish_reason === "refusal"
-                ? " · the model refused the task" : ""}, recorded by the worker.
-            </p>
-            <pre className="eval-evidence">{result.result.output_text}</pre>
+            <p className="notice">{ui.t(result.result.finish_reason === "refusal"
+              ? "runDetail.result.finalAnswerRefusal"
+              : "runDetail.result.finalAnswer")}</p>
+            {/* Model output is rendered as inert text, never as markup. */}
+            <CodeBlock>{result.result.output_text}</CodeBlock>
           </>}
-        <dl className="eval-counts run-counts">
-          <div><dt>Model steps</dt><dd>{result.result.model_steps.length}</dd></div>
-          <div><dt>Input tokens</dt>
-            <dd>{result.result.recorded_input_tokens.toLocaleString("en-GB")}</dd></div>
-          <div><dt>Output tokens</dt>
-            <dd>{result.result.recorded_output_tokens.toLocaleString("en-GB")}</dd></div>
-          <div><dt>Tools selected</dt><dd>{result.result.selected_tools.length}</dd></div>
-        </dl>
-        {result.result.selected_tools.length > 0 && <p className="notice">
-          Selected by the model: {result.result.selected_tools.map((tool, index) =>
-            <span key={tool}>{index > 0 ? ", " : ""}<code>{tool}</code></span>)}.
-          Selection is not execution: policy and approval decide that.
-        </p>}
-        {result.result.model_steps.length > 0 && <table className="spend-table">
-          <caption>Recorded model steps. Token counts cover persisted responses only.</caption>
-          <thead><tr>
-            <th scope="col">Step</th><th scope="col">Model</th><th scope="col">Finish</th>
-            <th scope="col">Input</th><th scope="col">Output</th>
-          </tr></thead>
-          <tbody>{result.result.model_steps.map(step => <tr key={step.step_no}>
-            <td data-label="Step">{step.step_no}</td>
-            <td data-label="Model">{step.provider}/{step.model}</td>
-            <td data-label="Finish">{step.finish_reason}</td>
-            <td data-label="Input">{step.input_tokens.toLocaleString("en-GB")}</td>
-            <td data-label="Output">{step.output_tokens.toLocaleString("en-GB")}</td>
-          </tr>)}</tbody>
-        </table>}
-      </div>}
+        <Metrics>
+          <Metric
+            label={ui.t("runDetail.result.modelSteps")}
+            value={formatNumber(result.result.model_steps.length, ui.locale)}
+          />
+          <Metric
+            label={ui.t("runDetail.result.inputTokens")}
+            value={formatNumber(result.result.recorded_input_tokens, ui.locale)}
+          />
+          <Metric
+            label={ui.t("runDetail.result.outputTokens")}
+            value={formatNumber(result.result.recorded_output_tokens, ui.locale)}
+          />
+          <Metric
+            label={ui.t("runDetail.result.toolsSelected")}
+            value={formatNumber(result.result.selected_tools.length, ui.locale)}
+          />
+        </Metrics>
+        {result.result.selected_tools.length > 0 && <Hint>
+          {ui.t("runDetail.result.selectionNotice", {
+            tools: result.result.selected_tools.join(", "),
+          })}
+        </Hint>}
+        {result.result.model_steps.length > 0 && <div className="table-scroll">
+          <table className="table">
+            <caption>{ui.t("runDetail.steps.caption")}</caption>
+            <thead><tr>
+              <th scope="col">{ui.t("runDetail.steps.step")}</th>
+              <th scope="col">{ui.t("runDetail.steps.model")}</th>
+              <th scope="col">{ui.t("runDetail.steps.finish")}</th>
+              <th scope="col">{ui.t("runDetail.steps.input")}</th>
+              <th scope="col">{ui.t("runDetail.steps.output")}</th>
+            </tr></thead>
+            <tbody>{result.result.model_steps.map(step => <tr key={step.step_no}>
+              <td data-label={ui.t("runDetail.steps.step")}>
+                {formatNumber(step.step_no, ui.locale)}</td>
+              <td data-label={ui.t("runDetail.steps.model")}>
+                <code>{step.provider}/{step.model}</code></td>
+              <td data-label={ui.t("runDetail.steps.finish")}><code>{step.finish_reason}</code></td>
+              <td data-label={ui.t("runDetail.steps.input")}>
+                {formatNumber(step.input_tokens, ui.locale)}</td>
+              <td data-label={ui.t("runDetail.steps.output")}>
+                {formatNumber(step.output_tokens, ui.locale)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
+      </Panel>}
 
-      <h2 className="eval-section-title">Execution timeline</h2>
+      <SectionHead title={ui.t("runDetail.timelineTitle")}/>
       {events.items.length === 0
-        ? <div className="empty"><h3>No events recorded</h3>
-          <p>Run events are append-only. An empty timeline means nothing has been written yet.</p></div>
-        : <ol className="run-timeline">{events.items.map(event => {
+        ? <EmptyState title={ui.t("runDetail.timeline.emptyTitle")}>
+          <p>{ui.t("runDetail.timeline.emptyBody")}</p>
+        </EmptyState>
+        : <ol className="timeline">{events.items.map(event => {
           const detail = eventDetail(event.payload);
+          const key = runEventKey(event.event_type);
           return <li key={event.id}>
-            <p className="run-event-head">
-              <strong>{runEventLabel(event.event_type)}</strong>
-              <time dateTime={event.created_at}>{runTimestamp(event.created_at)}</time>
+            <p className="timeline-head">
+              {/* An event type the console has no name for is still listed, by its
+                  recorded identifier, so nothing disappears from the history. */}
+              <span>{key ? ui.t(key) : <code>{event.event_type}</code>}</span>
+              <time dateTime={event.created_at}>
+                {formatTimestamp(event.created_at, ui.locale)}</time>
             </p>
-            <p className="run-event-type"><code>{event.event_type}</code></p>
+            {key && <p className="field-help"><code>{event.event_type}</code></p>}
             {detail && <p className="notice">{detail}</p>}
           </li>;
         })}</ol>}
-      {events.next_cursor && <p className="notice">
-        Showing the first 100 events of this run.
-      </p>}
-    </section>;
+      {events.next_cursor && <Hint>{ui.t("runDetail.timeline.limit")}</Hint>}
+    </ConsoleShell>;
   } catch (error) {
-    return <ConsoleError
-      error={error} area="Run" back={`/workspaces/${id}/runs`} backLabel="Back to runs"
+    return <ConsoleProblem
+      chrome={chrome} error={error} area={chrome.ui.t("runDetail.area")} active="runs"
+      back={{ href: runsRoot, label: chrome.ui.t("runs.backToRuns") }}
     />;
   }
 }

@@ -4,16 +4,22 @@ import {
   agentInput,
   agentSchema,
   eventDetail,
-  runDuration,
-  runEventLabel,
+  runDurationSeconds,
+  runEventKey,
   runEventPageSchema,
   runInput,
   runPageSchema,
   runResultSchema,
   runSchema,
   runSummarySchema,
-  runTimestamp,
 } from "../lib/agent-contracts.ts";
+import { formatDuration, formatTimestamp } from "../lib/i18n/format.ts";
+import { createUi } from "../lib/i18n/messages.ts";
+
+const en = createUi("en");
+const tr = createUi("tr");
+const duration = (finished: string, ui = en) =>
+  formatDuration(runDurationSeconds({ created_at: run.created_at, finished_at: finished })!, ui.t);
 
 const id = "6f1c9a2e-1b3d-4f5a-8c7e-9d0b1a2c3d4e";
 const other = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
@@ -106,9 +112,11 @@ test("result contract refuses an answer attached to a non-successful run", () =>
 });
 
 test("timeline formatting keeps worker payloads readable and inert", () => {
-  assert.equal(runEventLabel("run.queued"), "Queued");
-  // An event type the console does not know is still shown rather than dropped.
-  assert.equal(runEventLabel("worker.new_event"), "worker.new_event");
+  assert.equal(en.t(runEventKey("run.queued")!), "Queued");
+  assert.equal(tr.t(runEventKey("run.queued")!), "Kuyruğa alındı");
+  // An event type the console does not know has no label, so the page falls back to the
+  // recorded identifier rather than dropping the event.
+  assert.equal(runEventKey("worker.new_event"), null);
   assert.equal(eventDetail({ request_id: "abc" }), "");
   assert.equal(eventDetail({ attempt: 2, failure_code: null }), "attempt: 2 · failure_code: —");
   assert.equal(eventDetail({ nested: { a: 1 } }), 'nested: {"a":1}');
@@ -117,12 +125,17 @@ test("timeline formatting keeps worker payloads readable and inert", () => {
     "script: <script>alert(1)</script>");
 });
 
-test("durations and timestamps are reported in UTC", () => {
-  assert.equal(runDuration(run), null);
-  assert.equal(runDuration({ created_at: run.created_at, finished_at: "2026-09-20T09:00:42Z" }), "42s");
-  assert.equal(runDuration({ created_at: run.created_at, finished_at: "2026-09-20T09:03:05Z" }), "3m 5s");
-  assert.equal(runDuration({ created_at: run.created_at, finished_at: "2026-09-20T11:30:00Z" }), "2h 30m");
+test("durations and timestamps are reported in UTC in both languages", () => {
+  assert.equal(runDurationSeconds(run), null);
+  assert.equal(duration("2026-09-20T09:00:42Z"), "42 sec");
+  assert.equal(duration("2026-09-20T09:03:05Z"), "3 min 5 sec");
+  assert.equal(duration("2026-09-20T11:30:00Z"), "2 hr 30 min");
+  assert.equal(duration("2026-09-20T09:03:05Z", tr), "3 dk 5 sn");
   // A clock skew that puts the finish before the start never renders as a negative duration.
-  assert.equal(runDuration({ created_at: run.created_at, finished_at: "2026-09-20T08:59:00Z" }), "0s");
-  assert.equal(runTimestamp("2026-09-20T09:00:00Z"), "20 Sept 2026, 09:00 UTC");
+  assert.equal(runDurationSeconds({
+    created_at: run.created_at, finished_at: "2026-09-20T08:59:00Z",
+  }), 0);
+  // The written form follows the language; the instant and its zone never do.
+  assert.equal(formatTimestamp("2026-09-20T09:00:00Z", "en"), "20 Sept 2026, 09:00 UTC");
+  assert.match(formatTimestamp("2026-09-20T09:00:00Z", "tr"), /^20 Eyl 2026,? 09:00 UTC$/);
 });

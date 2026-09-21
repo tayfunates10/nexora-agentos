@@ -1,3 +1,8 @@
-export default function LoadingTools() {
-  return <section className="workspace-content"><p role="status">Loading tools…</p></section>;
+import { getUi } from "../../../../lib/i18n/server.ts";
+
+export default async function Loading() {
+  const ui = await getUi();
+  return <main className="content" role="status" aria-live="polite">
+    <p className="page-intro">{ui.t("tools.loading")}</p>
+  </main>;
 }

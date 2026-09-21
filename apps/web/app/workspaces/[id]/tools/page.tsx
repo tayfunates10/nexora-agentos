@@ -2,41 +2,49 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { api } from "../../../../lib/server/api";
 import { currentSession } from "../../../../lib/server/session";
+import { consoleChrome } from "../../../../lib/server/chrome";
 import {
-  POLICY_LABELS,
-  SIDE_EFFECT_LABELS,
-  forcesApproval,
-  policyDecisionSchema,
-  policyLabel,
-  policyTone,
-  toolPageSchema,
-  toolTimestamp,
+  forcesApproval, policyDecisionSchema, policyKey, policyLabelKey, policyTone,
+  sideEffectKey, toolPageSchema,
 } from "../../../../lib/tool-contracts";
 import { workspaceSchema } from "../../../../lib/workspace-contracts";
-import { ConsoleError, Failed, InvalidLink, Saved } from "../console";
+import { formatTimestamp } from "../../../../lib/i18n/format.ts";
+import { ConsoleBreadcrumb, ConsoleShell } from "../../../../components/shell/ConsoleShell.tsx";
+import {
+  CodeBlock, Detail, DetailList, Disclosure, EmptyState, Field, Hint, Notice,
+  PageHeader, Pagination, StatusBadge,
+} from "../../../../components/ui/primitives.tsx";
+import { TextWithLink } from "../../../../components/ui/RichText.tsx";
+import { ConsoleProblem, Failed, InvalidLinkPage, Saved } from "../console";
+import type { MessageKey } from "../../../../messages/en.ts";
 
-const MESSAGES: Record<string, string> = {
-  invalid: "Choose a decision and give a reason of up to 500 characters.",
-  forbidden: "Only workspace owners and admins can change a tool policy.",
-  failed: "The policy could not be saved. Check your current access and try again.",
+const MESSAGES: Record<string, MessageKey> = {
+  invalid: "tools.error.invalid",
+  forbidden: "tools.error.forbidden",
+  failed: "tools.error.failed",
 };
 
 export default async function Tools({ params, searchParams }: {
   params: Promise<{ id: string }>;
   searchParams: Promise<{ cursor?: string; saved?: string; error?: string }>;
 }) {
-  const { id } = await params;
-  const query = await searchParams;
+  const [{ id }, query] = await Promise.all([params, searchParams]);
   const session = await currentSession();
   if (!session) redirect("/login");
-  if (!z.uuid().safeParse(id).success
-    || (query.cursor !== undefined && !/^[a-z][a-z0-9_.-]{1,63}$/.test(query.cursor))) {
-    return <InvalidLink back={`/workspaces/${id}`} backLabel="Back to workspace"/>;
-  }
 
   const root = `/workspaces/${id}/tools`;
+  let chrome = await consoleChrome(session);
+  if (!z.uuid().safeParse(id).success
+    || (query.cursor !== undefined && !/^[a-z][a-z0-9_.-]{1,63}$/.test(query.cursor))) {
+    return <InvalidLinkPage chrome={chrome} back={{
+      href: `/workspaces/${id}`, label: chrome.ui.t("errors.backToWorkspace"),
+    }}/>;
+  }
+
   try {
     const workspace = await api(session, `/api/v1/workspaces/${id}`, workspaceSchema);
+    chrome = await consoleChrome(session, workspace);
+    const { ui } = chrome;
     const tools = await api(
       session,
       `/api/v1/workspaces/${id}/tools?limit=25${query.cursor ? "&cursor=" + query.cursor : ""}`,
@@ -44,81 +52,94 @@ export default async function Tools({ params, searchParams }: {
     );
     const canManage = workspace.role !== "member";
 
-    return <section className="workspace-content evaluation-content">
-      <a href={`/workspaces/${id}`}>← {workspace.name}</a>
-      <p className="eyebrow">GOVERNANCE / TOOL CONTRACTS</p><h1>Tools and policy</h1>
-      <p className="intro">
-        Every tool an agent may call is a typed contract with an explicit decision. A tool with no
-        policy is denied: the platform never falls back to allowing a call.
-      </p>
-      <p className="notice">
-        Contracts are registered through the API by whoever integrates the tool, because they
-        carry a JSON schema and a server key. Workspaces never supply a URL, command or
-        credential; the operator maps a server key to a real endpoint in the worker configuration.
-      </p>
-      <Saved message={query.saved === "policy" ? "The policy was saved." : null}/>
-      <Failed message={query.error ? MESSAGES[query.error] ?? MESSAGES.failed : null}/>
+    return <ConsoleShell
+      chrome={chrome}
+      active="tools"
+      breadcrumb={<ConsoleBreadcrumb
+        ui={ui} workspace={workspace} trail={[{ href: root, label: ui.t("navigation.tools") }]}
+      />}
+    >
+      <PageHeader
+        eyebrow={ui.t("tools.eyebrow")}
+        title={ui.t("tools.title")}
+        intro={ui.t("tools.intro")}
+      />
+      <Hint>{ui.t("tools.registrationNotice")}</Hint>
+      <Saved message={query.saved === "policy" ? ui.t("tools.saved") : null}/>
+      <Failed message={query.error ? ui.t(MESSAGES[query.error] ?? MESSAGES.failed) : null}/>
 
       {tools.items.length === 0
-        ? <div className="empty"><h2>No tools registered</h2>
-          <p>Agents can run without tools. Register a contract through
-            <code> PUT /api/v1/workspaces/{"{id}"}/tools/{"{name}"}</code> to govern one.</p></div>
-        : <div className="eval-list">{tools.items.map(tool => <article className="card eval-card" key={tool.id}>
-          <p className={"state " + policyTone(tool)}>{policyLabel(tool)}</p>
-          <h2>{tool.name}</h2>
-          <p>{tool.description}</p>
-          <dl className="eval-expectations">
-            <dt>Side effect</dt><dd>{SIDE_EFFECT_LABELS[tool.side_effect]}</dd>
-            <dt>Server</dt><dd><code>{tool.server_key}</code> · <code>{tool.remote_name}</code></dd>
-            <dt>Enabled</dt><dd>{tool.enabled ? "Yes" : "No · calls are refused"}</dd>
-            {tool.policy_reason && <><dt>Policy reason</dt><dd>{tool.policy_reason}</dd></>}
-            {tool.policy_updated_at && <><dt>Policy set</dt>
-              <dd><time dateTime={tool.policy_updated_at}>
-                {toolTimestamp(tool.policy_updated_at)}</time></dd></>}
-          </dl>
-          {forcesApproval(tool) && <p className="notice">
-            Allow does not remove the human step for this tool: its side effect always raises an
-            approval on the <a href={`/workspaces/${id}/approvals`}>approvals page</a>.
-          </p>}
-          <details>
-            <summary>Input contract</summary>
-            <pre className="eval-evidence">{JSON.stringify(tool.input_schema, null, 2)}</pre>
-          </details>
-          {canManage && <form className="workspace-form policy-form" action="/workspaces/tools/policy" method="post">
+        ? <EmptyState title={ui.t("tools.emptyTitle")}><p>{ui.t("tools.emptyBody")}</p></EmptyState>
+        : <div className="card-list">{tools.items.map(tool => <article className="card" key={tool.id}>
+          <StatusBadge tone={policyTone(tool)}>{ui.t(policyLabelKey(tool))}</StatusBadge>
+          {/* The tool name and its description are registered content, shown as stored. */}
+          <h2 className="section-title">{tool.name}</h2>
+          <p className="notice">{tool.description}</p>
+          <DetailList>
+            <Detail label={ui.t("tools.sideEffect")}>{ui.t(sideEffectKey(tool.side_effect))}</Detail>
+            <Detail label={ui.t("tools.server")}>
+              <code>{tool.server_key}</code> · <code>{tool.remote_name}</code></Detail>
+            <Detail label={ui.t("tools.enabled")}>
+              {ui.t(tool.enabled ? "tools.enabledYes" : "tools.enabledNo")}</Detail>
+            {tool.policy_reason && <Detail label={ui.t("tools.policyReason")}>
+              {tool.policy_reason}</Detail>}
+            {tool.policy_updated_at && <Detail label={ui.t("tools.policySet")}>
+              <time dateTime={tool.policy_updated_at}>
+                {formatTimestamp(tool.policy_updated_at, ui.locale)}</time></Detail>}
+          </DetailList>
+          {forcesApproval(tool) && <Notice tone="warning">
+            <TextWithLink
+              ui={ui} message="tools.forcesApproval" link="tools.forcesApprovalLink"
+              href={`/workspaces/${id}/approvals`}
+            />
+          </Notice>}
+          <Disclosure summary={ui.t("tools.inputContract")}>
+            <CodeBlock label={ui.t("tools.inputContract")}>
+              {JSON.stringify(tool.input_schema, null, 2)}
+            </CodeBlock>
+          </Disclosure>
+          {canManage && <form className="form" action="/workspaces/tools/policy" method="post">
             <input type="hidden" name="csrf" value={session.csrf}/>
             <input type="hidden" name="workspace" value={id}/>
             <input type="hidden" name="tool" value={tool.name}/>
-            <label htmlFor={`decision-${tool.id}`}>Policy decision</label>
-            <select
-              id={`decision-${tool.id}`} name="decision"
-              defaultValue={tool.policy_decision ?? "deny"}
-            >{policyDecisionSchema.options.map(option => <option key={option} value={option}>
-              {POLICY_LABELS[option]}
-            </option>)}</select>
-            <label htmlFor={`reason-${tool.id}`}>Reason</label>
-            <input
-              id={`reason-${tool.id}`} name="reason" required maxLength={500} autoComplete="off"
-              defaultValue={tool.policy_reason ?? ""} aria-describedby={`reason-help-${tool.id}`}
-            />
-            <p id={`reason-help-${tool.id}`} className="notice">
-              The reason is recorded with your identity in the workspace audit trail and shown to
-              whoever decides an approval for this tool.
-            </p>
-            <button type="submit">Save policy</button>
+            <div className="form-row">
+              <Field id={`decision-${tool.id}`} label={ui.t("tools.decisionLabel")}>
+                <select
+                  className="field-control" id={`decision-${tool.id}`} name="decision"
+                  defaultValue={tool.policy_decision ?? "deny"}
+                >{policyDecisionSchema.options.map(option => <option key={option} value={option}>
+                  {ui.t(policyKey(option))}
+                </option>)}</select>
+              </Field>
+              <Field
+                id={`reason-${tool.id}`}
+                label={ui.t("tools.reasonLabel")}
+                help={ui.t("tools.reasonHelp")}
+              >
+                <input
+                  className="field-control" id={`reason-${tool.id}`} name="reason" required
+                  maxLength={500} autoComplete="off" defaultValue={tool.policy_reason ?? ""}
+                  aria-describedby={`reason-${tool.id}-help`}
+                />
+              </Field>
+              <button type="submit" className="button">{ui.t("tools.savePolicy")}</button>
+            </div>
           </form>}
         </article>)}</div>}
 
-      <nav className="pagination" aria-label="Tool pages">
-        {query.cursor && <a href={root}>First page</a>}
-        {tools.next_cursor && <a href={root + "?cursor=" + tools.next_cursor}>More tools →</a>}
-      </nav>
-      {!canManage && <p className="notice">
-        You have read-only access. Only owners and admins can change a tool policy.
-      </p>}
-    </section>;
+      <Pagination
+        label={ui.t("tools.pagesLabel")}
+        previous={query.cursor ? { href: root, label: ui.t("common.firstPage") } : null}
+        next={tools.next_cursor
+          ? { href: `${root}?cursor=${tools.next_cursor}`, label: ui.t("tools.more") }
+          : null}
+      />
+      {!canManage && <Hint>{ui.t("tools.readOnlyNotice")}</Hint>}
+    </ConsoleShell>;
   } catch (error) {
-    return <ConsoleError
-      error={error} area="Tools" back={`/workspaces/${id}`} backLabel="Back to workspace"
+    return <ConsoleProblem
+      chrome={chrome} error={error} area={chrome.ui.t("tools.area")} active="tools"
+      back={{ href: `/workspaces/${id}`, label: chrome.ui.t("errors.backToWorkspace") }}
     />;
   }
 }

@@ -1,269 +1,320 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import {
-  CATEGORY_LABELS,
-  formatMicros,
-  formatUnits,
-  microsToUnits,
-  offeredThresholds,
-  spendCategorySchema,
-  spendPeriod,
-  spendRecordPageSchema,
-  spendSummarySchema,
-  spendTimestamp,
-  usedRatio,
-  type SpendSummary,
+  LIMIT_DECIMALS, MAX_ALERT_THRESHOLDS, MAX_LIMIT_UNITS, categoryKey, microsToUnits,
+  offeredThresholds, periodLastDay, spendCategorySchema, spendRecordPageSchema,
+  spendSummarySchema, usedRatio, type SpendSummary,
 } from "../../../../lib/spend-contracts";
-import { api, ApiError } from "../../../../lib/server/api";
+import { api } from "../../../../lib/server/api";
 import { currentSession } from "../../../../lib/server/session";
+import { consoleChrome } from "../../../../lib/server/chrome";
 import { workspaceSchema } from "../../../../lib/workspace-contracts";
+import {
+  decimalSeparator, formatDate, formatIntegerPercent, formatNumber, formatPercent,
+  formatTimestamp, formatUnitsFrom, toLimitInput,
+} from "../../../../lib/i18n/format.ts";
+import type { Ui } from "../../../../lib/i18n/messages.ts";
+import type { Tone } from "../../../../lib/i18n/tone.ts";
+import { ConsoleBreadcrumb, ConsoleShell } from "../../../../components/shell/ConsoleShell.tsx";
+import {
+  EmptyState, Field, FilterLink, Filters, Hint, Metric, Metrics, Notice, PageHeader,
+  Pagination, Panel, SectionHead, StatusBadge,
+} from "../../../../components/ui/primitives.tsx";
+import { Reveal } from "../../../../components/ui/Reveal.tsx";
+import { ConsoleProblem, Failed, InvalidLinkPage, Saved } from "../console";
+import type { MessageKey } from "../../../../messages/en.ts";
 
-// Budget state is a status, not a series: it is always written out in words next to
-// the colour so the meter is never the only thing carrying the message.
-function budgetState(summary: SpendSummary): { tone: string; label: string } {
-  if (summary.monthly_limit_micros === null) return { tone: "unknown", label: "No budget set" };
-  if (summary.exhausted) return { tone: "down", label: "Budget exhausted" };
-  if (summary.consumed_micros >= summary.monthly_limit_micros) {
-    return { tone: "unknown", label: "Over limit · monitored, not blocked" };
-  }
-  const ratio = usedRatio(summary) ?? 0;
-  return ratio >= 0.8
-    ? { tone: "unknown", label: "Approaching the monthly limit" }
-    : { tone: "up", label: "Within budget" };
+const MESSAGES: Record<string, MessageKey> = {
+  invalid: "spend.error.invalid",
+  thresholds: "spend.error.thresholds",
+  forbidden: "spend.error.forbidden",
+  failed: "spend.error.failed",
+};
+
+/** Amounts are exact micros; the display groups them without ever touching a float. */
+function units(micros: number, ui: Ui): string {
+  return formatUnitsFrom(microsToUnits(micros), ui.locale);
 }
 
-function SpendMeter({ summary }: { summary: SpendSummary }) {
+// Budget state is a status, not a series: it is always written out in words next to the
+// colour, so the meter is never the only thing carrying the message.
+function budgetState(summary: SpendSummary): { tone: Tone; key: MessageKey } {
+  if (summary.monthly_limit_micros === null) return { tone: "warn", key: "spend.state.noBudget" };
+  if (summary.exhausted) return { tone: "down", key: "spend.state.exhausted" };
+  if (summary.consumed_micros >= summary.monthly_limit_micros) {
+    return { tone: "warn", key: "spend.state.overLimitMonitored" };
+  }
+  return (usedRatio(summary) ?? 0) >= 0.8
+    ? { tone: "warn", key: "spend.state.approaching" }
+    : { tone: "up", key: "spend.state.withinBudget" };
+}
+
+function SpendMeter({ ui, summary }: { ui: Ui; summary: SpendSummary }) {
   const ratio = usedRatio(summary);
   if (ratio === null || summary.monthly_limit_micros === null) return null;
   const state = budgetState(summary);
-  return <div className="spend-meter">
+  return <div>
     <div
-      className={"spend-meter-track " + state.tone}
+      className={"meter-track tone-" + state.tone}
       role="meter"
       aria-valuemin={0}
       aria-valuemax={summary.monthly_limit_micros}
       aria-valuenow={Math.min(summary.consumed_micros, summary.monthly_limit_micros)}
-      aria-valuetext={`${formatUnits(summary.consumed_micros)} of ${formatUnits(summary.monthly_limit_micros)} units used`}
-    >
-      <span className="spend-meter-fill" style={{ width: (ratio * 100).toFixed(1) + "%" }}/>
-    </div>
-    <p className="notice">{(ratio * 100).toFixed(1)}% of the monthly limit used this period.</p>
+      aria-valuetext={ui.t("spend.meterText", {
+        consumed: units(summary.consumed_micros, ui),
+        limit: units(summary.monthly_limit_micros, ui),
+      })}
+    ><span className="meter-fill" style={{ width: (ratio * 100).toFixed(1) + "%" }}/></div>
+    <p className="notice">{ui.t("spend.meterCaption", {
+      percent: formatPercent(ratio, ui.locale),
+    })}</p>
   </div>;
-}
-
-function Errors({ query }: { query: { budget_error?: string } }) {
-  const messages: Record<string, string> = {
-    invalid: "Enter an amount between 0 and 1,000,000,000 units with at most six decimals.",
-    thresholds: "Choose at most five alert thresholds between 1 and 100 percent.",
-    forbidden: "Only workspace owners and admins can change the budget.",
-    failed: "The budget could not be saved. Check your current access and try again.",
-  };
-  const message = query.budget_error ? messages[query.budget_error] ?? messages.failed : null;
-  return message ? <p role="alert">{message}</p> : null;
 }
 
 export default async function Spend({ params, searchParams }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ cursor?: string; category?: string; saved?: string; budget_error?: string }>;
+  searchParams: Promise<{
+    cursor?: string; category?: string; saved?: string; budget_error?: string;
+  }>;
 }) {
-  const { id } = await params;
-  const query = await searchParams;
+  const [{ id }, query] = await Promise.all([params, searchParams]);
   const session = await currentSession();
   if (!session) redirect("/login");
 
   const category = query.category ? spendCategorySchema.safeParse(query.category) : null;
+  const root = `/workspaces/${id}/spend`;
+  let chrome = await consoleChrome(session);
   if (!z.uuid().safeParse(id).success
     || (query.cursor !== undefined && !z.uuid().safeParse(query.cursor).success)
     || (category !== null && !category.success)) {
-    return <section className="workspace-content"><h1>Invalid spend link</h1>
-      <p role="alert">The requested identifier, filter or page cursor is invalid.</p>
-      <a href="/workspaces">Back to workspaces</a></section>;
+    return <InvalidLinkPage chrome={chrome} back={{
+      href: `/workspaces/${id}`, label: chrome.ui.t("errors.backToWorkspace"),
+    }}/>;
   }
-
-  const root = `/workspaces/${id}/spend`;
   const filter = category?.success ? `&category=${category.data}` : "";
+
   try {
     const workspace = await api(session, `/api/v1/workspaces/${id}`, workspaceSchema);
+    chrome = await consoleChrome(session, workspace);
+    const { ui } = chrome;
     const summary = await api(session, `/api/v1/workspaces/${id}/spend`, spendSummarySchema);
     const records = await api(
       session,
-      `/api/v1/workspaces/${id}/spend/records?limit=25${filter}${query.cursor ? "&cursor=" + query.cursor : ""}`,
+      `/api/v1/workspaces/${id}/spend/records?limit=25${filter}`
+        + (query.cursor ? "&cursor=" + query.cursor : ""),
       spendRecordPageSchema,
     );
     const state = budgetState(summary);
     const calls = summary.categories.reduce((total, row) => total + row.call_count, 0);
     const canManage = workspace.role !== "member";
+    const separator = decimalSeparator(ui.locale);
+    const period = `${formatDate(summary.period_start, ui.locale)} – `
+      + `${new Intl.DateTimeFormat(ui.tag, { dateStyle: "medium", timeZone: "UTC" })
+        .format(periodLastDay(summary))} UTC`;
 
-    return <section className="workspace-content evaluation-content">
-      <a href={`/workspaces/${id}`}>← {workspace.name}</a>
-      <p className="eyebrow">COST / CURRENT PERIOD</p><h1>Spend and budget</h1>
-      <p className="intro">
-        Model spend recorded by the worker for {spendPeriod(summary)}.
-      </p>
-      <p className="notice">
-        Amounts are accounting units of your operator&apos;s currency, stored exactly as
-        millionths (micros) and priced when each call was made. Model generation, quality
-        judging and retrieval or ingestion embeddings are all metered here.
-      </p>
+    return <ConsoleShell
+      chrome={chrome}
+      active="spend"
+      breadcrumb={<ConsoleBreadcrumb
+        ui={ui} workspace={workspace} trail={[{ href: root, label: ui.t("navigation.spend") }]}
+      />}
+    >
+      <PageHeader
+        eyebrow={ui.t("spend.eyebrow")}
+        title={ui.t("spend.title")}
+        intro={ui.t("spend.intro", { period })}
+      />
+      <Hint>{ui.t("spend.accountingNotice")}</Hint>
+      <Saved message={query.saved === "budget" ? ui.t("spend.saved") : null}/>
+      <Failed message={query.budget_error
+        ? ui.t(MESSAGES[query.budget_error] ?? MESSAGES.failed, {
+          min: formatNumber(0, ui.locale),
+          max: formatNumber(MAX_LIMIT_UNITS, ui.locale),
+          decimals: formatNumber(LIMIT_DECIMALS, ui.locale),
+        })
+        : null}/>
 
-      {query.saved === "budget" && <p role="status">The budget was saved.</p>}
-      <Errors query={query}/>
-
-      <div className="card spend-panel">
-        <p className={"state " + state.tone}>{state.label}</p>
-        <dl className="eval-counts spend-counts">
-          <div><dt>Consumed</dt><dd>{formatUnits(summary.consumed_micros)}</dd></div>
-          <div><dt>Monthly limit</dt>
-            <dd>{summary.monthly_limit_micros === null ? "—" : formatUnits(summary.monthly_limit_micros)}</dd></div>
-          <div><dt>Remaining</dt>
-            <dd>{summary.remaining_micros === null ? "—" : formatUnits(summary.remaining_micros)}</dd></div>
-          <div><dt>Priced calls</dt><dd>{calls}</dd></div>
-        </dl>
-        <SpendMeter summary={summary}/>
-        <p className="notice">Exact recorded total: {formatMicros(summary.consumed_micros)}.</p>
-        {summary.exhausted && <p role="alert">
-          New model calls in this workspace are refused until the next period or a higher limit.
-          Agent runs fail with <code>workspace_budget_exhausted</code> before reaching a provider.
-        </p>}
-        {summary.enforcement === "monitor" && <p className="notice">
-          Enforcement is set to monitor: spend is recorded and reported, but no call is blocked.
-        </p>}
-        {summary.monthly_limit_micros === null && <p className="notice">
-          No budget is set. Spend is recorded but nothing stops this workspace from spending more.
-        </p>}
-        {summary.alerts.length > 0 && <div className="spend-alerts">
-          <h2>Thresholds reached this period</h2>
-          <ul>{summary.alerts.map(alert => <li key={alert.threshold_percent}>
-            <strong>{alert.threshold_percent}%</strong> reached at{" "}
-            {formatUnits(alert.consumed_micros)} of {formatUnits(alert.monthly_limit_micros)} units
-            {" · "}<time dateTime={alert.created_at}>{spendTimestamp(alert.created_at)}</time>
-          </li>)}</ul>
-          <p className="notice">
-            Each threshold is recorded once per period, when the spend that crossed it was
-            committed. Changing the budget later does not rewrite what was already reached.
-          </p>
+      <Panel label={ui.t("spend.summaryLabel")} testId="spend-summary">
+        <StatusBadge tone={state.tone}>{ui.t(state.key)}</StatusBadge>
+        <Metrics>
+          <Metric label={ui.t("spend.consumed")} value={units(summary.consumed_micros, ui)}/>
+          <Metric label={ui.t("spend.monthlyLimit")} value={summary.monthly_limit_micros === null
+            ? ui.t("common.empty") : units(summary.monthly_limit_micros, ui)}/>
+          <Metric label={ui.t("spend.remaining")} value={summary.remaining_micros === null
+            ? ui.t("common.empty") : units(summary.remaining_micros, ui)}/>
+          <Metric label={ui.t("spend.pricedCalls")} value={formatNumber(calls, ui.locale)}/>
+        </Metrics>
+        <SpendMeter ui={ui} summary={summary}/>
+        {/* The rounded summary above and the exact recorded total are both shown, so a
+            display rounding can never be mistaken for the ledger. */}
+        <Hint>{ui.t("spend.exactTotal", {
+          micros: ui.t("format.microsUnit", {
+            value: formatNumber(summary.consumed_micros, ui.locale),
+          }),
+        })}</Hint>
+        {summary.exhausted
+          && <Notice live="alert" tone="danger">{ui.t("spend.exhaustedNotice")}</Notice>}
+        {summary.enforcement === "monitor" && <Hint>{ui.t("spend.monitorNotice")}</Hint>}
+        {summary.monthly_limit_micros === null && <Hint>{ui.t("spend.noBudgetNotice")}</Hint>}
+        {summary.alerts.length > 0 && <div className="stack" data-testid="spend-alerts">
+          <h3 className="section-title">{ui.t("spend.alertsTitle")}</h3>
+          <ul className="notice" style={{ paddingInlineStart: "20px" }}>
+            {summary.alerts.map(alert => <li key={alert.threshold_percent}>
+              {ui.t("spend.alertEntry", {
+                percent: formatIntegerPercent(alert.threshold_percent, ui.locale),
+                consumed: units(alert.consumed_micros, ui),
+                limit: units(alert.monthly_limit_micros, ui),
+              })}
+              {" · "}
+              <time dateTime={alert.created_at}>
+                {formatTimestamp(alert.created_at, ui.locale)}</time>
+            </li>)}
+          </ul>
+          <Hint>{ui.t("spend.alertsNotice")}</Hint>
         </div>}
         {summary.monthly_limit_micros !== null && summary.alert_thresholds.length === 0
-          && <p className="notice">
-            No alert thresholds are set, so this workspace reaches its limit without warning.
-          </p>}
-      </div>
+          && <Hint>{ui.t("spend.noThresholdsNotice")}</Hint>}
+      </Panel>
 
-      <h2 className="eval-section-title">Where it went</h2>
+      <SectionHead title={ui.t("spend.categoriesTitle")}/>
       {summary.categories.length === 0
-        ? <div className="empty"><h3>No priced model calls this period</h3>
-          <p>Costs appear here once the worker records a priced provider call for this workspace.</p></div>
-        : <table className="spend-table spend-categories">
-          <caption>Recorded spend by category for the current period.</caption>
+        ? <EmptyState title={ui.t("spend.categoriesEmptyTitle")}>
+          <p>{ui.t("spend.categoriesEmptyBody")}</p>
+        </EmptyState>
+        : <div className="table-scroll"><table className="table" data-testid="spend-categories">
+          <caption>{ui.t("spend.categoriesCaption")}</caption>
           <thead><tr>
-            <th scope="col">Category</th><th scope="col">Calls</th>
-            <th scope="col">Input tokens</th><th scope="col">Output tokens</th><th scope="col">Cost</th>
+            <th scope="col">{ui.t("spend.column.category")}</th>
+            <th scope="col">{ui.t("spend.column.calls")}</th>
+            <th scope="col">{ui.t("spend.column.inputTokens")}</th>
+            <th scope="col">{ui.t("spend.column.outputTokens")}</th>
+            <th scope="col">{ui.t("spend.column.cost")}</th>
           </tr></thead>
           <tbody>{summary.categories.map(row => <tr key={row.category}>
-            <th scope="row">{CATEGORY_LABELS[row.category]}</th>
-            <td data-label="Calls">{row.call_count}</td>
-            <td data-label="Input tokens">{row.input_tokens.toLocaleString("en-GB")}</td>
-            <td data-label="Output tokens">{row.output_tokens.toLocaleString("en-GB")}</td>
-            <td data-label="Cost">{formatUnits(row.cost_micros)}</td>
+            <th scope="row" data-label={ui.t("spend.column.category")}>
+              {ui.t(categoryKey(row.category))}</th>
+            <td data-label={ui.t("spend.column.calls")}>
+              {formatNumber(row.call_count, ui.locale)}</td>
+            <td data-label={ui.t("spend.column.inputTokens")}>
+              {formatNumber(row.input_tokens, ui.locale)}</td>
+            <td data-label={ui.t("spend.column.outputTokens")}>
+              {formatNumber(row.output_tokens, ui.locale)}</td>
+            <td data-label={ui.t("spend.column.cost")}>{units(row.cost_micros, ui)}</td>
           </tr>)}</tbody>
-        </table>}
+        </table></div>}
 
-      <h2 className="eval-section-title">Monthly budget</h2>
-      {canManage
-        ? <form className="workspace-form spend-form" action="/workspaces/spend/budget" method="post">
-          <p>
-            The worker checks the remaining budget before each provider call. The call that
-            crosses the limit is the last one allowed, so concurrent runs can overshoot slightly.
-          </p>
-          <input type="hidden" name="csrf" value={session.csrf}/>
-          <input type="hidden" name="workspace" value={id}/>
-          <label htmlFor="limit">Monthly limit (accounting units)</label>
-          <input
-            id="limit" name="limit" required inputMode="decimal" autoComplete="off"
-            pattern="\d{1,10}([.,]\d{1,6})?"
-            defaultValue={microsToUnits(summary.monthly_limit_micros ?? 0)}
-            aria-describedby="limit-help"
-          />
-          <p id="limit-help" className="notice">
-            Up to six decimals. A limit of 0 with enforcement stops every model call in this
-            workspace, including quality judges.
-          </p>
-          <fieldset className="spend-thresholds">
-            <legend>Alert thresholds</legend>
-            <p className="notice">
-              Each selected percentage is recorded once per period when spend reaches it.
-              Alerts never block a call; enforcement does that.
-            </p>
-            {offeredThresholds(summary.alert_thresholds).map(percent => <label
-              key={percent}
-              className="spend-threshold"
-              htmlFor={`threshold-${percent}`}
-            >
-              <input
-                type="checkbox"
-                id={`threshold-${percent}`}
-                name="threshold"
-                value={percent}
-                defaultChecked={summary.alert_thresholds.includes(percent)}
-              />
-              {percent}% of the limit
-            </label>)}
-          </fieldset>
-          <label htmlFor="enforcement">Enforcement</label>
-          <select id="enforcement" name="enforcement" defaultValue={summary.enforcement ?? "enforce"}>
-            <option value="enforce">Enforce · refuse calls once the limit is reached</option>
-            <option value="monitor">Monitor · record spend without blocking</option>
-          </select>
-          <button type="submit">Save budget</button>
-        </form>
-        : <p className="notice">
-          You have read-only access to this workspace. Only owners and admins can change the budget.
-        </p>}
+      <Reveal>
+        <Panel labelledBy="budget-title">
+          <h2 id="budget-title" className="section-title">{ui.t("spend.budgetTitle")}</h2>
+          {canManage
+            ? <form className="form" action="/workspaces/spend/budget" method="post">
+              <Hint>{ui.t("spend.budgetNotice")}</Hint>
+              <input type="hidden" name="csrf" value={session.csrf}/>
+              <input type="hidden" name="workspace" value={id}/>
+              <Field
+                id="limit"
+                label={ui.t("spend.limitLabel")}
+                help={ui.t("spend.limitHelp", {
+                  decimals: formatNumber(LIMIT_DECIMALS, ui.locale), separator,
+                })}
+              >
+                <input
+                  className="field-control" id="limit" name="limit" required inputMode="decimal"
+                  autoComplete="off" pattern="\d{1,10}([.,]\d{1,6})?"
+                  defaultValue={toLimitInput(
+                    microsToUnits(summary.monthly_limit_micros ?? 0), ui.locale,
+                  )}
+                  aria-describedby="limit-help"
+                />
+              </Field>
+              <fieldset className="bordered">
+                <legend>{ui.t("spend.thresholdsLegend")}</legend>
+                <Hint>{ui.t("spend.thresholdsNotice")}</Hint>
+                <div className="choice-list">
+                  {offeredThresholds(summary.alert_thresholds).map(percent => <label
+                    key={percent} className="choice" htmlFor={`threshold-${percent}`}
+                  >
+                    <input
+                      type="checkbox" id={`threshold-${percent}`} name="threshold"
+                      value={percent} defaultChecked={summary.alert_thresholds.includes(percent)}
+                    />
+                    {ui.t("spend.thresholdOption", {
+                      percent: formatIntegerPercent(percent, ui.locale),
+                    })}
+                  </label>)}
+                </div>
+              </fieldset>
+              <Field id="enforcement" label={ui.t("spend.enforcementLabel")}>
+                <select
+                  className="field-control" id="enforcement" name="enforcement"
+                  defaultValue={summary.enforcement ?? "enforce"}
+                >
+                  <option value="enforce">{ui.t("spend.enforce")}</option>
+                  <option value="monitor">{ui.t("spend.monitor")}</option>
+                </select>
+              </Field>
+              <div><button type="submit" className="button">{ui.t("spend.saveBudget")}</button></div>
+            </form>
+            : <Hint>{ui.t("spend.readOnlyNotice")}</Hint>}
+        </Panel>
+      </Reveal>
 
-      <h2 className="eval-section-title">Priced calls</h2>
-      <nav className="spend-filters" aria-label="Filter priced calls">
-        <a href={root} aria-current={category === null ? "page" : undefined}>All</a>
-        {spendCategorySchema.options.map(option => <a
+      <SectionHead title={ui.t("spend.ledgerTitle")}/>
+      <Filters label={ui.t("spend.ledgerFilterLabel")}>
+        <FilterLink href={root} current={category === null}>{ui.t("common.all")}</FilterLink>
+        {spendCategorySchema.options.map(option => <FilterLink
           key={option}
           href={`${root}?category=${option}`}
-          aria-current={category?.success && category.data === option ? "page" : undefined}
-        >{CATEGORY_LABELS[option]}</a>)}
-      </nav>
+          current={Boolean(category?.success && category.data === option)}
+        >{ui.t(categoryKey(option))}</FilterLink>)}
+      </Filters>
       {records.items.length === 0
-        ? <div className="empty"><h3>No priced calls on this page</h3>
-          <p>Each recorded call appears here with the work that produced it.</p></div>
-        : <table className="spend-table spend-ledger">
-          <caption>Every priced call, newest first. Each row is written once and never changed.</caption>
+        ? <EmptyState title={ui.t("spend.ledgerEmptyTitle")}>
+          <p>{ui.t("spend.ledgerEmptyBody")}</p>
+        </EmptyState>
+        : <div className="table-scroll"><table className="table" data-testid="spend-ledger">
+          <caption>{ui.t("spend.ledgerCaption")}</caption>
           <thead><tr>
-            <th scope="col">Recorded</th><th scope="col">Category</th><th scope="col">Model</th>
-            <th scope="col">Tokens</th><th scope="col">Cost</th><th scope="col">Source</th>
+            <th scope="col">{ui.t("spend.column.recorded")}</th>
+            <th scope="col">{ui.t("spend.column.category")}</th>
+            <th scope="col">{ui.t("spend.column.model")}</th>
+            <th scope="col">{ui.t("spend.column.tokens")}</th>
+            <th scope="col">{ui.t("spend.column.cost")}</th>
+            <th scope="col">{ui.t("spend.column.source")}</th>
           </tr></thead>
           <tbody>{records.items.map(record => <tr key={record.id}>
-            <td data-label="Recorded">
-              <time dateTime={record.occurred_at}>{spendTimestamp(record.occurred_at)}</time></td>
-            <td data-label="Category">{CATEGORY_LABELS[record.category]}</td>
-            <td data-label="Model">{record.provider}/{record.model}</td>
-            <td data-label="Tokens">{(record.input_tokens + record.output_tokens).toLocaleString("en-GB")}</td>
-            <td data-label="Cost">{formatUnits(record.cost_micros)}</td>
-            <td data-label="Source"><code>{record.source_key}</code></td>
+            <td data-label={ui.t("spend.column.recorded")}>
+              <time dateTime={record.occurred_at}>
+                {formatTimestamp(record.occurred_at, ui.locale)}</time></td>
+            <td data-label={ui.t("spend.column.category")}>{ui.t(categoryKey(record.category))}</td>
+            <td data-label={ui.t("spend.column.model")}>
+              <code>{record.provider}/{record.model}</code></td>
+            <td data-label={ui.t("spend.column.tokens")}>
+              {formatNumber(record.input_tokens + record.output_tokens, ui.locale)}</td>
+            <td data-label={ui.t("spend.column.cost")}>{units(record.cost_micros, ui)}</td>
+            <td data-label={ui.t("spend.column.source")}><code>{record.source_key}</code></td>
           </tr>)}</tbody>
-        </table>}
-      <nav className="pagination" aria-label="Priced call pages">
-        {query.cursor && <a href={root + (filter ? "?" + filter.slice(1) : "")}>Newest calls</a>}
-        {records.next_cursor && <a
-          href={`${root}?cursor=${records.next_cursor}${filter}`}
-        >Older calls →</a>}
-      </nav>
-    </section>;
+        </table></div>}
+
+      <Pagination
+        label={ui.t("spend.pagesLabel")}
+        previous={query.cursor
+          ? {
+            href: root + (filter ? "?" + filter.slice(1) : ""), label: ui.t("spend.newestCalls"),
+          }
+          : null}
+        next={records.next_cursor
+          ? {
+            href: `${root}?cursor=${records.next_cursor}${filter}`,
+            label: ui.t("spend.olderCalls"),
+          }
+          : null}
+      />
+    </ConsoleShell>;
   } catch (error) {
-    if (error instanceof ApiError && error.status === 401) redirect("/login?error=session_expired");
-    const denied = error instanceof ApiError && [403, 404].includes(error.status);
-    return <section className="workspace-content evaluation-content">
-      <h1>{denied ? "Spend not found or access denied" : "Spend unavailable"}</h1>
-      <p role="alert">{denied
-        ? "Check your workspace access and try again."
-        : "The spend service could not be reached. Try again shortly."}</p>
-      <a href={`/workspaces/${id}`}>Back to workspace</a>
-    </section>;
+    return <ConsoleProblem
+      chrome={chrome} error={error} area={chrome.ui.t("spend.area")} active="spend"
+      back={{ href: `/workspaces/${id}`, label: chrome.ui.t("errors.backToWorkspace") }}
+    />;
   }
 }
