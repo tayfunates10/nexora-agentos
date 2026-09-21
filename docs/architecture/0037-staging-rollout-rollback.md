@@ -23,15 +23,15 @@ Before mutation the runner:
 2. refuses a staging baseline that is not itself digest pinned;
 3. verifies the Kubernetes identity can only perform the deployment/read operations the drill
    needs;
-4. performs a server-side dry run of each candidate image patch.
+4. performs a server-side dry run for each candidate image patch that would change a workload.
 
 The acceptance sequence is then:
 
-1. patch API, worker and web to the candidate digests;
-2. wait for all three Kubernetes rollouts;
+1. patch each changed API, worker or web workload to its candidate digest;
+2. wait for every changed Kubernetes rollout;
 3. run the deployed staging E2E smoke from ADR 0036;
-4. execute `kubectl rollout undo` for all three deployments;
-5. wait for all rollback rollouts;
+4. execute `kubectl rollout undo` only for workloads changed by the drill;
+5. wait for every resulting rollback rollout;
 6. prove each workload returned to the exact image reference captured before the drill;
 7. run the deployed staging E2E smoke again against the rolled-back release.
 
