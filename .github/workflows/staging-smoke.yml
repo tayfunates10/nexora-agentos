@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: staging-e2e-smoke
+  group: staging-acceptance
   cancel-in-progress: false
 
 jobs:
