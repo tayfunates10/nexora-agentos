@@ -108,9 +108,9 @@ authoritative per-run evidence.
 ## Boundaries and follow-up
 
 This gate does not deploy to staging, mutate Kubernetes images, or execute rollback. Deployment and
-rollback need cluster credentials and environment ownership that remain outside the repository's
-release workflow. A separate rollout/rollback acceptance gate is the next production-readiness
-increment.
+rollback need cluster credentials and environment ownership that remain outside the release
+workflow. The protected staging-only rollout/rollback acceptance gate is defined separately in
+ADR 0037 and deliberately restores the pre-drill release rather than promoting a candidate.
 
 ## Skills applied
 
