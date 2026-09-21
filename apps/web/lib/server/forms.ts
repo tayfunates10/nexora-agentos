@@ -1,6 +1,11 @@
 import "server-only";
 // Bound URL-encoded form bodies even when Content-Length is absent or misleading.
-export async function readForm(request: Request): Promise<URLSearchParams> {
+// Settings forms keep the small default; a form that carries agent instructions or a
+// knowledge document states its own bound, which still has to be an explicit number.
+export const SMALL_FORM_BYTES = 4096;
+export const TEXT_FORM_BYTES = 262_144;
+
+export async function readForm(request: Request, maxBytes = SMALL_FORM_BYTES): Promise<URLSearchParams> {
   if (!request.headers.get("content-type")?.startsWith("application/x-www-form-urlencoded")) throw new Error("Invalid form");
   const reader = request.body?.getReader();
   if (!reader) throw new Error("Missing form");
@@ -8,7 +13,7 @@ export async function readForm(request: Request): Promise<URLSearchParams> {
   try {
     while (true) {
       const { value, done } = await reader.read(); if (done) break;
-      size += value.length; if (size > 4096) { await reader.cancel(); throw new Error("Form too large"); }
+      size += value.length; if (size > maxBytes) { await reader.cancel(); throw new Error("Form too large"); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }

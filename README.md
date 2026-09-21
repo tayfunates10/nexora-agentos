@@ -210,6 +210,14 @@ path now separates migration, API and worker PostgreSQL identities with reviewed
 
 ## Agent definitions, durable runs and worker orchestration
 
+The workspace panel links to **Agents** and **Agent runs**. Owners and admins create agents there;
+any member can start a run from an agent, follow its status and event timeline, read their own
+result and cancel a run that has not finished. The start form carries a per-render idempotency
+key, so a double submit returns the existing run instead of starting a second one. Run history
+filters by status and by the runs you started. The browser never receives the API token, and the
+console shows four distinct result states: not terminal yet, no publishable result, not yours to
+read, and the answer itself. See [ADR 0039](docs/architecture/0039-agent-operations-console.md).
+
 Owners and admins can create agent definitions. Any current workspace member can start a run.
 Run creation requires an `Idempotency-Key`; replaying the same request returns the existing run
 instead of duplicating work. The initial run, append-only event, security audit and outbox job

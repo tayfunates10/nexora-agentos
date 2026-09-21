@@ -5,7 +5,7 @@ import type { startProvider } from "./fixtures/provider.ts";
 export async function checkEvaluations(page: Page, provider: Awaited<ReturnType<typeof startProvider>>, detailUrl: string) {
   const workspace = [...provider.workspaces.values()][0];
   const root = detailUrl + "/evaluations";
-  await page.getByRole("link", { name: "Browse evaluation suites" }).click();
+  await page.getByRole("link", { name: "Evaluation suites →" }).click();
   await expect(page.getByRole("heading", { name: "No evaluation suites on this page" })).toBeVisible();
   const suiteId = randomUUID(), firstCase = randomUUID(), secondCase = randomUUID();
   provider.evalSuites.set(suiteId, {

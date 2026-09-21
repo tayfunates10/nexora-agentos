@@ -1,6 +1,7 @@
 import { chromium, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { startProvider } from "./fixtures/provider.ts";
+import { checkAgentRuns } from "./agent-browser.ts";
 import { checkEvaluations } from "./evaluation-browser.ts";
 import { checkSpend } from "./spend-browser.ts";
 
@@ -50,6 +51,7 @@ try {
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     await page.screenshot({ path: `/tmp/nexora-workspace-${width}.png`, fullPage: true });
   }
+  await checkAgentRuns(page, provider, detailUrl);
   await checkEvaluations(page, provider, detailUrl);
   await checkSpend(page, provider, detailUrl);
   const workspace = [...provider.workspaces.values()][0]; workspace.role = "member";
@@ -62,7 +64,7 @@ try {
   await context.addCookies([session!]);
   await page.goto(origin + "/workspaces");
   await expect(page).toHaveURL(origin + "/login");
-  console.log("Browser flow passed: OIDC sign-in, create, rename, membership, CSRF, spend and budget console, responsive layouts, role UI and logout replay rejection");
+  console.log("Browser flow passed: OIDC sign-in, create, rename, membership, CSRF, agent and run console, spend and budget console, responsive layouts, role UI and logout replay rejection");
 } finally {
   await browser?.close(); child.kill("SIGTERM"); await provider.close();
 }

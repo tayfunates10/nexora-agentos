@@ -12,8 +12,15 @@ export default async function WorkspaceDetail({ params, searchParams }: { params
   catch (error) { if (error instanceof ApiError && error.status === 401) redirect("/login?error=session_expired");
     return <section><h1>{error instanceof ApiError && [403,404].includes(error.status) ? "Workspace not found or access denied" : "Workspace unavailable"}</h1><a href="/workspaces">Back to workspaces</a></section>; }
   return <section className="workspace-content"><a href="/workspaces">← All workspaces</a><h1>{workspace.name}</h1><p className="badge">Your role: {workspace.role}</p>
-    <p><a href={`/workspaces/${id}/evaluations`}>Browse evaluation suites →</a></p>
-    <p><a href={`/workspaces/${id}/spend`}>Review spend and budget →</a></p>
+    <div className="grid console-links">{[
+      { slug: "agents", name: "Agents", detail: "Define agents and start runs." },
+      { slug: "runs", name: "Agent runs", detail: "Follow execution, events and results." },
+      { slug: "evaluations", name: "Evaluation suites", detail: "Compare versioned quality results." },
+      { slug: "spend", name: "Spend and budget", detail: "Track model cost and set the cap." },
+    ].map(area => <article className="card" key={area.slug}>
+      <h2><a href={`/workspaces/${id}/${area.slug}`}>{area.name} →</a></h2>
+      <p>{area.detail}</p>
+    </article>)}</div>
     {query.error && <p role="alert">The change could not be saved. Check your inputs and permissions.</p>}
     {query.saved && <p role="status">Your changes were saved.</p>}
     {workspace.role !== "member" && <form className="workspace-form" action="/workspaces/mutate" method="post"><h2>Workspace settings</h2><input type="hidden" name="csrf" value={session.csrf}/><input type="hidden" name="workspace" value={id}/><input type="hidden" name="operation" value="rename"/><label htmlFor="name">Workspace name</label><input id="name" name="name" defaultValue={workspace.name} required maxLength={100}/><button type="submit">Save name</button></form>}
