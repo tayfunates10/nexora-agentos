@@ -9,4 +9,4 @@ resources:
 images:
   - name: nexora/api
     newName: ghcr.io/tayfunates10/nexora-api
-    digest: sha256:ac20c6b03793e1eb4f605c1112939aac594ebfac00af91e51c9b565c86498de3
+    digest: sha256:2547fe9868154f271734695e9135333f4628c2b75e82a0694960beffcfdcb079

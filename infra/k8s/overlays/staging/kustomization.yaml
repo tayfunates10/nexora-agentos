@@ -10,10 +10,10 @@ resources:
 images:
   - name: nexora/api
     newName: ghcr.io/tayfunates10/nexora-api
-    digest: sha256:ac20c6b03793e1eb4f605c1112939aac594ebfac00af91e51c9b565c86498de3
+    digest: sha256:2547fe9868154f271734695e9135333f4628c2b75e82a0694960beffcfdcb079
   - name: nexora/web
     newName: ghcr.io/tayfunates10/nexora-web
-    digest: sha256:a60230ac8ac6ebac52b203c16098ca288cd3d25a7caa6fc644d51eaa37642f15
+    digest: sha256:67127139f7ac87c0f15e96b4808dcb05e9b31e07f3b82aa58c00a29ac9f875bd
 # One replica each: staging proves a release, it does not serve traffic that needs
 # headroom. The API autoscaler is removed so this count is what actually runs.
 replicas:
