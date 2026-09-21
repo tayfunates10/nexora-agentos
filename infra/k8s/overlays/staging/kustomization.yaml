@@ -1,0 +1,58 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Staging runs the same manifests as production in its own namespace, so a rollout
+# here exercises the real security context, network policy and probes.
+namespace: nexora-staging
+resources:
+  - ../../base
+# The exact artifact CI published, pinned by digest like production. Update it with
+# scripts/promote_release.py --overlay infra/k8s/overlays/staging/kustomization.yaml
+images:
+  - name: nexora/api
+    newName: ghcr.io/tayfunates10/nexora-api
+    digest: sha256:ac20c6b03793e1eb4f605c1112939aac594ebfac00af91e51c9b565c86498de3
+  - name: nexora/web
+    newName: ghcr.io/tayfunates10/nexora-web
+    digest: sha256:a60230ac8ac6ebac52b203c16098ca288cd3d25a7caa6fc644d51eaa37642f15
+# One replica each: staging proves a release, it does not serve traffic that needs
+# headroom. The API autoscaler is removed so this count is what actually runs.
+replicas:
+  - name: nexora-api
+    count: 1
+  - name: nexora-web
+    count: 1
+  - name: nexora-worker
+    count: 1
+patches:
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: nexora-api
+    patch: |
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: nexora-api
+      $patch: delete
+  # A single-replica workload behind minAvailable: 1 cannot be drained at all, which
+  # would block ordinary node maintenance for an environment that may be disrupted.
+  - target:
+      kind: PodDisruptionBudget
+      name: nexora-api
+    patch: |
+      - op: replace
+        path: /spec/minAvailable
+        value: 0
+  - target:
+      kind: PodDisruptionBudget
+      name: nexora-web
+    patch: |
+      - op: replace
+        path: /spec/minAvailable
+        value: 0
+  - target:
+      kind: ConfigMap
+      name: nexora-config
+    patch: |
+      - op: replace
+        path: /data/NEXORA_OTEL_SAMPLE_RATIO
+        value: "1.0"

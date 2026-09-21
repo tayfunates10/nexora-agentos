@@ -1,0 +1,86 @@
+name: Deploy Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_digest:
+        description: Immutable nexora-api digest the staging overlay pins (sha256:...)
+        required: true
+        type: string
+      web_digest:
+        description: Immutable nexora-web digest the staging overlay pins (sha256:...)
+        required: true
+        type: string
+      run_migrations:
+        description: Apply and await the schema migration Job before the rollout
+        required: true
+        type: boolean
+        default: true
+      run_smoke:
+        description: Run the deployed staging smoke after the rollout
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # A deploy, a smoke and the rollback drill all mutate or read the same environment.
+  group: staging-acceptance
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Configure least-privilege staging context
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.NEXORA_STAGING_KUBECONFIG }}
+        run: |
+          set -euo pipefail
+          test -n "$KUBECONFIG_CONTENT"
+          umask 077
+          printf '%s' "$KUBECONFIG_CONTENT" > "$RUNNER_TEMP/nexora-staging-kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/nexora-staging-kubeconfig" >> "$GITHUB_ENV"
+          kubectl version --client
+      - name: Deploy the pinned release
+        env:
+          API_REPOSITORY: ${{ vars.NEXORA_STAGING_API_IMAGE }}
+          WEB_REPOSITORY: ${{ vars.NEXORA_STAGING_WEB_IMAGE }}
+          API_DIGEST: ${{ inputs.api_digest }}
+          WEB_DIGEST: ${{ inputs.web_digest }}
+          NAMESPACE: ${{ vars.NEXORA_STAGING_NAMESPACE || 'nexora-staging' }}
+          SKIP_MIGRATIONS: ${{ inputs.run_migrations && '' || '--skip-migrations' }}
+        run: |
+          set -euo pipefail
+          test -n "$API_REPOSITORY"
+          test -n "$WEB_REPOSITORY"
+          python scripts/deploy_staging.py \
+            --api-image "$API_REPOSITORY@$API_DIGEST" \
+            --web-image "$WEB_REPOSITORY@$WEB_DIGEST" \
+            --namespace "$NAMESPACE" \
+            $SKIP_MIGRATIONS
+      - name: Prove the deployed environment end to end
+        if: inputs.run_smoke
+        env:
+          NEXORA_STAGING_API_URL: ${{ vars.NEXORA_STAGING_API_URL }}
+          NEXORA_STAGING_WORKER_ADMIN_URL: ${{ vars.NEXORA_STAGING_WORKER_ADMIN_URL }}
+          NEXORA_STAGING_WORKSPACE_ID: ${{ vars.NEXORA_STAGING_WORKSPACE_ID }}
+          NEXORA_STAGING_AGENT_ID: ${{ vars.NEXORA_STAGING_AGENT_ID }}
+          NEXORA_STAGING_PROMPT: ${{ vars.NEXORA_STAGING_PROMPT }}
+          NEXORA_STAGING_EXPECT_TEXT: ${{ vars.NEXORA_STAGING_EXPECT_TEXT }}
+          NEXORA_STAGING_REQUIRE_RETRIEVAL: 'false'
+          NEXORA_STAGING_REQUIRE_OBSERVABILITY: 'true'
+          NEXORA_STAGING_ACCESS_TOKEN: ${{ secrets.NEXORA_STAGING_ACCESS_TOKEN }}
+          NEXORA_STAGING_METRICS_TOKEN: ${{ secrets.NEXORA_STAGING_METRICS_TOKEN }}
+        run: python scripts/staging_smoke.py
+      - name: Remove staging kubeconfig
+        if: always()
+        run: rm -f "${KUBECONFIG:-$RUNNER_TEMP/nexora-staging-kubeconfig}"

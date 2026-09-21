@@ -194,6 +194,43 @@ def test_production_overlay_pins_images_by_digest():
         assert "newTag" not in image
 
 
+def test_staging_overlay_pins_one_release_across_workloads_and_migration():
+    """A migration applied by a different build than the code it serves is not a release."""
+    overlays = {
+        name: yaml.safe_load(
+            (MANIFEST_ROOT / "overlays" / "staging" / name / "kustomization.yaml").read_text()
+            if name
+            else (MANIFEST_ROOT / "overlays" / "staging" / "kustomization.yaml").read_text()
+        )
+        for name in ("", "migrate")
+    }
+
+    digests = {}
+    for name, overlay in overlays.items():
+        assert overlay["images"], f"staging {name or 'workloads'} must pin what it deploys"
+        for image in overlay["images"]:
+            assert image["digest"].startswith("sha256:")
+            assert "newTag" not in image
+            digests.setdefault(image["name"], set()).add((image["newName"], image["digest"]))
+
+    assert len(digests["nexora/api"]) == 1, "the migration Job and the workloads disagree"
+    assert set(digests) == {"nexora/api", "nexora/web"}
+
+
+def test_staging_runs_in_its_own_namespace():
+    workloads = yaml.safe_load(
+        (MANIFEST_ROOT / "overlays" / "staging" / "kustomization.yaml").read_text()
+    )
+    migrate = yaml.safe_load(
+        (MANIFEST_ROOT / "overlays" / "staging" / "migrate" / "kustomization.yaml").read_text()
+    )
+    production = yaml.safe_load(
+        (MANIFEST_ROOT / "overlays" / "production" / "kustomization.yaml").read_text()
+    )
+
+    assert workloads["namespace"] == migrate["namespace"] != production["namespace"]
+
+
 def test_worker_shutdown_window_covers_its_configured_grace():
     worker = next(
         document

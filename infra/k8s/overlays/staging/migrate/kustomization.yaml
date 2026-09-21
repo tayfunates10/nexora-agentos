@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The migration Job for staging, applied and awaited before the workload rollout.
+# It carries the same digest as the release it migrates for: a schema change applied
+# by a different build than the one about to serve it is not a release.
+namespace: nexora-staging
+resources:
+  - ../../../migrate
+images:
+  - name: nexora/api
+    newName: ghcr.io/tayfunates10/nexora-api
+    digest: sha256:ac20c6b03793e1eb4f605c1112939aac594ebfac00af91e51c9b565c86498de3
