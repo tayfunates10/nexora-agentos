@@ -323,10 +323,17 @@ Use `/docs` for the full schema. Core endpoints are:
 - `POST /api/v1/workspaces/{workspace_id}/agents`
 - `GET /api/v1/workspaces/{workspace_id}/agents`
 - `POST /api/v1/workspaces/{workspace_id}/runs`
+- `GET /api/v1/workspaces/{workspace_id}/runs` (workspace history, newest first)
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}`
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}/result` (original requester only)
 - `POST /api/v1/workspaces/{workspace_id}/runs/{run_id}/cancel`
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}/events`
+
+Run history is workspace metadata for any current member: status, agent name, attempt count,
+failure code and timestamps, with `limit` (1–100, default 25) and the `next_cursor` returned by
+the preceding page. It accepts `status`, `agent_id` and `requested_by_me` filters. The prompt,
+the answer and the identity of other requesters are never in it — each row only says whether the
+caller started that run. See [ADR 0038](docs/architecture/0038-workspace-run-history.md).
 
 See [ADR 0004](docs/architecture/0004-agent-runs-outbox.md) for persistence/outbox semantics and
 [ADR 0005](docs/architecture/0005-worker-state-machine.md) for worker state transitions,

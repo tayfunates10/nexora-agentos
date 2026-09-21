@@ -8,7 +8,15 @@ from fastapi import HTTPException
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from nexora_api.agents import AgentDefinition, AgentInput, AgentRun, RunEvent, RunInput
+from nexora_api.agents import (
+    AgentDefinition,
+    AgentInput,
+    AgentRun,
+    AgentRunSummary,
+    RunEvent,
+    RunInput,
+    RunStatus,
+)
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.run_results import summarize_result
@@ -52,6 +60,24 @@ class AgentRuntimeRepository:
             trace_id=row["trace_id"],
             status=row["status"],
             attempt_count=row["attempt_count"],
+            cancel_requested_at=row["cancel_requested_at"],
+            finished_at=row["finished_at"],
+            failure_code=row["failure_code"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def run_summary(row) -> AgentRunSummary:
+        return AgentRunSummary(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            agent_id=row["agent_id"],
+            agent_name=row["agent_name"],
+            trace_id=row["trace_id"],
+            status=row["status"],
+            attempt_count=row["attempt_count"],
+            requested_by_me=row["requested_by_me"],
             cancel_requested_at=row["cancel_requested_at"],
             finished_at=row["finished_at"],
             failure_code=row["failure_code"],
@@ -221,6 +247,64 @@ class AgentRuntimeRepository:
             if not row:
                 raise HTTPException(404)
             return self.run(row)
+
+    async def list_runs(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        limit: int,
+        cursor: UUID | None,
+        status: RunStatus | None,
+        agent_id: UUID | None,
+        requested_by_me: bool,
+    ) -> list[AgentRunSummary]:
+        async with self.connection() as connection:
+            await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
+            boundary = None
+            if cursor is not None:
+                anchor = await connection.execute(
+                    "SELECT created_at,id FROM agent_runs WHERE workspace_id=%s AND id=%s",
+                    (workspace_id, cursor),
+                )
+                boundary = await anchor.fetchone()
+                if not boundary:
+                    raise HTTPException(404)
+
+            # History is workspace metadata: status, timing and which agent ran. The prompt
+            # and the answer stay behind the requester-scoped result endpoint.
+            result = await connection.execute(
+                """SELECT r.id,r.workspace_id,r.agent_id,d.name AS agent_name,r.trace_id,
+                          r.status,r.attempt_count,r.cancel_requested_at,r.finished_at,
+                          r.failure_code,r.created_at,r.updated_at,
+                          (r.requested_by_issuer=%s AND r.requested_by_subject=%s)
+                              AS requested_by_me
+                   FROM agent_runs r
+                   JOIN agent_definitions d
+                     ON d.id=r.agent_id AND d.workspace_id=r.workspace_id
+                   WHERE r.workspace_id=%s
+                     AND (%s::text IS NULL OR r.status=%s::text)
+                     AND (%s::uuid IS NULL OR r.agent_id=%s::uuid)
+                     AND (NOT %s OR (r.requested_by_issuer=%s AND r.requested_by_subject=%s))
+                     AND (%s::timestamptz IS NULL OR (r.created_at,r.id) < (%s,%s::uuid))
+                   ORDER BY r.created_at DESC,r.id DESC LIMIT %s""",
+                (
+                    principal.issuer,
+                    principal.subject,
+                    workspace_id,
+                    status.value if status else None,
+                    status.value if status else None,
+                    agent_id,
+                    agent_id,
+                    requested_by_me,
+                    principal.issuer,
+                    principal.subject,
+                    boundary["created_at"] if boundary else None,
+                    boundary["created_at"] if boundary else None,
+                    boundary["id"] if boundary else None,
+                    limit,
+                ),
+            )
+            return [self.run_summary(row) for row in await result.fetchall()]
 
     async def get_result(self, principal: Principal, workspace_id: UUID, run_id: UUID):
         async with self.connection() as connection:
