@@ -9,7 +9,7 @@ export async function checkSpend(
 ) {
   const workspace = [...provider.workspaces.values()][0];
   const root = detailUrl + "/spend";
-  await page.getByRole("link", { name: "Review spend and budget" }).click();
+  await page.getByRole("link", { name: "Spend and budget →" }).click();
   await expect(page.getByRole("heading", { name: "Spend and budget" })).toBeVisible();
   await expect(page.getByText("No budget set", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "No priced model calls this period" })).toBeVisible();

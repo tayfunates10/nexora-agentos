@@ -24,11 +24,13 @@ from nexora_api.tool_contracts import (
     validate_result,
 )
 from nexora_api.tooling import (
+    ApprovalStatus,
     ToolApproval,
     ToolDefinition,
     ToolPolicy,
     ToolPolicyInput,
     ToolSideEffect,
+    ToolSummary,
     ToolUpsertInput,
 )
 from nexora_api.workspace_repository import WorkspaceRepository
@@ -90,6 +92,15 @@ class ToolGovernanceRepository:
             enabled=row["enabled"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    @classmethod
+    def _tool_summary(cls, row) -> ToolSummary:
+        return ToolSummary(
+            **cls._tool(row).model_dump(),
+            policy_decision=row["policy_decision"],
+            policy_reason=row["policy_reason"],
+            policy_updated_at=row["policy_updated_at"],
         )
 
     @staticmethod
@@ -186,16 +197,20 @@ class ToolGovernanceRepository:
         workspace_id: UUID,
         limit: int,
         cursor: str | None,
-    ) -> list[ToolDefinition]:
+    ) -> list[ToolSummary]:
         async with self.connection() as connection:
             await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
             result = await connection.execute(
-                """SELECT * FROM tool_definitions
-                   WHERE workspace_id=%s AND (%s::text IS NULL OR name > %s::text)
-                   ORDER BY name LIMIT %s""",
+                """SELECT t.*,p.decision AS policy_decision,p.reason AS policy_reason,
+                          p.updated_at AS policy_updated_at
+                   FROM tool_definitions t
+                   LEFT JOIN tool_policies p
+                     ON p.tool_id=t.id AND p.workspace_id=t.workspace_id
+                   WHERE t.workspace_id=%s AND (%s::text IS NULL OR t.name > %s::text)
+                   ORDER BY t.name LIMIT %s""",
                 (workspace_id, cursor, cursor, limit),
             )
-            return [self._tool(row) for row in await result.fetchall()]
+            return [self._tool_summary(row) for row in await result.fetchall()]
 
     async def set_policy(
         self,
@@ -254,17 +269,27 @@ class ToolGovernanceRepository:
         workspace_id: UUID,
         limit: int,
         cursor: UUID | None,
+        status: ApprovalStatus | None = None,
     ) -> list[ToolApproval]:
         async with self.connection() as connection:
             await self.workspaces.scoped(
                 connection, principal, workspace_id, Permission.APPROVE_TOOLS
             )
+            # Expiry is swept before reading so a decision page never offers a stale request.
             await self._expire_due(connection, workspace_id)
             result = await connection.execute(
                 """SELECT * FROM tool_approvals
                    WHERE workspace_id=%s AND (%s::uuid IS NULL OR id > %s::uuid)
+                     AND (%s::text IS NULL OR status=%s::text)
                    ORDER BY id LIMIT %s""",
-                (workspace_id, cursor, cursor, limit),
+                (
+                    workspace_id,
+                    cursor,
+                    cursor,
+                    status.value if status else None,
+                    status.value if status else None,
+                    limit,
+                ),
             )
             return [self._approval(row) for row in await result.fetchall()]
 

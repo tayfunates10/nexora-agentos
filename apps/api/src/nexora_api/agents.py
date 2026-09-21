@@ -61,6 +61,27 @@ class AgentRun(BaseModel):
     updated_at: datetime
 
 
+class AgentRunSummary(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    agent_id: UUID
+    agent_name: str
+    trace_id: UUID
+    status: RunStatus
+    attempt_count: int
+    requested_by_me: bool
+    cancel_requested_at: datetime | None = None
+    finished_at: datetime | None = None
+    failure_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentRunPage(BaseModel):
+    items: list[AgentRunSummary]
+    next_cursor: UUID | None = None
+
+
 class RunEvent(BaseModel):
     id: UUID
     event_no: int
@@ -146,6 +167,31 @@ async def create_run(
     )
     response.status_code = 201 if created else 200
     return run
+
+
+@router.get("/workspaces/{workspace_id}/runs", response_model=AgentRunPage)
+async def list_runs(
+    workspace_id: UUID,
+    principal: Identity,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    cursor: UUID | None = None,
+    status: RunStatus | None = None,
+    agent_id: UUID | None = None,
+    requested_by_me: bool = False,
+):
+    rows = await repository(request).list_runs(
+        principal,
+        workspace_id,
+        limit + 1,
+        cursor,
+        status,
+        agent_id,
+        requested_by_me,
+    )
+    return AgentRunPage(
+        items=rows[:limit], next_cursor=rows[limit - 1].id if len(rows) > limit else None
+    )
 
 
 @router.get("/workspaces/{workspace_id}/runs/{run_id}", response_model=AgentRun)

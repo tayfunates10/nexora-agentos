@@ -127,8 +127,8 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           html = Path('/tmp/nexora.html').read_text()
-          assert 'All foundation services are reachable.' in html
-          assert 'No agent runs yet' in html
+          assert 'All platform services are reachable.' in html
+          assert 'Nothing runs unless you enable it' in html
           PY
       - name: Verify web runtime omits build package managers
         run: |

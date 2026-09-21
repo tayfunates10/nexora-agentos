@@ -15,6 +15,43 @@ python scripts/sync_skills.py --check
 
 CI rejects skill drift so every supported coding agent receives the same project rules.
 
+## Operator handover
+
+Everything the platform can decide for itself is in this repository. What it cannot — your
+identity provider, secrets, database and cache, model provider account and prices, worker runtime
+configuration, DNS and TLS, delivery pipeline, alert routing, and the policy decisions behind all
+of it — is listed in [going live](docs/operations/going-live.md). Each capability stays off until
+its section is done, so the platform fails closed rather than guessing.
+
+## Quickstart: from clone to a finished run
+
+The order matters in one place: the worker's model profile lists workspace IDs, and a workspace
+ID exists only after someone signs in and creates one. Full detail for each step is in
+[going live](docs/operations/going-live.md).
+
+1. **Start the stack.** `cp .env.example .env`, set `POSTGRES_PASSWORD`, then
+   `docker compose up --build -d`. The web console is on http://localhost:3000 and the API on
+   http://localhost:8000. At this point health is green and sign-in is unavailable.
+2. **Register the OIDC client** (section 1 of the handover) and put `NEXORA_WEB_ORIGIN`,
+   `NEXORA_AUTH_ISSUER`, `NEXORA_AUTH_AUDIENCE`, `NEXORA_OIDC_CLIENT_ID` and
+   `NEXORA_OIDC_CLIENT_SECRET` in `.env`. Restart: `docker compose up -d`.
+3. **Sign in and create a workspace** at http://localhost:3000/workspaces. You are its owner.
+   Copy the workspace ID out of the URL.
+4. **Configure the worker.** Copy `infra/worker/runtime.example.json`, put that workspace ID in
+   `profiles.default.allowed_workspaces`, set the provider and model you are allowed to use, and
+   give every candidate its accounting prices. Point `NEXORA_WORKER_RUNTIME_CONFIG` at the file
+   and put the provider key in `NEXORA_OPENAI_API_KEY`. Start it:
+   `docker compose --profile worker up --build -d`.
+5. **Create an agent** on the workspace's *Agents* page, with the same `model_profile` name you
+   configured (`default` unless you renamed it).
+6. **Start a run** from that agent and follow it on the run page: queued, running, then the
+   answer with its recorded model steps. A run that stays queued means no worker is running; a run
+   that fails with `model_profile_not_authorized` means this workspace is not in the profile.
+7. **Optional, in any order.** Set a monthly budget on *Spend and budget*; add a document on
+   *Knowledge sources* (retrieval also needs a `retrieval` block in the worker file); register a
+   tool contract through the API and set its policy on *Tools and policy*, where destructive and
+   outbound calls will then wait for a decision on *Tool approvals*.
+
 ## Development status
 
 The platform provides a Next.js control plane, typed FastAPI APIs, PostgreSQL/pgvector and
@@ -41,6 +78,9 @@ generation and embeddings alike. Budget thresholds record an append-only alert t
 period reaches them, and a transactional outbox delivers each one to an operator-declared,
 signed webhook. The web console reports that spend per period and lets owners and admins set
 the cap and its thresholds.
+The browser console now covers the operating workflow end to end: agents and durable runs with
+their event timeline and requester-scoped results, held tool calls decided by a human, tool
+contracts with their default-deny policy, and versioned knowledge sources with their access scope.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
@@ -73,7 +113,11 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [retrieval evals and HNSW](docs/architecture/0034-retrieval-evals-hnsw.md), and
 [release supply-chain verification](docs/architecture/0035-release-supply-chain-verification.md), and
 [deployed staging E2E smoke](docs/architecture/0036-staging-e2e-smoke.md), and
-[staging rollout/rollback acceptance](docs/architecture/0037-staging-rollout-rollback.md).
+[staging rollout/rollback acceptance](docs/architecture/0037-staging-rollout-rollback.md), and
+[workspace run history](docs/architecture/0038-workspace-run-history.md), and
+[agent operations console](docs/architecture/0039-agent-operations-console.md), and
+[tool governance console](docs/architecture/0040-tool-governance-console.md), and
+[knowledge console](docs/architecture/0041-knowledge-console.md).
 
 ## Run locally with Docker Compose
 
@@ -210,6 +254,14 @@ path now separates migration, API and worker PostgreSQL identities with reviewed
 
 ## Agent definitions, durable runs and worker orchestration
 
+The workspace panel links to **Agents** and **Agent runs**. Owners and admins create agents there;
+any member can start a run from an agent, follow its status and event timeline, read their own
+result and cancel a run that has not finished. The start form carries a per-render idempotency
+key, so a double submit returns the existing run instead of starting a second one. Run history
+filters by status and by the runs you started. The browser never receives the API token, and the
+console shows four distinct result states: not terminal yet, no publishable result, not yours to
+read, and the answer itself. See [ADR 0039](docs/architecture/0039-agent-operations-console.md).
+
 Owners and admins can create agent definitions. Any current workspace member can start a run.
 Run creation requires an `Idempotency-Key`; replaying the same request returns the existing run
 instead of duplicating work. The initial run, append-only event, security audit and outbox job
@@ -323,10 +375,17 @@ Use `/docs` for the full schema. Core endpoints are:
 - `POST /api/v1/workspaces/{workspace_id}/agents`
 - `GET /api/v1/workspaces/{workspace_id}/agents`
 - `POST /api/v1/workspaces/{workspace_id}/runs`
+- `GET /api/v1/workspaces/{workspace_id}/runs` (workspace history, newest first)
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}`
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}/result` (original requester only)
 - `POST /api/v1/workspaces/{workspace_id}/runs/{run_id}/cancel`
 - `GET /api/v1/workspaces/{workspace_id}/runs/{run_id}/events`
+
+Run history is workspace metadata for any current member: status, agent name, attempt count,
+failure code and timestamps, with `limit` (1–100, default 25) and the `next_cursor` returned by
+the preceding page. It accepts `status`, `agent_id` and `requested_by_me` filters. The prompt,
+the answer and the identity of other requesters are never in it — each row only says whether the
+caller started that run. See [ADR 0038](docs/architecture/0038-workspace-run-history.md).
 
 See [ADR 0004](docs/architecture/0004-agent-runs-outbox.md) for persistence/outbox semantics and
 [ADR 0005](docs/architecture/0005-worker-state-machine.md) for worker state transitions,
@@ -344,6 +403,14 @@ create evaluations. See [ADR 0019](docs/architecture/0019-agent-run-results.md).
 
 ## Governed MCP tools and approvals
 
+The workspace panel links to **Tool approvals** and **Tools and policy**. Owners and admins decide
+held calls in the browser: each pending approval shows the tool, the policy reason, the requester,
+the run, the time left before it expires and the exact normalized arguments, with approve and
+reject as explicit actions. The tools page lists every contract with its side effect and current
+policy — a tool with no policy is shown as denied — and lets owners and admins set that policy with
+a recorded reason. Registering a contract stays an API action, because it carries a JSON schema and
+a server key. See [ADR 0040](docs/architecture/0040-tool-governance-console.md).
+
 Owners and admins can register workspace tool contracts and set an explicit policy. Missing policy
 means deny. Destructive and external-communication tools require approval even when their stored
 policy says allow. Non-read tool schemas must require an idempotency key.
@@ -351,9 +418,9 @@ policy says allow. Non-read tool schemas must require an idempotency key.
 Core endpoints are:
 
 - `PUT /api/v1/workspaces/{workspace_id}/tools/{tool_name}`
-- `GET /api/v1/workspaces/{workspace_id}/tools`
+- `GET /api/v1/workspaces/{workspace_id}/tools` (contracts with their current policy)
 - `PUT /api/v1/workspaces/{workspace_id}/tools/{tool_name}/policy`
-- `GET /api/v1/workspaces/{workspace_id}/approvals`
+- `GET /api/v1/workspaces/{workspace_id}/approvals` (optional `status` filter)
 - `POST /api/v1/workspaces/{workspace_id}/approvals/{approval_id}/decision`
 
 An agent executor calls the internal `McpGateway` with a stable per-run call key. The gateway
@@ -392,6 +459,14 @@ See [ADR 0006](docs/architecture/0006-mcp-tool-governance.md) and
 [ADR 0015](docs/architecture/0015-mcp-streamable-http.md).
 
 ## Knowledge ingestion API
+
+The workspace panel links to **Knowledge sources**. Owners and admins add a text or Markdown
+source there and land on its ingestion job, which states whether the text is merely stored, being
+embedded and metered, indexed, or failed with its recorded code. The list shows each indexed
+version with its key, chunk count and access scope, and deleting a source is a row action that
+reports the 409 a running ingestion returns rather than racing it. The browser form creates
+workspace-scoped sources; restricted sources need exact issuer/subject pairs and stay an API
+action. See [ADR 0041](docs/architecture/0041-knowledge-console.md).
 
 Owners and admins can queue text or Markdown knowledge sources without giving the API process
 provider network access. Ingestion is durable and idempotent: the API stores validated source

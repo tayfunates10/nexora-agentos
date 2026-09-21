@@ -57,8 +57,16 @@ class ToolDefinition(BaseModel):
     updated_at: datetime
 
 
+class ToolSummary(ToolDefinition):
+    # Default deny: a tool with no stored policy is never callable, so the absence of a
+    # policy is reported explicitly rather than as an allow.
+    policy_decision: PolicyDecision | None = None
+    policy_reason: str | None = None
+    policy_updated_at: datetime | None = None
+
+
 class ToolPage(BaseModel):
-    items: list[ToolDefinition]
+    items: list[ToolSummary]
     next_cursor: str | None = None
 
 
@@ -164,8 +172,11 @@ async def list_approvals(
     request: Request,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: UUID | None = None,
+    status: ApprovalStatus | None = None,
 ):
-    rows = await repository(request).list_approvals(principal, workspace_id, limit + 1, cursor)
+    rows = await repository(request).list_approvals(
+        principal, workspace_id, limit + 1, cursor, status
+    )
     return ApprovalPage(
         items=rows[:limit],
         next_cursor=rows[limit - 1].id if len(rows) > limit else None,
