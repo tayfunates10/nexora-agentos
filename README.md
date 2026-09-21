@@ -15,6 +15,14 @@ python scripts/sync_skills.py --check
 
 CI rejects skill drift so every supported coding agent receives the same project rules.
 
+## Operator handover
+
+Everything the platform can decide for itself is in this repository. What it cannot — your
+identity provider, secrets, database and cache, model provider account and prices, worker runtime
+configuration, DNS and TLS, delivery pipeline, alert routing, and the policy decisions behind all
+of it — is listed in [going live](docs/operations/going-live.md). Each capability stays off until
+its section is done, so the platform fails closed rather than guessing.
+
 ## Development status
 
 The platform provides a Next.js control plane, typed FastAPI APIs, PostgreSQL/pgvector and
