@@ -479,6 +479,8 @@ def run(config: Config) -> dict[str, Any]:
             raise SmokeError("successful run output did not contain the configured sentinel")
         if not result.get("model_steps"):
             raise SmokeError("successful run persisted no model steps")
+        if config.approval_tool and config.approval_tool not in result.get("selected_tools", []):
+            raise SmokeError("approved staging tool is missing from the persisted model selection")
 
         events = _list_events(api, config.workspace_id, created_run_id)
         event_types = validate_events(events, approval_expected=bool(config.approval_tool))
