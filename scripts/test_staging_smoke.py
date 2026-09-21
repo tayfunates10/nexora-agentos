@@ -78,6 +78,35 @@ other_metric 50
         self.assertFalse(config.require_observability)
         self.assertIsNone(config.worker_admin_url)
 
+    def test_worker_metrics_are_ignored_without_explicit_opt_in(self):
+        env = {
+            "NEXORA_STAGING_API_URL": "https://staging.example",
+            "NEXORA_STAGING_ACCESS_TOKEN": "test-token",
+            "NEXORA_STAGING_WORKSPACE_ID": "11111111-1111-4111-8111-111111111111",
+            "NEXORA_STAGING_AGENT_ID": "22222222-2222-4222-8222-222222222222",
+            "NEXORA_STAGING_REQUIRE_RETRIEVAL": "false",
+            "NEXORA_STAGING_REQUIRE_OBSERVABILITY": "false",
+            "NEXORA_STAGING_WORKER_ADMIN_URL": "https://private-worker.example",
+            "NEXORA_STAGING_METRICS_TOKEN": "configured-but-unused",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            config = Config.from_env()
+        self.assertIsNone(config.worker_admin_url)
+        self.assertIsNone(config.metrics_token)
+
+    def test_worker_metrics_require_private_endpoint_when_enabled(self):
+        env = {
+            "NEXORA_STAGING_API_URL": "https://staging.example",
+            "NEXORA_STAGING_ACCESS_TOKEN": "test-token",
+            "NEXORA_STAGING_WORKSPACE_ID": "11111111-1111-4111-8111-111111111111",
+            "NEXORA_STAGING_AGENT_ID": "22222222-2222-4222-8222-222222222222",
+            "NEXORA_STAGING_REQUIRE_RETRIEVAL": "false",
+            "NEXORA_STAGING_REQUIRE_OBSERVABILITY": "true",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(SmokeError):
+                Config.from_env()
+
     def test_config_accepts_bounded_https_fixture(self):
         env = {
             "NEXORA_STAGING_API_URL": "https://staging.example",
