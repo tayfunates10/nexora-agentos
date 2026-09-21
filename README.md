@@ -71,7 +71,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [spend alert delivery](docs/architecture/0032-spend-alert-delivery.md), and
 [hybrid RAG retrieval](docs/architecture/0033-hybrid-retrieval.md), and
 [retrieval evals and HNSW](docs/architecture/0034-retrieval-evals-hnsw.md), and
-[release supply-chain verification](docs/architecture/0035-release-supply-chain-verification.md).
+[release supply-chain verification](docs/architecture/0035-release-supply-chain-verification.md), and
+[deployed staging E2E smoke](docs/architecture/0036-staging-e2e-smoke.md).
 
 ## Run locally with Docker Compose
 
@@ -134,10 +135,18 @@ deployed database has already applied, which is what makes `kubectl rollout undo
 See [ADR 0013](docs/architecture/0013-release-pipeline.md) and
 [ADR 0035](docs/architecture/0035-release-supply-chain-verification.md).
 
+A manually triggered **Staging E2E Smoke** workflow validates a real deployed environment without
+placing provider credentials in GitHub Actions. It uses a short-lived API access token and a
+pre-provisioned staging fixture to prove workspace/agent access, idempotent durable execution,
+real worker/model activity, requester-scoped results and run events. Retrieval is verified by a
+worker metric delta; optional approval mode approves a configured staging tool and requires the
+worker to resume the run. See [ADR 0036](docs/architecture/0036-staging-e2e-smoke.md).
+
 ## Quality checks
 
 ```bash
 python scripts/sync_skills.py --check
+python -m unittest discover -s scripts -p 'test_staging_smoke.py'
 .venv/bin/ruff check apps/api
 .venv/bin/ruff format --check apps/api
 .venv/bin/pytest apps/api/tests -m 'not integration'
