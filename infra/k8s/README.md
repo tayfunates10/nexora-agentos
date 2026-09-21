@@ -139,9 +139,9 @@ For a release candidate, the manual `Staging Rollout Rollback` workflow turns th
 an acceptance test. Configure the protected `staging` environment with
 `NEXORA_STAGING_API_IMAGE`, `NEXORA_STAGING_WEB_IMAGE` and a least-privilege
 `NEXORA_STAGING_KUBECONFIG`. Supply the API and web `sha256:...` digests from the release
-summary. The workflow patches all three workloads to those immutable references, waits for the
-rollout, runs the deployed smoke, executes `kubectl rollout undo`, verifies the exact original
-image references and runs the smoke again.
+summary. The workflow patches each workload whose candidate image differs from the staging
+baseline, waits for those rollouts, runs the deployed smoke, executes `kubectl rollout undo` only
+for changed workloads, verifies every exact original image reference and runs the smoke again.
 
 The Kubernetes identity needs only get/watch/patch on deployments and get/list on replica sets in
 the `nexora` namespace. It does not need Secret read, pod exec, provider credentials or database
