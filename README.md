@@ -23,6 +23,35 @@ configuration, DNS and TLS, delivery pipeline, alert routing, and the policy dec
 of it — is listed in [going live](docs/operations/going-live.md). Each capability stays off until
 its section is done, so the platform fails closed rather than guessing.
 
+## Quickstart: from clone to a finished run
+
+The order matters in one place: the worker's model profile lists workspace IDs, and a workspace
+ID exists only after someone signs in and creates one. Full detail for each step is in
+[going live](docs/operations/going-live.md).
+
+1. **Start the stack.** `cp .env.example .env`, set `POSTGRES_PASSWORD`, then
+   `docker compose up --build -d`. The web console is on http://localhost:3000 and the API on
+   http://localhost:8000. At this point health is green and sign-in is unavailable.
+2. **Register the OIDC client** (section 1 of the handover) and put `NEXORA_WEB_ORIGIN`,
+   `NEXORA_AUTH_ISSUER`, `NEXORA_AUTH_AUDIENCE`, `NEXORA_OIDC_CLIENT_ID` and
+   `NEXORA_OIDC_CLIENT_SECRET` in `.env`. Restart: `docker compose up -d`.
+3. **Sign in and create a workspace** at http://localhost:3000/workspaces. You are its owner.
+   Copy the workspace ID out of the URL.
+4. **Configure the worker.** Copy `infra/worker/runtime.example.json`, put that workspace ID in
+   `profiles.default.allowed_workspaces`, set the provider and model you are allowed to use, and
+   give every candidate its accounting prices. Point `NEXORA_WORKER_RUNTIME_CONFIG` at the file
+   and put the provider key in `NEXORA_OPENAI_API_KEY`. Start it:
+   `docker compose --profile worker up --build -d`.
+5. **Create an agent** on the workspace's *Agents* page, with the same `model_profile` name you
+   configured (`default` unless you renamed it).
+6. **Start a run** from that agent and follow it on the run page: queued, running, then the
+   answer with its recorded model steps. A run that stays queued means no worker is running; a run
+   that fails with `model_profile_not_authorized` means this workspace is not in the profile.
+7. **Optional, in any order.** Set a monthly budget on *Spend and budget*; add a document on
+   *Knowledge sources* (retrieval also needs a `retrieval` block in the worker file); register a
+   tool contract through the API and set its policy on *Tools and policy*, where destructive and
+   outbound calls will then wait for a decision on *Tool approvals*.
+
 ## Development status
 
 The platform provides a Next.js control plane, typed FastAPI APIs, PostgreSQL/pgvector and
@@ -49,6 +78,9 @@ generation and embeddings alike. Budget thresholds record an append-only alert t
 period reaches them, and a transactional outbox delivers each one to an operator-declared,
 signed webhook. The web console reports that spend per period and lets owners and admins set
 the cap and its thresholds.
+The browser console now covers the operating workflow end to end: agents and durable runs with
+their event timeline and requester-scoped results, held tool calls decided by a human, tool
+contracts with their default-deny policy, and versioned knowledge sources with their access scope.
 Observability now adds durable run traces, guarded Prometheus exposition and structured
 logs. The durable model executor now runs as an opt-in worker service configured by
 operator-managed model profiles. Governed tools can now use operator-allowlisted MCP
@@ -81,7 +113,11 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [retrieval evals and HNSW](docs/architecture/0034-retrieval-evals-hnsw.md), and
 [release supply-chain verification](docs/architecture/0035-release-supply-chain-verification.md), and
 [deployed staging E2E smoke](docs/architecture/0036-staging-e2e-smoke.md), and
-[staging rollout/rollback acceptance](docs/architecture/0037-staging-rollout-rollback.md).
+[staging rollout/rollback acceptance](docs/architecture/0037-staging-rollout-rollback.md), and
+[workspace run history](docs/architecture/0038-workspace-run-history.md), and
+[agent operations console](docs/architecture/0039-agent-operations-console.md), and
+[tool governance console](docs/architecture/0040-tool-governance-console.md), and
+[knowledge console](docs/architecture/0041-knowledge-console.md).
 
 ## Run locally with Docker Compose
 
