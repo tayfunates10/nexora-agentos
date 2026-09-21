@@ -4,6 +4,7 @@ from pathlib import Path
 
 from promote_release import (
     OVERLAY,
+    PRODUCTION_MIGRATE_OVERLAY,
     STAGING_MIGRATE_OVERLAY,
     STAGING_OVERLAY,
     PromotionError,
@@ -26,6 +27,10 @@ class PromotionContractTests(unittest.TestCase):
     def test_production_and_explicit_overlay_remain_single_target(self):
         self.assertEqual(
             promotion_targets("nexora/api", environment="production", overlay=None),
+            [OVERLAY, PRODUCTION_MIGRATE_OVERLAY],
+        )
+        self.assertEqual(
+            promotion_targets("nexora/web", environment="production", overlay=None),
             [OVERLAY],
         )
         custom = Path("/tmp/custom-kustomization.yaml")
