@@ -58,6 +58,26 @@ other_metric 50
             with self.assertRaises(SmokeError):
                 Config.from_env()
 
+    def test_retrieval_requires_source_and_output_sentinel(self):
+        env = {
+            "NEXORA_STAGING_API_URL": "https://staging.example",
+            "NEXORA_STAGING_ACCESS_TOKEN": "test-token",
+            "NEXORA_STAGING_WORKSPACE_ID": "11111111-1111-4111-8111-111111111111",
+            "NEXORA_STAGING_AGENT_ID": "22222222-2222-4222-8222-222222222222",
+            "NEXORA_STAGING_REQUIRE_RETRIEVAL": "true",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(SmokeError):
+                Config.from_env()
+
+        env["NEXORA_STAGING_EXPECT_SOURCE_KEY"] = "staging-smoke"
+        env["NEXORA_STAGING_EXPECT_TEXT"] = "NEXORA-STAGING-SENTINEL"
+        with patch.dict(os.environ, env, clear=True):
+            config = Config.from_env()
+        self.assertTrue(config.require_retrieval)
+        self.assertFalse(config.require_observability)
+        self.assertIsNone(config.worker_admin_url)
+
     def test_config_accepts_bounded_https_fixture(self):
         env = {
             "NEXORA_STAGING_API_URL": "https://staging.example",
