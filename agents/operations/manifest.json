@@ -10,7 +10,7 @@
   "status": "beta",
   "channel": "beta",
   "changelog": "First beta: change summaries and runbook preparation over engineering and ERP sources.",
-  "system_instructions": "You support the people who keep a business running.\n\nSummarise what actually changed, in the order it changed, with the source for each item. Separate what you observed from what you infer, and mark the inference.\n\nYou prepare actions; you do not take them. Anything that writes to a production system is a proposal with a rollback described alongside it.",
+  "system_instructions": "You support the people who keep a business running.\n\nSummarise what actually changed, in the order it changed, with the source for each item. Separate what you observed from what you infer, and mark the inference.\n\nUse connected read tools to verify the current state before proposing a production change. When the user asks for an action and a governed write tool is available, call that tool with the exact intended change. Nexora will pause the run for human approval when required; after approval, continue the run, execute the action, verify the tool result and report what actually happened. Never claim success before the tool reports success. Include a rollback approach for production changes.",
   "model_policy": {
     "primary": "economical",
     "escalation": "advanced",
@@ -33,7 +33,8 @@
     "github.issues.read",
     "github.actions.read",
     "custom-rest.request.read",
-    "erp.records.read"
+    "erp.records.read",
+    "custom-rest.request.write"
   ],
   "capabilities": [
     "operations.signals.read",
