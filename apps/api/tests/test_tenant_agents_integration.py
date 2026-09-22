@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import psycopg
@@ -395,6 +396,57 @@ def test_each_tenant_moves_between_versions_on_its_own(client, admin, keys):
     assert version_of("a")["version"] == "1.5.0"
     assert version_of("b")["version"] == "1.3.0"
     assert version_of("c")["version"] == "1.4.0"
+
+
+def test_automatic_update_mode_moves_only_opted_in_instances(client, admin, keys):
+    owner = headers(keys, "owner-auto-update")
+    space = workspace(client, owner, "Automatic updates")
+    slug = unique_slug("automatic-update-agent")
+    standard_agent(client, admin, slug, "1.0.0")
+
+    automatic = install(
+        client, owner, space, slug, display_name="Automatic", update_mode="automatic"
+    ).json()
+    manual = install(
+        client, owner, space, slug, display_name="Manual", update_mode="manual"
+    ).json()
+
+    publish_version(
+        client,
+        admin,
+        "social-media",
+        slug,
+        "1.1.0",
+        required_integrations=["mikro"],
+        optional_integrations=["erp"],
+        required_tools=[],
+        optional_tools=[],
+    )
+
+    updated, cursor = asyncio.run(
+        client.app.state.tenant_agents.apply_automatic_updates(limit=50)
+    )
+    assert updated == 1
+    assert cursor is None
+
+    automatic_now = client.get(
+        f"/api/v1/workspaces/{space}/tenant-agents/{automatic['id']}", headers=owner
+    ).json()
+    manual_now = client.get(
+        f"/api/v1/workspaces/{space}/tenant-agents/{manual['id']}", headers=owner
+    ).json()
+    assert automatic_now["version"] == "1.1.0"
+    assert manual_now["version"] == "1.0.0"
+
+    history = client.get(
+        f"/api/v1/workspaces/{space}/tenant-agents/{automatic['id']}/history", headers=owner
+    ).json()["items"]
+    assert [item["action"] for item in history] == ["installed", "updated"]
+    assert history[-1]["actor_subject"] == "agent-update-scheduler"
+
+    # Re-running the scheduler is idempotent when the offered version is already pinned.
+    second, _ = asyncio.run(client.app.state.tenant_agents.apply_automatic_updates(limit=50))
+    assert second == 0
 
 
 def test_rollback_restores_the_previous_version_and_keeps_every_setting(client, admin, keys):
