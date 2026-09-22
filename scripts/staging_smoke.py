@@ -517,12 +517,16 @@ def run(config: Config) -> dict[str, Any]:
     if workspace.get("id") != config.workspace_id:
         raise SmokeError("staging workspace identity mismatch")
 
-    _, agent = api.request_json(
-        "GET",
-        f"/api/v1/workspaces/{config.workspace_id}/agents/{config.agent_id}",
+    agent_path = (
+        f"/api/v1/workspaces/{config.workspace_id}/tenant-agents/{config.agent_id}"
+        if config.agent_kind == "standard"
+        else f"/api/v1/workspaces/{config.workspace_id}/agents/{config.agent_id}"
     )
+    _, agent = api.request_json("GET", agent_path)
     if agent.get("id") != config.agent_id:
         raise SmokeError("staging agent identity mismatch")
+    if config.agent_kind == "standard" and not agent.get("readiness", {}).get("ready"):
+        raise SmokeError("standard staging agent is not ready")
 
     if config.expected_source_key:
         sources = _list_sources(api, config.workspace_id)
@@ -532,10 +536,18 @@ def run(config: Config) -> dict[str, Any]:
     worker, metrics_before = _worker_metrics(config)
 
     idempotency_key = "staging-" + uuid4().hex
-    body = {"agent_id": config.agent_id, "input": config.prompt}
+    if config.agent_kind == "standard":
+        run_path = (
+            f"/api/v1/workspaces/{config.workspace_id}/tenant-agents/"
+            f"{config.agent_id}/runs"
+        )
+        body = {"input": config.prompt}
+    else:
+        run_path = f"/api/v1/workspaces/{config.workspace_id}/runs"
+        body = {"agent_id": config.agent_id, "input": config.prompt}
     status, created = api.request_json(
         "POST",
-        f"/api/v1/workspaces/{config.workspace_id}/runs",
+        run_path,
         body=body,
         headers={"Idempotency-Key": idempotency_key},
         expected=(201,),
@@ -552,7 +564,7 @@ def run(config: Config) -> dict[str, Any]:
 
     replay_status, replay = api.request_json(
         "POST",
-        f"/api/v1/workspaces/{config.workspace_id}/runs",
+        run_path,
         body=body,
         headers={"Idempotency-Key": idempotency_key},
         expected=(200,),
@@ -618,6 +630,18 @@ def run(config: Config) -> dict[str, Any]:
         if config.approval_tool and not approval_decided:
             raise SmokeError("approval flow completed without this smoke gate deciding the approval")
 
+        actions = _list_run_actions(api, config.workspace_id, created_run_id)
+        tasks = _list_run_tasks(api, config.workspace_id, created_run_id)
+        evidence_summary = validate_release_evidence(
+            actions,
+            tasks,
+            expected_tools=config.expected_tools,
+            require_task_graph=config.require_task_graph,
+            require_verified_task=config.require_verified_task,
+            expected_verified_action_tool=config.expected_verified_action_tool,
+            forbid_external_mutations=config.forbid_external_mutations,
+        )
+
         if worker:
             required_metrics = [
                 "nexora_agent_runs_total",
@@ -625,7 +649,7 @@ def run(config: Config) -> dict[str, Any]:
             ]
             if config.require_retrieval:
                 required_metrics.append("nexora_retrieval_queries_total")
-            if config.approval_tool:
+            if config.approval_tool or config.expected_tools:
                 required_metrics.append("nexora_tool_calls_total")
             _wait_metric_deltas(worker, metrics_before, required_metrics)
         elif config.require_retrieval:
@@ -646,9 +670,11 @@ def run(config: Config) -> dict[str, Any]:
             ],
             "selected_tools": result.get("selected_tools", []),
             "event_types": event_types,
+            "agent_kind": config.agent_kind,
             "approval_exercised": approval_decided,
             "retrieval_exercised": config.require_retrieval,
             "observability_verified": bool(worker),
+            "release_evidence": evidence_summary,
         }
     finally:
         if created_run_id and not terminal:
