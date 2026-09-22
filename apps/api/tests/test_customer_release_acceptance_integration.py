@@ -18,6 +18,8 @@ from catalog_support import (
     workspace,
 )
 from conftest import PLATFORM_ADMIN
+from test_executor import Adapter
+from test_tool_governance_integration import clear_unpublished_outbox
 
 from nexora_api.browser_mcp import BROWSER_SERVER_KEY
 from nexora_api.connector_mcp import CONNECTOR_SERVER_KEY
@@ -37,8 +39,6 @@ from nexora_api.model_routing import (
 from nexora_api.outbox import QUEUE_STREAM
 from nexora_api.task_mcp import TASK_SERVER_KEY, TaskMcpAdapter
 from nexora_api.worker import AgentWorker
-from test_executor import Adapter
-from test_tool_governance_integration import clear_unpublished_outbox
 
 pytestmark = [
     pytest.mark.integration,
