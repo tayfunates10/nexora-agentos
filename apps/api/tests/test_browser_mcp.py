@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import httpx
@@ -38,11 +39,8 @@ def test_browser_adapter_sends_only_snapshotted_origin_and_relative_path():
         browser_runtime_url="http://browser.internal:8080",
         browser_runtime_token="x" * 32,
     )
-    with httpx.Client(transport=httpx.MockTransport(handler)) as sync_client:
-        transport = sync_client._transport
-
     async def exercise():
-        async with httpx.AsyncClient(transport=transport) as client:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             adapter = BrowserMcpAdapter(settings, client=client)
             return await adapter.call_tool_for_context(
                 _context(),
@@ -51,7 +49,6 @@ def test_browser_adapter_sends_only_snapshotted_origin_and_relative_path():
                 5.0,
             )
 
-    import asyncio
 
     result = asyncio.run(exercise())
     assert result["title"] == "Services"
@@ -71,7 +68,6 @@ def test_browser_adapter_rejects_paths_that_can_escape_the_origin(path):
     async def exercise():
         await adapter.call_tool_for_context(_context(), "page.inspect", {"path": path}, 5.0)
 
-    import asyncio
 
     with pytest.raises(McpAdapterError) as raised:
         asyncio.run(exercise())
@@ -89,7 +85,6 @@ def test_browser_adapter_requires_a_standard_run_snapshot():
     async def exercise():
         await adapter.call_tool_for_context(context, "page.inspect", {"path": "/"}, 5.0)
 
-    import asyncio
 
     with pytest.raises(McpAdapterError) as raised:
         asyncio.run(exercise())
