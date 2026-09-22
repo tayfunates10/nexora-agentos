@@ -66,7 +66,7 @@ API_WRITES: Mapping[str, frozenset[str]] = {
     "workspaces": frozenset({"INSERT", "UPDATE"}),
     "workspace_memberships": frozenset({"INSERT", "UPDATE"}),
     "security_events": frozenset({"INSERT"}),
-    "agent_definitions": frozenset({"INSERT"}),
+    "agent_definitions": frozenset({"INSERT", "UPDATE"}),
     "agent_runs": frozenset({"INSERT", "UPDATE"}),
     "agent_run_events": frozenset({"INSERT"}),
     "job_outbox": frozenset({"INSERT"}),
@@ -108,6 +108,7 @@ API_WRITES: Mapping[str, frozenset[str]] = {
 
 WORKER_WRITES: Mapping[str, frozenset[str]] = {
     "security_events": frozenset({"INSERT"}),
+    "agent_definitions": frozenset({"UPDATE"}),
     "agent_runs": frozenset({"UPDATE"}),
     "agent_run_events": frozenset({"INSERT"}),
     "job_outbox": frozenset({"INSERT", "UPDATE"}),
