@@ -86,13 +86,18 @@ class DurableAgentExecutor:
             issuer=run["requested_by_issuer"], subject=run["requested_by_subject"]
         )
         tools = await self.gateway.repository.list_tools(principal, context.workspace_id, 101, None)
+        aliases = context.tool_aliases or {}
+        public_by_internal = {internal: public for public, internal in aliases.items()}
         advertised = tuple(
-            ProviderTool(t.name, t.description, t.input_schema)
+            ProviderTool(public_by_internal.get(t.name, t.name), t.description, t.input_schema)
             for t in tools
             if (
                 t.enabled
-                and t.name in profile.allowed_tools
-                and (context.allowed_tools is None or t.name in context.allowed_tools)
+                and public_by_internal.get(t.name, t.name) in profile.allowed_tools
+                and (
+                    context.allowed_tools is None
+                    or public_by_internal.get(t.name, t.name) in context.allowed_tools
+                )
             )
         )
         if len(tools) > 100 or len(advertised) > 32:
