@@ -29,6 +29,7 @@ class ExecutionProfile:
     allowed_workspaces: frozenset[UUID]
     allowed_providers: frozenset[str]
     allowed_tools: frozenset[str] = frozenset()
+    allowed_server_keys: frozenset[str] = frozenset()
     max_steps: int = 8
     max_output_tokens: int = 2048
     max_total_tokens: int = 32000
@@ -89,7 +90,8 @@ class DurableAgentExecutor:
         advertised = tuple(
             ProviderTool(t.name, t.description, t.input_schema)
             for t in tools
-            if t.enabled and t.name in profile.allowed_tools
+            if t.enabled
+            and (t.name in profile.allowed_tools or t.server_key in profile.allowed_server_keys)
         )
         if len(tools) > 100 or len(advertised) > 32:
             raise TerminalExecutionError("tool_limit_exceeded")

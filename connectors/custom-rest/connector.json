@@ -4,7 +4,7 @@
   "category": "custom",
   "icon": "plug",
   "description": "A tenant-owned HTTPS API reached with a bearer token. The tenant declares the base URL; the runtime never widens it.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "available",
   "auth": "bearer_token",
   "capabilities": [
@@ -37,6 +37,33 @@
       "capability": "request.read",
       "method": "GET",
       "path": "/"
+    },
+    {
+      "capability": "request.write",
+      "method": "POST",
+      "path": "/",
+      "description": "POST a validated JSON payload to the connected custom REST service.",
+      "side_effect": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "payload",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
     }
   ]
 }

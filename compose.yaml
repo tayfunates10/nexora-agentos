@@ -80,6 +80,11 @@ services:
       NEXORA_REDIS_URL: redis://redis:6379/0
       NEXORA_WORKER_RUNTIME_CONFIG: /etc/nexora/runtime.json
       NEXORA_OPENAI_API_KEY: ${NEXORA_OPENAI_API_KEY:-}
+      # The worker executes tenant connector tools, so it needs the same vault keyring
+      # and OAuth client registry as the API. Secrets still never enter runtime.json.
+      NEXORA_SECRET_VAULT_KEYS: ${NEXORA_SECRET_VAULT_KEYS:-}
+      NEXORA_SECRET_VAULT_ACTIVE_KEY: ${NEXORA_SECRET_VAULT_ACTIVE_KEY:-}
+      NEXORA_INTEGRATION_OAUTH_CLIENTS: ${NEXORA_INTEGRATION_OAUTH_CLIENTS:-}
       NEXORA_SPEND_ALERT_SIGNING_SECRET: ${NEXORA_SPEND_ALERT_SIGNING_SECRET:-}
       NEXORA_OTEL_EXPORTER_ENDPOINT: ${NEXORA_OTEL_EXPORTER_ENDPOINT:-}
       NEXORA_OTEL_SAMPLE_RATIO: ${NEXORA_OTEL_SAMPLE_RATIO:-1.0}

@@ -21,6 +21,7 @@ class Repository:
     def __init__(self):
         self.call_id = uuid4()
         self.failures = []
+        self.successes = []
 
     async def prepare_call(self, context, call_key, tool_name, arguments):
         return SimpleNamespace(
@@ -40,6 +41,10 @@ class Repository:
 
     async def complete_failure(self, call_id, error_code, *, retryable, context):
         self.failures.append((call_id, error_code, retryable))
+        return True
+
+    async def complete_success(self, call_id, result, context):
+        self.successes.append((call_id, result, context.workspace_id))
         return True
 
 
@@ -77,3 +82,39 @@ def test_adapter_failure_preserves_retry_semantics(retryable):
     assert raised.value.code == "mcp_test_error"
     assert raised.value.retryable is retryable
     assert repository.failures == [(repository.call_id, "mcp_test_error", retryable)]
+
+
+class ContextAdapter:
+    def __init__(self):
+        self.calls = []
+
+    async def call_tool_for_context(
+        self, execution_context, remote_name, arguments, timeout_seconds
+    ):
+        self.calls.append((execution_context, remote_name, arguments, timeout_seconds))
+        return {"ok": True}
+
+
+def test_context_aware_adapter_receives_the_governed_workspace_context():
+    adapter = ContextAdapter()
+    gateway = McpGateway(Settings(), adapters={"remote": adapter})
+    repository = Repository()
+    gateway.repository = repository
+    execution_context = context()
+
+    result = asyncio.run(
+        gateway.invoke(
+            execution_context,
+            "tool-step-1",
+            "search",
+            {"q": "otters"},
+        )
+    )
+
+    assert result == {"ok": True}
+    assert adapter.calls[0][0] is execution_context
+    assert adapter.calls[0][1] == "remote_search"
+    assert adapter.calls[0][2] == {"q": "otters"}
+    assert repository.successes == [
+        (repository.call_id, {"ok": True}, execution_context.workspace_id)
+    ]

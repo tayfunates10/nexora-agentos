@@ -4,7 +4,7 @@
   "category": "social",
   "icon": "instagram",
   "description": "Instagram Graph API: read insights and comments, publish and schedule media for a connected professional account.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "available",
   "auth": "oauth2",
   "capabilities": [
@@ -60,6 +60,39 @@
       "capability": "messages.read",
       "method": "GET",
       "path": "/v21.0/me/conversations"
+    },
+    {
+      "capability": "comments.reply",
+      "method": "POST",
+      "path": "/v21.0/{comment_id}/replies",
+      "description": "Reply to one Instagram comment on the connected professional account.",
+      "side_effect": "external_communication",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "comment_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2200
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "comment_id",
+          "message",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
     }
   ],
   "credential_fields": []

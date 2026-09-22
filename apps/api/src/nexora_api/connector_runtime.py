@@ -15,7 +15,7 @@ import asyncio
 import ipaddress
 import socket
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -107,20 +107,49 @@ class ConnectorRuntime:
             raise ConnectorError("credential_missing")
         return {}, {}, (user, secret)
 
+    @staticmethod
+    def _request_parts(endpoint, config: dict[str, object], arguments: dict[str, object]):
+        remaining = dict(arguments)
+        path = endpoint.path
+        for name in __import__("re").findall(r"{([^{}]+)}", endpoint.path):
+            if name in config:
+                value = config[name]
+            elif name in remaining:
+                value = remaining.pop(name)
+            else:
+                raise ConnectorError("path_argument_missing")
+            if not isinstance(value, (str, int)) or isinstance(value, bool):
+                raise ConnectorError("path_argument_invalid")
+            path = path.replace("{" + name + "}", quote(str(value), safe=""))
+
+        idempotency_key = remaining.pop("idempotency_key", None)
+        if idempotency_key is not None and not isinstance(idempotency_key, str):
+            raise ConnectorError("idempotency_key_invalid")
+        if endpoint.method in ("GET", "DELETE"):
+            return path, remaining, None, idempotency_key
+        return path, {}, remaining, idempotency_key
+
     async def invoke(
         self,
         definition: ConnectorManifest,
         capability: str,
         credential: dict[str, str],
         config: dict[str, object],
+        arguments: dict[str, object] | None = None,
     ) -> ConnectorResult:
-        """Perform one capability call. Returns the response; raises only on refusal to try."""
+        """Perform one capability call from a validated governed-tool argument object."""
         endpoint = definition.endpoint_for(capability)
         if endpoint is None:
             raise ConnectorError("capability_not_executable")
         base = self.base_url(definition, config)
-        headers, params, basic = self._authorize(definition, credential)
-        url = base + endpoint.path
+        headers, auth_params, basic = self._authorize(definition, credential)
+        path, tool_params, body, idempotency_key = self._request_parts(
+            endpoint, config, arguments or {}
+        )
+        params = {**auth_params, **tool_params}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        url = base + path
         parsed = urlsplit(url)
         await _resolvable_public_host(parsed.hostname or "", parsed.port or 443)
 
@@ -135,15 +164,14 @@ class ConnectorRuntime:
                     url,
                     headers={**headers, "Accept": "application/json"},
                     params=params,
+                    json=body,
                 )
         except httpx.TimeoutException:
             return ConnectorResult(ok=False, status_code=None, error_code="timeout")
         except httpx.HTTPError:
             return ConnectorResult(ok=False, status_code=None, error_code="transport_error")
 
-        body = response.text[:MAX_RESPONSE_BYTES] if response.content else None
-        # The status is diagnostic; the provider's body may echo request detail, so it is
-        # bounded and only returned to the caller, never written to a log line.
+        body_text = response.text[:MAX_RESPONSE_BYTES] if response.content else None
         log.info(
             "connector call",
             extra=context(
@@ -153,7 +181,7 @@ class ConnectorRuntime:
             ),
         )
         if response.is_success:
-            return ConnectorResult(ok=True, status_code=response.status_code, body=body)
+            return ConnectorResult(ok=True, status_code=response.status_code, body=body_text)
         code = {401: "unauthorized", 403: "forbidden", 429: "rate_limited"}.get(
             response.status_code, "provider_error"
         )

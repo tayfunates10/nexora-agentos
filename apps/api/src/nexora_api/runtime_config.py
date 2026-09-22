@@ -91,6 +91,7 @@ class ExecutionProfileConfig(BaseModel):
     allowed_workspaces: list[UUID] = Field(min_length=1, max_length=1000)
     allowed_providers: list[str] = Field(min_length=1, max_length=8)
     allowed_tools: list[str] = Field(default_factory=list, max_length=32)
+    allowed_server_keys: list[str] = Field(default_factory=list, max_length=16)
     max_steps: int = Field(default=8, ge=1, le=32)
     max_output_tokens: int = Field(default=2048, ge=1, le=16384)
     max_total_tokens: int = Field(default=32000, ge=1, le=1_000_000)
@@ -105,6 +106,9 @@ class ExecutionProfileConfig(BaseModel):
         for tool in self.allowed_tools:
             if not re.fullmatch(TOOL_NAME, tool):
                 raise ValueError(f"invalid tool name: {tool}")
+        for server_key in self.allowed_server_keys:
+            if not re.fullmatch(TOOL_NAME, server_key):
+                raise ValueError(f"invalid server key: {server_key}")
         return self
 
     def profile(self) -> ExecutionProfile:
@@ -112,6 +116,7 @@ class ExecutionProfileConfig(BaseModel):
             allowed_workspaces=frozenset(self.allowed_workspaces),
             allowed_providers=frozenset(self.allowed_providers),
             allowed_tools=frozenset(self.allowed_tools),
+            allowed_server_keys=frozenset(self.allowed_server_keys),
             max_steps=self.max_steps,
             max_output_tokens=self.max_output_tokens,
             max_total_tokens=self.max_total_tokens,
@@ -283,6 +288,8 @@ class RuntimeConfig(BaseModel):
         for server_key in self.mcp_servers:
             if not re.fullmatch(TOOL_NAME, server_key):
                 raise ValueError(f"invalid MCP server key: {server_key}")
+            if server_key == "connector":
+                raise ValueError("connector is a reserved built-in MCP server key")
 
         # Partial pricing would meter some provider egress and silently exempt the
         # rest, so a deployment either prices every candidate or prices none.

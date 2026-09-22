@@ -4,7 +4,7 @@
   "category": "engineering",
   "icon": "code",
   "description": "GitHub REST API with a fine-grained token: issues, pull requests and repository activity for the repositories the token can reach.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "available",
   "auth": "bearer_token",
   "capabilities": [
@@ -46,6 +46,49 @@
       "capability": "issues.read",
       "method": "GET",
       "path": "/issues"
+    },
+    {
+      "capability": "issues.write",
+      "method": "POST",
+      "path": "/repos/{owner}/{repo}/issues",
+      "description": "Create a GitHub issue in an explicitly named repository.",
+      "side_effect": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "repo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "title",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
     }
   ]
 }
