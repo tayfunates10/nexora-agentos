@@ -1116,7 +1116,9 @@ class ToolGovernanceRepository:
                         "workspace_id": str(run["workspace_id"]),
                         "agent_id": str(run["tenant_agent_id"] or run["agent_id"]),
                         "trace_id": str(run["trace_id"]),
-                        "agent_kind": "standard" if run["tenant_agent_id"] is not None else "custom",
+                        "agent_kind": (
+                            "standard" if run["tenant_agent_id"] is not None else "custom"
+                        ),
                     }
                 ),
             ),
