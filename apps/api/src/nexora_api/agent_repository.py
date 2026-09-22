@@ -121,10 +121,15 @@ class AgentRuntimeRepository:
         async with self.connection() as connection:
             await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
             result = await connection.execute(
-                """SELECT id,workspace_id,name,instructions,model_profile,created_at
-                   FROM agent_definitions
-                   WHERE workspace_id=%s AND (%s::uuid IS NULL OR id > %s::uuid)
-                   ORDER BY id LIMIT %s""",
+                """SELECT a.id,a.workspace_id,a.name,a.instructions,a.model_profile,a.created_at
+                   FROM agent_definitions a
+                   WHERE a.workspace_id=%s
+                     AND NOT EXISTS (
+                       SELECT 1 FROM tenant_agents t
+                       WHERE t.id=a.id AND t.workspace_id=a.workspace_id
+                     )
+                     AND (%s::uuid IS NULL OR a.id > %s::uuid)
+                   ORDER BY a.id LIMIT %s""",
                 (workspace_id, cursor, cursor, limit),
             )
             return [self.agent(row) for row in await result.fetchall()]
