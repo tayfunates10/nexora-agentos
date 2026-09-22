@@ -423,9 +423,7 @@ class TenantAgentRepository:
                 allowed_origin = f"{parsed.scheme}://{parsed.netloc}"
                 input_schema = {
                     "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "minLength": 1, "maxLength": 1000}
-                    },
+                    "properties": {"path": {"type": "string", "minLength": 1, "maxLength": 1000}},
                     "required": ["path"],
                     "additionalProperties": False,
                 }
@@ -638,15 +636,18 @@ class TenantAgentRepository:
             if row["status"] != InstanceStatus.ACTIVE or not readiness.ready:
                 raise HTTPException(409, "This standard agent is not ready to run")
 
-            allowed_tools, tool_aliases, connector_tools, browser_snapshot = (
-                await self._connector_run_contracts(
-                    connection,
-                    principal,
-                    workspace_id,
-                    manifest,
-                    bindings,
-                    row["settings"],
-                )
+            (
+                allowed_tools,
+                tool_aliases,
+                connector_tools,
+                browser_snapshot,
+            ) = await self._connector_run_contracts(
+                connection,
+                principal,
+                workspace_id,
+                manifest,
+                bindings,
+                row["settings"],
             )
             snapshot = {
                 "kind": "standard",
