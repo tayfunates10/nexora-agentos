@@ -33,6 +33,7 @@ from nexora_api.rag_pipeline import RagEmbeddingPipeline
 from nexora_api.rag_repository import RagRepository
 from nexora_api.runtime_config import RuntimeConfig, RuntimeConfigError, load_runtime_config
 from nexora_api.spend_alert_worker import SpendAlertNotifier, SpendAlertWebhook
+from nexora_api.task_mcp import TASK_SERVER_KEY, TaskMcpAdapter
 from nexora_api.tenant_agent_repository import TenantAgentRepository
 from nexora_api.worker import AgentWorker
 
@@ -270,6 +271,7 @@ def build_worker(
     # "connector" is a built-in, context-aware transport. It is never supplied by a
     # tenant and cannot be replaced by an operator URL.
     resolved_mcp_adapters[CONNECTOR_SERVER_KEY] = ConnectorMcpAdapter(settings)
+    resolved_mcp_adapters[TASK_SERVER_KEY] = TaskMcpAdapter(settings)
     if settings.browser_runtime_url is not None and settings.browser_runtime_token is not None:
         resolved_mcp_adapters[BROWSER_SERVER_KEY] = BrowserMcpAdapter(settings)
     executor = DurableAgentExecutor(
