@@ -56,7 +56,7 @@ class AgentRuntimeRepository:
         return AgentRun(
             id=row["id"],
             workspace_id=row["workspace_id"],
-            agent_id=row["agent_id"],
+            agent_id=row.get("tenant_agent_id") or row["agent_id"],
             trace_id=row["trace_id"],
             status=row["status"],
             attempt_count=row["attempt_count"],
@@ -170,8 +170,8 @@ class AgentRuntimeRepository:
 
             existing_result = await connection.execute(
                 """SELECT id,workspace_id,agent_id,trace_id,status,attempt_count,
-                          cancel_requested_at,finished_at,failure_code,created_at,updated_at,
-                          request_hash
+                          tenant_agent_id,cancel_requested_at,finished_at,failure_code,
+                          created_at,updated_at,request_hash
                    FROM agent_runs
                    WHERE workspace_id=%s AND requested_by_issuer=%s
                      AND requested_by_subject=%s AND idempotency_key=%s
@@ -238,8 +238,10 @@ class AgentRuntimeRepository:
         async with self.connection() as connection:
             await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
             result = await connection.execute(
-                """SELECT id,workspace_id,agent_id,trace_id,status,attempt_count,
-                          cancel_requested_at,finished_at,failure_code,created_at,updated_at
+                """SELECT id,workspace_id,
+                          COALESCE(agent_id,tenant_agent_id) AS agent_id,
+                          trace_id,status,attempt_count,cancel_requested_at,finished_at,
+                          failure_code,created_at,updated_at
                    FROM agent_runs WHERE workspace_id=%s AND id=%s""",
                 (workspace_id, run_id),
             )
@@ -273,17 +275,25 @@ class AgentRuntimeRepository:
             # History is workspace metadata: status, timing and which agent ran. The prompt
             # and the answer stay behind the requester-scoped result endpoint.
             result = await connection.execute(
-                """SELECT r.id,r.workspace_id,r.agent_id,d.name AS agent_name,r.trace_id,
+                """SELECT r.id,r.workspace_id,
+                          COALESCE(r.agent_id,r.tenant_agent_id) AS agent_id,
+                          COALESCE(d.name,t.display_name) AS agent_name,r.trace_id,
                           r.status,r.attempt_count,r.cancel_requested_at,r.finished_at,
                           r.failure_code,r.created_at,r.updated_at,
                           (r.requested_by_issuer=%s AND r.requested_by_subject=%s)
                               AS requested_by_me
                    FROM agent_runs r
-                   JOIN agent_definitions d
+                   LEFT JOIN agent_definitions d
                      ON d.id=r.agent_id AND d.workspace_id=r.workspace_id
+                   LEFT JOIN tenant_agents t
+                     ON t.id=r.tenant_agent_id AND t.workspace_id=r.workspace_id
                    WHERE r.workspace_id=%s
                      AND (%s::text IS NULL OR r.status=%s::text)
-                     AND (%s::uuid IS NULL OR r.agent_id=%s::uuid)
+                     AND (
+                         %s::uuid IS NULL
+                         OR r.agent_id=%s::uuid
+                         OR r.tenant_agent_id=%s::uuid
+                     )
                      AND (NOT %s OR (r.requested_by_issuer=%s AND r.requested_by_subject=%s))
                      AND (%s::timestamptz IS NULL OR (r.created_at,r.id) < (%s,%s::uuid))
                    ORDER BY r.created_at DESC,r.id DESC LIMIT %s""",
@@ -293,6 +303,7 @@ class AgentRuntimeRepository:
                     workspace_id,
                     status.value if status else None,
                     status.value if status else None,
+                    agent_id,
                     agent_id,
                     agent_id,
                     requested_by_me,
@@ -312,7 +323,9 @@ class AgentRuntimeRepository:
             # Results can contain requester-scoped RAG evidence. Workspace admin does not
             # imply permission to another requester's source content.
             result = await connection.execute(
-                """SELECT id,workspace_id,agent_id,trace_id,status,failure_code
+                """SELECT id,workspace_id,
+                          COALESCE(agent_id,tenant_agent_id) AS agent_id,
+                          trace_id,status,failure_code
                    FROM agent_runs
                    WHERE workspace_id=%s AND id=%s
                      AND requested_by_issuer=%s AND requested_by_subject=%s
