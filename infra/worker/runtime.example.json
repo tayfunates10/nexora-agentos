@@ -27,7 +27,10 @@
       "max_output_tokens": 2048,
       "max_total_tokens": 32000,
       "timeout_seconds": 60,
-      "max_context_chars": 100000
+      "max_context_chars": 100000,
+      "allowed_server_keys": [
+        "connector"
+      ]
     }
   },
   "mcp_servers": {},
