@@ -818,6 +818,82 @@ class TenantAgentRepository:
             )
             return UpdatePolicy(**await result.fetchone())
 
+    async def apply_automatic_updates(
+        self,
+        *,
+        limit: int = 50,
+        cursor: UUID | None = None,
+    ) -> tuple[int, UUID | None]:
+        """Apply the catalog offer to automatic instances in a bounded, resumable batch.
+
+        This is a system workflow, not a tenant request. Each instance is locked before its
+        offer is resolved, version moves remain append-only events, and runtime compatibility
+        is checked before the pin changes. A concurrent worker therefore either sees the new
+        pin and does nothing or moves it exactly once.
+        """
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        actor = Principal(issuer="nexora://system", subject="agent-update-scheduler")
+        async with self.connection() as connection:
+            result = await connection.execute(
+                f"""SELECT {INSTANCE_COLUMNS},a.slug,v.version
+                    FROM tenant_agents t
+                    JOIN catalog_agents a ON a.id=t.catalog_agent_id
+                    JOIN catalog_agent_versions v ON v.id=t.version_id
+                    WHERE t.update_mode='automatic' AND t.status<>'disabled'
+                      AND (%s::uuid IS NULL OR t.id > %s::uuid)
+                    ORDER BY t.id
+                    LIMIT %s
+                    FOR UPDATE OF t SKIP LOCKED""",
+                (cursor, cursor, limit),
+            )
+            rows = await result.fetchall()
+            updated = 0
+            for row in rows:
+                target_id, target_version = await offered_version(
+                    connection,
+                    row["catalog_agent_id"],
+                    row["workspace_id"],
+                    row["update_channel"],
+                )
+                if target_id is None or target_id == row["version_id"] or target_version is None:
+                    continue
+                manifest = await self._manifest(connection, target_id)
+                if not self.runtime_version.satisfies_minimum(manifest.runtime_minimum):
+                    # Fail closed. A later runtime rollout makes this version eligible without
+                    # losing the tenant's automatic-update preference.
+                    continue
+                action = (
+                    "rolled_back"
+                    if Version(target_version).parts < Version(row["version"]).parts
+                    else "updated"
+                )
+                request_id = f"automatic-agent-update:{row['id']}:{target_id}"
+                await self._repin(
+                    connection,
+                    actor,
+                    row["workspace_id"],
+                    row["id"],
+                    row["version_id"],
+                    target_id,
+                    action,
+                    request_id,
+                )
+                await self._settle_status(
+                    connection, row["workspace_id"], row["id"], manifest
+                )
+                await self.workspaces.audit(
+                    connection,
+                    actor,
+                    row["workspace_id"],
+                    "agent.automatic_version_changed",
+                    request_id,
+                )
+                updated += 1
+
+            next_cursor = rows[-1]["id"] if len(rows) == limit else None
+            return updated, next_cursor
+
     @staticmethod
     async def _now(connection):
         return (await (await connection.execute("SELECT now() AS at")).fetchone())["at"]
