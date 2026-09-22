@@ -34,7 +34,7 @@ export async function checkAgentRuns(
   await expect(page.getByTestId("run-summary").locator(".status").first()).toHaveText(t("runs.status.queued"));
   await expect(page.getByText(t("runs.statusHelp.queued"))).toBeVisible();
   await expect(page.getByRole("heading", { name: t("runDetail.result.pendingTitle") })).toBeVisible();
-  await expect(page.getByText(t("runDetail.plan.current"))).toBeVisible();
+  await expect(page.getByRole("region", { name: t("runDetail.plan.current") })).toBeVisible();
   await expect(page.getByRole("cell", { name: t("runDetail.plan.status.planned"), exact: true })).toBeVisible();
   await expect(page.getByRole("listitem").filter({ hasText: t("runEvent.run.queued") })).toBeVisible();
 
