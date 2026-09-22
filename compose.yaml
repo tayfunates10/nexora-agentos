@@ -85,6 +85,8 @@ services:
       NEXORA_SECRET_VAULT_KEYS: ${NEXORA_SECRET_VAULT_KEYS:-}
       NEXORA_SECRET_VAULT_ACTIVE_KEY: ${NEXORA_SECRET_VAULT_ACTIVE_KEY:-}
       NEXORA_INTEGRATION_OAUTH_CLIENTS: ${NEXORA_INTEGRATION_OAUTH_CLIENTS:-}
+      NEXORA_BROWSER_RUNTIME_URL: ${NEXORA_BROWSER_RUNTIME_URL:-}
+      NEXORA_BROWSER_RUNTIME_TOKEN: ${NEXORA_BROWSER_RUNTIME_TOKEN:-}
       NEXORA_SPEND_ALERT_SIGNING_SECRET: ${NEXORA_SPEND_ALERT_SIGNING_SECRET:-}
       NEXORA_OTEL_EXPORTER_ENDPOINT: ${NEXORA_OTEL_EXPORTER_ENDPOINT:-}
       NEXORA_OTEL_SAMPLE_RATIO: ${NEXORA_OTEL_SAMPLE_RATIO:-1.0}
@@ -100,6 +102,22 @@ services:
     stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/v1/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+  browser:
+    # Real Chromium is isolated from the worker. Enable explicitly with --profile browser.
+    profiles: ["browser"]
+    build:
+      context: .
+      dockerfile: infra/browser/Dockerfile
+    environment:
+      NEXORA_BROWSER_RUNTIME_TOKEN: ${NEXORA_BROWSER_RUNTIME_TOKEN:-}
+    ports: ["127.0.0.1:8082:8080"]
+    shm_size: "1gb"
+    init: true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 6s
       retries: 3
