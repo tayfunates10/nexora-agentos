@@ -15,6 +15,7 @@ and records where it came from. A later catalog release cannot change a fork's b
 
 import hashlib
 import json
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import psycopg
@@ -250,7 +251,13 @@ class TenantAgentRepository:
         workspace_id: UUID,
         manifest: AgentManifest,
         bindings: list[AgentBinding],
-    ) -> tuple[list[str], dict[str, str], dict[str, dict[str, object]]]:
+        settings: dict[str, object],
+    ) -> tuple[
+        list[str],
+        dict[str, str],
+        dict[str, dict[str, object]],
+        dict[str, str] | None,
+    ]:
         """Freeze connector contracts and register immutable governed tool aliases."""
         by_key = {binding.binding_key: binding for binding in bindings}
         declared_integrations = set(manifest.required_integrations) | set(
@@ -260,8 +267,93 @@ class TenantAgentRepository:
         allowed_tools: list[str] = []
         aliases: dict[str, str] = {}
         connector_tools: dict[str, dict[str, object]] = {}
+        browser_snapshot: dict[str, str] | None = None
 
         for public_name in [*manifest.required_tools, *manifest.optional_tools]:
+            if public_name == "browser.page.inspect":
+                configured = (
+                    self.settings.browser_runtime_url is not None
+                    and self.settings.browser_runtime_token is not None
+                )
+                site_url = settings.get("site_url")
+                if not configured or not isinstance(site_url, str):
+                    if public_name in required_tools:
+                        raise HTTPException(409, "Required browser capability is unavailable")
+                    continue
+                parsed = urlsplit(site_url)
+                if (
+                    parsed.scheme != "https"
+                    or not parsed.hostname
+                    or parsed.username
+                    or parsed.password
+                ):
+                    if public_name in required_tools:
+                        raise HTTPException(409, "Browser site_url must be a public HTTPS site")
+                    continue
+                allowed_origin = f"{parsed.scheme}://{parsed.netloc}"
+                input_schema = {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "minLength": 1, "maxLength": 1000}
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                }
+                digest = hashlib.sha256(
+                    json.dumps(
+                        {"public_name": public_name, "allowed_origin": allowed_origin},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                internal_name = f"browser.{digest[:48]}"
+                await connection.execute(
+                    """INSERT INTO tool_definitions
+                       (id,workspace_id,name,server_key,remote_name,description,input_schema,
+                        output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
+                       VALUES (%s,%s,%s,'browser','page.inspect',%s,%s,NULL,'read',true,%s,%s)
+                       ON CONFLICT (workspace_id,name) DO NOTHING""",
+                    (
+                        uuid4(),
+                        workspace_id,
+                        internal_name,
+                        "Render and inspect an allowlisted customer web page.",
+                        Jsonb(input_schema),
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                stored_result = await connection.execute(
+                    """SELECT id,server_key,remote_name,input_schema,side_effect,enabled
+                       FROM tool_definitions
+                       WHERE workspace_id=%s AND name=%s""",
+                    (workspace_id, internal_name),
+                )
+                stored = await stored_result.fetchone()
+                if (
+                    stored is None
+                    or stored["server_key"] != "browser"
+                    or stored["remote_name"] != "page.inspect"
+                    or stored["input_schema"] != input_schema
+                    or stored["side_effect"] != "read"
+                ):
+                    raise HTTPException(409, "Browser tool contract collision")
+                if not stored["enabled"]:
+                    if public_name in required_tools:
+                        raise HTTPException(409, "Required browser capability is disabled")
+                    continue
+                await connection.execute(
+                    """INSERT INTO tool_policies
+                       (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
+                       VALUES (%s,%s,'allow','Run-scoped allowlisted browser inspection',%s,%s)
+                       ON CONFLICT (workspace_id,tool_id) DO NOTHING""",
+                    (workspace_id, stored["id"], principal.issuer, principal.subject),
+                )
+                allowed_tools.append(public_name)
+                aliases[public_name] = internal_name
+                browser_snapshot = {"allowed_origin": allowed_origin}
+                continue
+
             integration_key, separator, capability = public_name.partition(".")
             if not separator or integration_key not in declared_integrations:
                 allowed_tools.append(public_name)
@@ -306,6 +398,7 @@ class TenantAgentRepository:
                 "definition_id": definition.id,
                 "definition_version": definition.version,
                 "endpoint": endpoint.model_dump(mode="json"),
+                "tenant_integration_id": str(binding.tenant_integration_id),
             }
             digest = hashlib.sha256(
                 json.dumps(
@@ -387,7 +480,7 @@ class TenantAgentRepository:
                 "definition": definition_document,
             }
 
-        return allowed_tools, aliases, connector_tools
+        return allowed_tools, aliases, connector_tools, browser_snapshot
 
     async def create_run(
         self,
@@ -415,12 +508,15 @@ class TenantAgentRepository:
             if row["status"] != InstanceStatus.ACTIVE or not readiness.ready:
                 raise HTTPException(409, "This standard agent is not ready to run")
 
-            allowed_tools, tool_aliases, connector_tools = await self._connector_run_contracts(
-                connection,
-                principal,
-                workspace_id,
-                manifest,
-                bindings,
+            allowed_tools, tool_aliases, connector_tools, browser_snapshot = (
+                await self._connector_run_contracts(
+                    connection,
+                    principal,
+                    workspace_id,
+                    manifest,
+                    bindings,
+                    row["settings"],
+                )
             )
             snapshot = {
                 "kind": "standard",
@@ -434,6 +530,7 @@ class TenantAgentRepository:
                 "allowed_tools": allowed_tools,
                 "tool_aliases": tool_aliases,
                 "connector_tools": connector_tools,
+                "browser": browser_snapshot,
                 "manifest": manifest.model_dump(mode="json"),
                 "bindings": {
                     binding.binding_key: {
