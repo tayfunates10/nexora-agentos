@@ -54,19 +54,31 @@ class RunTaskRepository:
             (row["id"],),
         )
         return RunTask(
-            id=row["id"], workspace_id=row["workspace_id"], run_id=row["run_id"],
-            parent_task_id=row["parent_task_id"], kind=row["kind"], title=row["title"],
-            description=row["description"], status=row["status"],
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            run_id=row["run_id"],
+            parent_task_id=row["parent_task_id"],
+            kind=row["kind"],
+            title=row["title"],
+            description=row["description"],
+            status=row["status"],
             action_tool_name=row["action_tool_name"],
             verification_state=row["verification_state"],
             dependencies=[item["depends_on_task_id"] for item in await dependencies.fetchall()],
             evidence=[RunTaskEvidence(**item) for item in await evidence.fetchall()],
-            created_at=row["created_at"], updated_at=row["updated_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
             completed_at=row["completed_at"],
         )
 
-    async def list_tasks(self, principal: Principal, workspace_id: UUID, run_id: UUID,
-                         limit: int, cursor: UUID | None) -> list[RunTask]:
+    async def list_tasks(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        run_id: UUID,
+        limit: int,
+        cursor: UUID | None,
+    ) -> list[RunTask]:
         async with self.connection() as connection:
             await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
             run_result = await connection.execute(
@@ -99,8 +111,9 @@ class RunTaskRepository:
             raise RunTaskError("task_tool_not_allowed")
         return (context.tool_aliases or {}).get(public_name, public_name)
 
-    async def create_follow_up(self, context: ExecutionContext,
-                               arguments: dict[str, object]) -> dict[str, object]:
+    async def create_follow_up(
+        self, context: ExecutionContext, arguments: dict[str, object]
+    ) -> dict[str, object]:
         title = str(arguments.get("title", "")).strip()
         description = str(arguments.get("description", "")).strip()
         action_tool = arguments.get("action_tool")
@@ -112,10 +125,14 @@ class RunTaskRepository:
         dependencies = [self._uuid(value, "task_dependency_invalid") for value in raw_dependencies]
         if len(dependencies) != len(set(dependencies)):
             raise RunTaskError("task_dependency_duplicate")
-        request_hash = self._request_hash({
-            "title": title, "description": description, "action_tool": action_tool,
-            "depends_on": sorted(str(value) for value in dependencies),
-        })
+        request_hash = self._request_hash(
+            {
+                "title": title,
+                "description": description,
+                "action_tool": action_tool,
+                "depends_on": sorted(str(value) for value in dependencies),
+            }
+        )
 
         async with self.connection() as connection:
             await executable_run(connection, context)
@@ -127,8 +144,11 @@ class RunTaskRepository:
             if existing is not None:
                 if existing["request_hash"] != request_hash:
                     raise RunTaskError("task_idempotency_conflict")
-                return {"task_id": str(existing["id"]), "status": existing["status"],
-                        "verification_state": existing["verification_state"]}
+                return {
+                    "task_id": str(existing["id"]),
+                    "status": existing["status"],
+                    "verification_state": existing["verification_state"],
+                }
 
             root_result = await connection.execute(
                 """SELECT id FROM run_tasks
@@ -147,8 +167,12 @@ class RunTaskRepository:
                     (context.workspace_id, internal),
                 )
                 tool = await tool_result.fetchone()
-                if (tool is None or not tool["enabled"] or tool["server_key"] == "tasks"
-                        or tool["side_effect"] == "read"):
+                if (
+                    tool is None
+                    or not tool["enabled"]
+                    or tool["server_key"] == "tasks"
+                    or tool["side_effect"] == "read"
+                ):
                     raise RunTaskError("task_action_tool_invalid")
 
             if dependencies:
@@ -166,9 +190,18 @@ class RunTaskRepository:
                    (id,workspace_id,run_id,parent_task_id,kind,title,description,status,
                     action_tool_name,verification_state,idempotency_key,request_hash)
                    VALUES (%s,%s,%s,%s,'follow_up',%s,%s,'planned',%s,%s,%s,%s)""",
-                (task_id, context.workspace_id, context.run_id, root["id"], title, description,
-                 action_tool, "pending" if action_tool else "not_required",
-                 idempotency_key, request_hash),
+                (
+                    task_id,
+                    context.workspace_id,
+                    context.run_id,
+                    root["id"],
+                    title,
+                    description,
+                    action_tool,
+                    "pending" if action_tool else "not_required",
+                    idempotency_key,
+                    request_hash,
+                ),
             )
             for dependency in dependencies:
                 await connection.execute(
@@ -176,14 +209,26 @@ class RunTaskRepository:
                        (workspace_id,run_id,task_id,depends_on_task_id) VALUES (%s,%s,%s,%s)""",
                     (context.workspace_id, context.run_id, task_id, dependency),
                 )
-            await append_run_event(connection, context.workspace_id, context.run_id, "task.created",
-                {"task_id": str(task_id), "parent_task_id": str(root["id"]),
-                 "action_tool": action_tool})
-            return {"task_id": str(task_id), "status": "planned",
-                    "verification_state": "pending" if action_tool else "not_required"}
+            await append_run_event(
+                connection,
+                context.workspace_id,
+                context.run_id,
+                "task.created",
+                {
+                    "task_id": str(task_id),
+                    "parent_task_id": str(root["id"]),
+                    "action_tool": action_tool,
+                },
+            )
+            return {
+                "task_id": str(task_id),
+                "status": "planned",
+                "verification_state": "pending" if action_tool else "not_required",
+            }
 
-    async def verify(self, context: ExecutionContext,
-                     arguments: dict[str, object]) -> dict[str, object]:
+    async def verify(
+        self, context: ExecutionContext, arguments: dict[str, object]
+    ) -> dict[str, object]:
         task_id = self._uuid(arguments.get("task_id"), "task_id_invalid")
         verification_tool = str(arguments.get("verification_tool", ""))
         summary = str(arguments.get("summary", "")).strip()
@@ -207,8 +252,11 @@ class RunTaskRepository:
                     "SELECT status,verification_state FROM run_tasks WHERE id=%s", (task_id,)
                 )
                 row = await row_result.fetchone()
-                return {"task_id": str(task_id), "status": row["status"],
-                        "verification_state": row["verification_state"]}
+                return {
+                    "task_id": str(task_id),
+                    "status": row["status"],
+                    "verification_state": row["verification_state"],
+                }
 
             task_result = await connection.execute(
                 """SELECT * FROM run_tasks WHERE id=%s AND workspace_id=%s AND run_id=%s
@@ -267,18 +315,40 @@ class RunTaskRepository:
                    (id,workspace_id,run_id,task_id,action_tool_call_id,verification_tool_call_id,
                     verification_tool_name,summary,satisfied,idempotency_key)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (evidence_id, context.workspace_id, context.run_id, task_id, action_call_id,
-                 verification_call["id"], verification_tool, summary, satisfied, idempotency_key),
+                (
+                    evidence_id,
+                    context.workspace_id,
+                    context.run_id,
+                    task_id,
+                    action_call_id,
+                    verification_call["id"],
+                    verification_tool,
+                    summary,
+                    satisfied,
+                    idempotency_key,
+                ),
             )
             status = "succeeded" if satisfied else "failed"
             verification_state = "verified" if satisfied else "failed"
             await connection.execute(
                 """UPDATE run_tasks SET status=%s,verification_state=%s,completed_at=now(),
-                   updated_at=now() WHERE id=%s""", (status, verification_state, task_id)
+                   updated_at=now() WHERE id=%s""",
+                (status, verification_state, task_id),
             )
-            await append_run_event(connection, context.workspace_id, context.run_id,
+            await append_run_event(
+                connection,
+                context.workspace_id,
+                context.run_id,
                 "task.verified" if satisfied else "task.verification_failed",
-                {"task_id": str(task_id), "verification_tool": verification_tool,
-                 "verification_tool_call_id": str(verification_call["id"])})
-            return {"task_id": str(task_id), "status": status,
-                    "verification_state": verification_state, "evidence_id": str(evidence_id)}
+                {
+                    "task_id": str(task_id),
+                    "verification_tool": verification_tool,
+                    "verification_tool_call_id": str(verification_call["id"]),
+                },
+            )
+            return {
+                "task_id": str(task_id),
+                "status": status,
+                "verification_state": verification_state,
+                "evidence_id": str(evidence_id),
+            }
