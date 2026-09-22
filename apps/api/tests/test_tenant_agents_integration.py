@@ -183,7 +183,13 @@ def test_standard_agent_runs_directly_with_an_immutable_execution_snapshot(
                WHERE d.workspace_id=%s AND d.name=%s""",
             (space, internal_name),
         ).fetchone()
-        assert governed == ("connector", "mikro.stock.read", "read", True, "allow")
+        assert governed == (
+            "connector",
+            f"{integration['id']}:stock.read",
+            "read",
+            True,
+            "allow",
+        )
 
         payload = connection.execute(
             "SELECT payload FROM job_outbox WHERE run_id=%s", (run["id"],)
