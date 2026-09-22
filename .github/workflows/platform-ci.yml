@@ -206,3 +206,22 @@ jobs:
       - name: Stop containers
         if: always()
         run: docker compose -f compose.yaml -f compose.monitoring.yaml --profile worker --profile browser down
+
+  customer-ready:
+    name: Customer Ready Gate
+    if: always()
+    needs: [api, web, manifests, monitoring-rules, compose-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every customer release check
+        env:
+          API_RESULT: ${{ needs.api.result }}
+          WEB_RESULT: ${{ needs.web.result }}
+          MANIFESTS_RESULT: ${{ needs.manifests.result }}
+          MONITORING_RESULT: ${{ needs.monitoring-rules.result }}
+          COMPOSE_RESULT: ${{ needs.compose-smoke.result }}
+        run: |
+          set -euo pipefail
+          for result in "$API_RESULT" "$WEB_RESULT" "$MANIFESTS_RESULT" "$MONITORING_RESULT" "$COMPOSE_RESULT"; do
+            test "$result" = "success"
+          done
