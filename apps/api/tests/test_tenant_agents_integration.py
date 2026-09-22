@@ -67,6 +67,62 @@ def install(client, caller, space, slug, **body):
 
 
 
+
+def test_connector_upgrade_provisions_new_tools_for_existing_customer_connections(
+    client, admin, keys, platform_settings
+):
+    owner = headers(keys, "owner-connector-upgrade")
+    space = workspace(client, owner, "Connector upgrade")
+    legacy = publish_connector(
+        client,
+        admin,
+        "custom-rest",
+        version="1.0.0",
+        endpoints=[
+            {"capability": "request.read", "method": "GET", "path": "/"},
+        ],
+    )
+    assert legacy["version"] == "1.0.0"
+
+    connected = client.post(
+        f"/api/v1/workspaces/{space}/integrations",
+        json={
+            "integration_definition_id": "custom-rest",
+            "display_name": "Existing API",
+            "account_identifier": "existing-api",
+            "credentials": {
+                "access_token": "existing-rest-token-0000000001",
+                "base_url": "https://api.example.com",
+            },
+        },
+        headers=owner,
+    )
+    assert connected.status_code == 201, connected.text
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        before = connection.execute(
+            """SELECT 1 FROM tool_definitions
+               WHERE workspace_id=%s AND name='custom-rest.request.write'""",
+            (space,),
+        ).fetchone()
+        assert before is None
+
+    upgraded = publish_connector(client, admin, "custom-rest")
+    assert upgraded["version"] == "1.1.0"
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        after = connection.execute(
+            """SELECT t.side_effect,p.decision
+               FROM tool_definitions t
+               JOIN tool_policies p
+                 ON p.tool_id=t.id AND p.workspace_id=t.workspace_id
+               WHERE t.workspace_id=%s AND t.name='custom-rest.request.write'""",
+            (space,),
+        ).fetchone()
+        assert after == ("write", "require_approval")
+
+
+
 def test_installed_standard_agent_is_runnable_and_provisions_governed_write_tool(
     client, admin, keys, platform_settings
 ):
