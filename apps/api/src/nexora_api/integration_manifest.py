@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from nexora_api.tool_contracts import ToolContractError, validate_registration_schema
+
 SEMVER = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 SLUG = r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
 LABEL = r"^[a-z][a-z0-9_-]{1,39}$"
@@ -24,6 +26,7 @@ SCOPE = r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"
 
 AuthType = Literal["api_key", "oauth2", "basic", "bearer_token", "webhook"]
 ConnectorStatus = Literal["available", "beta", "deprecated", "disabled"]
+EndpointSideEffect = Literal["read", "write", "destructive", "external_communication"]
 
 # Which fields each authentication style expects a tenant to provide. A definition that
 # contradicts its own auth type is rejected at publish time rather than at connect time.
@@ -94,23 +97,46 @@ class CredentialPlacement(BaseModel):
 
 
 class ConnectorEndpoint(BaseModel):
-    """One capability, expressed as a request the runtime knows how to make."""
+    """One executable connector capability and its governed tool contract.
+
+    Path placeholders are resolved from non-secret integration configuration first and
+    then from validated tool arguments. Consumed placeholders are removed before the
+    remaining arguments are sent as query parameters or a JSON body.
+    """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     capability: str = Field(max_length=100)
-    method: Literal["GET", "POST", "DELETE"] = "GET"
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
     path: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="Connector capability", min_length=1, max_length=1000)
+    side_effect: EndpointSideEffect = "read"
+    input_schema: dict[str, object] = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
+    )
+    output_schema: dict[str, object] | None = None
 
     @model_validator(mode="after")
-    def _contained_path(self) -> Self:
+    def _valid(self) -> Self:
         if not re.fullmatch(CAPABILITY, self.capability):
             raise ValueError(f"Invalid capability: {self.capability}")
-        # A path never escapes the connector's base URL, so no scheme, host or traversal.
         if not self.path.startswith("/") or "://" in self.path or ".." in self.path:
             raise ValueError("An endpoint path must be an absolute path under the base URL")
+        placeholders = re.findall(r"{([^{}]+)}", self.path)
+        if any(not re.fullmatch(FIELD_KEY, item) for item in placeholders):
+            raise ValueError("Endpoint path placeholders must be connector field identifiers")
+        try:
+            validate_registration_schema(self.input_schema, side_effect=self.side_effect)
+            if self.output_schema is not None:
+                validate_registration_schema(self.output_schema, output=True)
+        except ToolContractError as exc:
+            raise ValueError(f"Invalid connector tool contract: {exc.code}") from None
         return self
-
 
 class CredentialField(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
