@@ -103,7 +103,7 @@ class Publishing(unittest.TestCase):
                 ("POST", "/api/v1/platform/agents/social-media/versions"),
             ],
         )
-        self.assertIn("1.0.0", result)
+        self.assertIn(agent()["version"], result)
 
     def test_an_existing_agent_only_publishes_the_new_version(self):
         calls = []
