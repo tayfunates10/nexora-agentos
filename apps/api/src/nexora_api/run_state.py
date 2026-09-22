@@ -43,6 +43,7 @@ class ExecutionContext:
     instructions: str
     model_profile: str
     attempt_count: int
+    declared_tools: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -110,7 +111,7 @@ class RunStateStore:
                 return ClaimResult("ack")
 
             run_result = await connection.execute(
-                """SELECT r.*,a.instructions,a.model_profile
+                """SELECT r.*,a.instructions,a.model_profile,a.manifest
                    FROM agent_runs r
                    JOIN agent_definitions a
                      ON a.id=r.agent_id AND a.workspace_id=r.workspace_id
@@ -204,6 +205,13 @@ class RunStateStore:
                 "run.started",
                 {"attempt": state["attempt_count"], "job_id": str(job.job_id)},
             )
+            manifest = run["manifest"] if isinstance(run["manifest"], dict) else {}
+            declared_tools = frozenset(
+                tool
+                for key in ("required_tools", "optional_tools")
+                for tool in manifest.get(key, [])
+                if isinstance(tool, str)
+            )
             context = ExecutionContext(
                 job_id=job.job_id,
                 workspace_id=run["workspace_id"],
@@ -214,6 +222,7 @@ class RunStateStore:
                 instructions=run["instructions"],
                 model_profile=run["model_profile"],
                 attempt_count=state["attempt_count"],
+                declared_tools=declared_tools,
             )
             return ClaimResult("execute", context)
 
