@@ -4,7 +4,7 @@
   "category": "social",
   "icon": "instagram",
   "description": "Instagram Graph API: read insights and comments, publish and schedule media for a connected professional account.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "available",
   "auth": "oauth2",
   "capabilities": [
