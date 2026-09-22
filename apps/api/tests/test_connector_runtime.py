@@ -148,7 +148,6 @@ def test_side_effecting_endpoint_cannot_use_safe_retry():
         raise AssertionError("unsafe mutation retry contract was accepted")
 
 
-
 def test_standard_connector_target_rejects_config_or_manual_credential_drift():
     config = {"base_url": "https://erp.example.com", "company_code": "A"}
     credential = UUID("00000000-0000-0000-0000-000000000001")
