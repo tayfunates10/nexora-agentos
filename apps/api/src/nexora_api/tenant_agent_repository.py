@@ -320,22 +320,23 @@ class TenantAgentRepository:
                 """INSERT INTO tool_definitions
                    (id,workspace_id,name,server_key,remote_name,description,input_schema,
                     output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
-                   VALUES (%s,%s,%s,'connector',%s,%s,%s,NULL,%s,true,%s,%s)
+                   VALUES (%s,%s,%s,'connector',%s,%s,%s,%s,%s,true,%s,%s)
                    ON CONFLICT (workspace_id,name) DO NOTHING""",
                 (
                     tool_id,
                     workspace_id,
                     internal_name,
-                    public_name,
-                    f"{definition.name}: {capability}",
+                    f"{binding.tenant_integration_id}:{capability}",
+                    endpoint.description,
                     Jsonb(endpoint.input_schema),
+                    Jsonb(endpoint.output_schema) if endpoint.output_schema is not None else None,
                     endpoint.side_effect,
                     principal.issuer,
                     principal.subject,
                 ),
             )
             stored_result = await connection.execute(
-                """SELECT id,server_key,remote_name,input_schema,side_effect,enabled
+                """SELECT id,server_key,remote_name,input_schema,output_schema,side_effect,enabled
                    FROM tool_definitions
                    WHERE workspace_id=%s AND name=%s""",
                 (workspace_id, internal_name),
@@ -344,8 +345,9 @@ class TenantAgentRepository:
             if (
                 stored is None
                 or stored["server_key"] != "connector"
-                or stored["remote_name"] != public_name
+                or stored["remote_name"] != f"{binding.tenant_integration_id}:{capability}"
                 or stored["input_schema"] != endpoint.input_schema
+                or stored["output_schema"] != endpoint.output_schema
                 or stored["side_effect"] != endpoint.side_effect
             ):
                 raise HTTPException(409, "Connector tool contract collision")
