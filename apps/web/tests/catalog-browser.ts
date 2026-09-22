@@ -102,7 +102,7 @@ export async function checkCatalogAndIntegrations(
   // Installed, but deliberately not running: its connection has not been chosen yet.
   await expect(page.getByRole("status")).toContainText(t("catalog.added"));
   await expect(page.getByText(t("catalog.instanceStatus.paused"))).toBeVisible();
-  await expect(page.getByText(t("catalog.notReady", { count: "1" }))).toBeVisible();
+  await expect(page.getByText(t("catalog.notReady", { count: "1" })).first()).toBeVisible();
 
   const agent = [...provider.tenantAgents.values()][0];
   expect(agent.readiness.ready).toBe(false);
