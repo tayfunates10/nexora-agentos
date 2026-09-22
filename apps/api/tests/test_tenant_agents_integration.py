@@ -231,8 +231,6 @@ def test_standard_agent_runs_directly_with_an_immutable_execution_snapshot(
         assert snapshot["model_profile"] == "balanced-v1"
 
 
-
-
 def test_rebinding_after_queue_fails_closed_before_connector_egress(
     client, admin, keys, platform_settings
 ):
@@ -310,6 +308,7 @@ def test_rebinding_after_queue_fails_closed_before_connector_egress(
     assert raised.value.code == "connector_binding_changed"
     assert raised.value.retryable is False
 
+
 def test_standard_agent_browser_tools_freeze_origin_and_gate_ui_mutation(
     client, admin, keys, platform_settings
 ):
@@ -376,6 +375,7 @@ def test_standard_agent_browser_tools_freeze_origin_and_gate_ui_mutation(
             (action_name, "page.action", "write", "require_approval"),
             (inspect_name, "page.inspect", "read", "allow"),
         ]
+
 
 def test_paused_standard_agent_cannot_queue_a_run(client, admin, keys):
     owner = headers(keys, "owner-paused-run")
