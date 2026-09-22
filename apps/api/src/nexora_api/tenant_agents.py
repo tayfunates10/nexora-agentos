@@ -12,11 +12,12 @@ from enum import StrEnum
 from typing import Annotated, Self
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi import APIRouter, Depends, Header, Path, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nexora_api.agent_catalog import AgentStatus, Channel
 from nexora_api.agent_manifest import SEMVER, SLUG, AgentManifest
+from nexora_api.agents import AgentRun
 from nexora_api.auth import Principal, authenticated
 from nexora_api.integrations import IntegrationStatus
 
@@ -189,6 +190,12 @@ class VersionEventPage(BaseModel):
     next_cursor: UUID | None = None
 
 
+class TenantAgentRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    input: str = Field(min_length=1, max_length=20000)
+
+
 class ForkInput(BaseModel):
     """Take a private copy. The copy stops tracking the catalog from that moment on."""
 
@@ -279,6 +286,32 @@ async def get_tenant_agent(
     workspace_id: UUID, agent_id: UUID, principal: Identity, request: Request
 ):
     return await repository(request).get(principal, workspace_id, agent_id)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/tenant-agents/{agent_id}/runs",
+    response_model=AgentRun,
+    status_code=201,
+)
+async def run_tenant_agent(
+    workspace_id: UUID,
+    agent_id: UUID,
+    body: TenantAgentRunInput,
+    principal: Identity,
+    request: Request,
+    response: Response,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+):
+    run, created = await repository(request).create_run(
+        principal,
+        workspace_id,
+        agent_id,
+        body,
+        idempotency_key,
+        request.state.request_id,
+    )
+    response.status_code = 201 if created else 200
+    return run
 
 
 @router.patch("/workspaces/{workspace_id}/tenant-agents/{agent_id}", response_model=TenantAgent)
