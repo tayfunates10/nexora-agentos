@@ -22,9 +22,9 @@ from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
 from nexora_api.agent_catalog import Channel
-from nexora_api.agents import AgentRun
 from nexora_api.agent_catalog_repository import offered_version
 from nexora_api.agent_manifest import AgentManifest, Version
+from nexora_api.agents import AgentRun
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.integrations import IntegrationStatus
