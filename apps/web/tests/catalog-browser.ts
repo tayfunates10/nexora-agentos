@@ -111,6 +111,15 @@ export async function checkCatalogAndIntegrations(
   await expect(page.getByText(t("catalog.instanceStatus.active"))).toBeVisible();
   expect([...provider.tenantAgents.values()][0].bindings[0].binding_key).toBe("mikro");
 
+  // ------------------------------------------- running without a custom-agent fork
+  await page.getByLabel(t("agents.taskLabel"))
+    .fill("Inspect stock and report the current state.");
+  await page.getByRole("button", { name: t("agents.startRun") }).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]+$/);
+  const standardRun = [...provider.runs.values()].at(-1);
+  expect(standardRun?.agent_id).toBe(instance.id);
+  await page.goto(`${detailUrl}/catalog/${instance.id}`);
+
   // ------------------------------------------------ updating and rolling back
   await settleReveals(page);
   const instance = [...provider.tenantAgents.values()][0];
