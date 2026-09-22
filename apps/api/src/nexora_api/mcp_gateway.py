@@ -137,14 +137,22 @@ class McpGateway:
             raise McpGatewayError("mcp_server_unavailable", retryable=True)
 
         try:
-            result = await asyncio.wait_for(
-                adapter.call_tool(
+            contextual = getattr(adapter, "call_tool_for_context", None)
+            operation = (
+                contextual(
+                    context,
                     execution.remote_name,
                     execution.arguments,
                     self.timeout_seconds,
-                ),
-                timeout=self.timeout_seconds,
+                )
+                if contextual is not None
+                else adapter.call_tool(
+                    execution.remote_name,
+                    execution.arguments,
+                    self.timeout_seconds,
+                )
             )
+            result = await asyncio.wait_for(operation, timeout=self.timeout_seconds)
         except McpAdapterError as exc:
             await self.repository.complete_failure(
                 execution.call_id, exc.code, retryable=exc.retryable, context=context
