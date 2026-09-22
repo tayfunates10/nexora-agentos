@@ -400,7 +400,7 @@ class TenantAgentRepository:
                 aliases[public_name] = internal_name
                 continue
 
-            if public_name == "browser.page.inspect":
+            if public_name in {"browser.page.inspect", "browser.page.action"}:
                 configured = (
                     self.settings.browser_runtime_url is not None
                     and self.settings.browser_runtime_token is not None
@@ -420,16 +420,55 @@ class TenantAgentRepository:
                     if public_name in required_tools:
                         raise HTTPException(409, "Browser site_url must be a public HTTPS site")
                     continue
+
                 allowed_origin = f"{parsed.scheme}://{parsed.netloc}"
-                input_schema = {
-                    "type": "object",
-                    "properties": {"path": {"type": "string", "minLength": 1, "maxLength": 1000}},
-                    "required": ["path"],
-                    "additionalProperties": False,
-                }
+                is_action = public_name == "browser.page.action"
+                if is_action:
+                    remote_name = "page.action"
+                    side_effect = "write"
+                    description = (
+                        "Perform one approval-gated click or fill on an allowlisted customer page."
+                    )
+                    input_schema = {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "minLength": 1, "maxLength": 1000},
+                            "action": {"type": "string", "enum": ["click", "fill"]},
+                            "selector": {"type": "string", "minLength": 1, "maxLength": 500},
+                            "value": {"type": "string", "maxLength": 4000},
+                            "idempotency_key": {
+                                "type": "string",
+                                "minLength": 8,
+                                "maxLength": 128,
+                            },
+                        },
+                        "required": ["path", "action", "selector", "idempotency_key"],
+                        "additionalProperties": False,
+                    }
+                    policy_decision = "require_approval"
+                    policy_reason = "Browser UI mutation requires human approval"
+                else:
+                    remote_name = "page.inspect"
+                    side_effect = "read"
+                    description = "Render and inspect an allowlisted customer web page."
+                    input_schema = {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "minLength": 1, "maxLength": 1000}
+                        },
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    }
+                    policy_decision = "allow"
+                    policy_reason = "Run-scoped allowlisted browser inspection"
+
                 digest = hashlib.sha256(
                     json.dumps(
-                        {"public_name": public_name, "allowed_origin": allowed_origin},
+                        {
+                            "public_name": public_name,
+                            "allowed_origin": allowed_origin,
+                            "input_schema": input_schema,
+                        },
                         sort_keys=True,
                         separators=(",", ":"),
                     ).encode()
@@ -439,14 +478,16 @@ class TenantAgentRepository:
                     """INSERT INTO tool_definitions
                        (id,workspace_id,name,server_key,remote_name,description,input_schema,
                         output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
-                       VALUES (%s,%s,%s,'browser','page.inspect',%s,%s,NULL,'read',true,%s,%s)
+                       VALUES (%s,%s,%s,'browser',%s,%s,%s,NULL,%s,true,%s,%s)
                        ON CONFLICT (workspace_id,name) DO NOTHING""",
                     (
                         uuid4(),
                         workspace_id,
                         internal_name,
-                        "Render and inspect an allowlisted customer web page.",
+                        remote_name,
+                        description,
                         Jsonb(input_schema),
+                        side_effect,
                         principal.issuer,
                         principal.subject,
                     ),
@@ -461,9 +502,9 @@ class TenantAgentRepository:
                 if (
                     stored is None
                     or stored["server_key"] != "browser"
-                    or stored["remote_name"] != "page.inspect"
+                    or stored["remote_name"] != remote_name
                     or stored["input_schema"] != input_schema
-                    or stored["side_effect"] != "read"
+                    or stored["side_effect"] != side_effect
                 ):
                     raise HTTPException(409, "Browser tool contract collision")
                 if not stored["enabled"]:
@@ -473,9 +514,16 @@ class TenantAgentRepository:
                 await connection.execute(
                     """INSERT INTO tool_policies
                        (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
-                       VALUES (%s,%s,'allow','Run-scoped allowlisted browser inspection',%s,%s)
+                       VALUES (%s,%s,%s,%s,%s,%s)
                        ON CONFLICT (workspace_id,tool_id) DO NOTHING""",
-                    (workspace_id, stored["id"], principal.issuer, principal.subject),
+                    (
+                        workspace_id,
+                        stored["id"],
+                        policy_decision,
+                        policy_reason,
+                        principal.issuer,
+                        principal.subject,
+                    ),
                 )
                 allowed_tools.append(public_name)
                 aliases[public_name] = internal_name
