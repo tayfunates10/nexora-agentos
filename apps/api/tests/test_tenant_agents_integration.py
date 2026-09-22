@@ -407,9 +407,7 @@ def test_automatic_update_mode_moves_only_opted_in_instances(client, admin, keys
     automatic = install(
         client, owner, space, slug, display_name="Automatic", update_mode="automatic"
     ).json()
-    manual = install(
-        client, owner, space, slug, display_name="Manual", update_mode="manual"
-    ).json()
+    manual = install(client, owner, space, slug, display_name="Manual", update_mode="manual").json()
 
     publish_version(
         client,
@@ -423,9 +421,7 @@ def test_automatic_update_mode_moves_only_opted_in_instances(client, admin, keys
         optional_tools=[],
     )
 
-    updated, cursor = asyncio.run(
-        client.app.state.tenant_agents.apply_automatic_updates(limit=50)
-    )
+    updated, cursor = asyncio.run(client.app.state.tenant_agents.apply_automatic_updates(limit=50))
     assert updated == 1
     assert cursor is None
 
