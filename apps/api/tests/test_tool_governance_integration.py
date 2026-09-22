@@ -224,6 +224,20 @@ def test_allowed_read_tool_executes_through_gateway(keys, auth_settings):
         assert "tool.started" in event_types
         assert "tool.succeeded" in event_types
 
+        actions_response = client.get(
+            base + "/runs/" + run_id + "/actions",
+            headers=auth_headers(keys, member),
+        )
+        assert actions_response.status_code == 200, actions_response.text
+        actions = actions_response.json()["items"]
+        assert len(actions) == 1
+        assert actions[0]["action_name"] == "lookup"
+        assert actions[0]["status"] == "succeeded"
+        assert actions[0]["side_effect"] == "read"
+        assert actions[0]["attempt_count"] == 1
+        assert "arguments" not in actions[0]
+        assert "result" not in actions[0]
+
         with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
             row = connection.execute(
                 """SELECT status,attempt_count,result
