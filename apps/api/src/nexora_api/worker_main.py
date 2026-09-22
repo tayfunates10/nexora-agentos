@@ -20,6 +20,7 @@ from redis.asyncio import Redis
 from nexora_api import metrics
 from nexora_api.config import Settings
 from nexora_api.health import DependencyProbe, HealthResponse
+from nexora_api.integration_mcp import IntegrationMcpAdapter
 from nexora_api.logs import configure_logging, logger
 from nexora_api.logs import context as log_context
 from nexora_api.runtime_config import RuntimeConfigError
@@ -98,6 +99,7 @@ async def serve(settings: Settings) -> None:
     )
     adapters = build_provider_adapters(settings, config)
     mcp_adapters = build_mcp_adapters(config)
+    mcp_adapters["nexora-integrations"] = IntegrationMcpAdapter(settings)
     retriever = build_retriever(settings, config)
     worker = build_worker(
         settings,
