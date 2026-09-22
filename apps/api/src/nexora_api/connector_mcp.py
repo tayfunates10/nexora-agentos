@@ -242,7 +242,10 @@ class ConnectorMcpAdapter:
                     ):
                         raise McpAdapterError("connector_snapshot_invalid", retryable=False)
                     definition = load_connector(definition_document)
-                    if definition.id != definition_id or definition.endpoint_for(capability) is None:
+                    if (
+                        definition.id != definition_id
+                        or definition.endpoint_for(capability) is None
+                    ):
                         raise McpAdapterError("connector_snapshot_invalid", retryable=False)
 
                 result = await self.repository.runtime.invoke(
