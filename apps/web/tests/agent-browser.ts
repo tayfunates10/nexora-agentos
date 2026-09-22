@@ -66,6 +66,14 @@ export async function checkAgentRuns(
       payload: { attempt: 1 }, created_at: "2026-09-20T10:02:00Z",
     },
   ]);
+  provider.runActions.set(succeeded.id, [{
+    id: randomUUID(), workspace_id: workspace.id, run_id: succeeded.id,
+    action_name: "search_incidents", side_effect: "read", status: "succeeded",
+    policy_decision: "allow", attempt_count: 1, error_code: null,
+    approval_id: null, approval_status: null,
+    created_at: "2026-09-20T10:00:30Z", updated_at: "2026-09-20T10:01:00Z",
+    started_at: "2026-09-20T10:00:30Z", finished_at: "2026-09-20T10:01:00Z",
+  }]);
   provider.runResults.set(succeeded.id, {
     run_id: succeeded.id, workspace_id: workspace.id, agent_id: run.agent_id,
     trace_id: succeeded.trace_id, status: "succeeded",
@@ -80,7 +88,9 @@ export async function checkAgentRuns(
   await page.goto(`${detailUrl}/runs/${succeeded.id}`);
   await expect(page.getByText("Two incidents were recorded this week.")).toBeVisible();
   await expect(page.getByText(t("runEvent.model.completed"))).toBeVisible();
-  await expect(page.getByText("search_incidents")).toBeVisible();
+  await expect(page.getByRole("heading", { name: t("runDetail.actions.title") })).toBeVisible();
+  await expect(page.getByText(t("runDetail.actions.status.succeeded"))).toBeVisible();
+  await expect(page.getByText("search_incidents").first()).toBeVisible();
   await expect(page.getByText(t("runDetail.result.selectionNotice", { tools: "search_incidents" }))).toBeVisible();
 
   // The answer belongs to the requester: admin access does not open it.
