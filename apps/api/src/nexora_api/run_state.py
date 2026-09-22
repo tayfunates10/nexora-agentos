@@ -136,6 +136,28 @@ class RunStateStore:
             ):
                 return ClaimResult("ack")
 
+            snapshot = run["agent_snapshot"] if agent_kind == "standard" else None
+            if agent_kind == "standard":
+                if not isinstance(snapshot, dict):
+                    return ClaimResult("ack")
+                instructions = snapshot.get("instructions")
+                model_profile = snapshot.get("model_profile")
+                allowed = snapshot.get("allowed_tools")
+                if (
+                    not isinstance(instructions, str)
+                    or not instructions
+                    or not isinstance(model_profile, str)
+                    or not model_profile
+                    or not isinstance(allowed, list)
+                    or any(not isinstance(name, str) for name in allowed)
+                ):
+                    return ClaimResult("ack")
+                allowed_tools = frozenset(allowed)
+            else:
+                instructions = run["instructions"]
+                model_profile = run["model_profile"]
+                allowed_tools = None
+
             if run["status"] in ("succeeded", "failed", "cancelled"):
                 terminal = "cancelled" if run["status"] == "cancelled" else run["status"]
                 await self._terminal_receipt(connection, job, terminal, worker_id)
@@ -213,27 +235,6 @@ class RunStateStore:
                 "run.started",
                 {"attempt": state["attempt_count"], "job_id": str(job.job_id)},
             )
-            snapshot = run["agent_snapshot"] if agent_kind == "standard" else None
-            if agent_kind == "standard":
-                if not isinstance(snapshot, dict):
-                    return ClaimResult("ack")
-                instructions = snapshot.get("instructions")
-                model_profile = snapshot.get("model_profile")
-                allowed = snapshot.get("allowed_tools")
-                if (
-                    not isinstance(instructions, str)
-                    or not instructions
-                    or not isinstance(model_profile, str)
-                    or not model_profile
-                    or not isinstance(allowed, list)
-                    or any(not isinstance(name, str) for name in allowed)
-                ):
-                    return ClaimResult("ack")
-                allowed_tools = frozenset(allowed)
-            else:
-                instructions = run["instructions"]
-                model_profile = run["model_profile"]
-                allowed_tools = None
             context = ExecutionContext(
                 job_id=job.job_id,
                 workspace_id=run["workspace_id"],
