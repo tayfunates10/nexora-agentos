@@ -219,8 +219,10 @@ class RunTaskRepository:
                 raise RunTaskError("task_already_terminal")
 
             incomplete = await connection.execute(
-                """SELECT 1 FROM run_task_dependencies d JOIN run_tasks t ON t.id=d.depends_on_task_id
-                   WHERE d.task_id=%s AND t.status <> 'succeeded' LIMIT 1""", (task_id,)
+                """SELECT 1 FROM run_task_dependencies d
+                   JOIN run_tasks t ON t.id=d.depends_on_task_id
+                   WHERE d.task_id=%s AND t.status <> 'succeeded' LIMIT 1""",
+                (task_id,),
             )
             if await incomplete.fetchone() is not None:
                 raise RunTaskError("task_dependency_incomplete")
