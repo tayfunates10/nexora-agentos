@@ -86,9 +86,7 @@ class BrowserMcpAdapter:
                         timeout=timeout_seconds,
                     )
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
-            raise McpAdapterError(
-                "browser_runtime_unavailable", retryable=not mutation
-            ) from exc
+            raise McpAdapterError("browser_runtime_unavailable", retryable=not mutation) from exc
 
         if response.status_code == 403:
             raise McpAdapterError("browser_origin_not_allowed", retryable=False)
