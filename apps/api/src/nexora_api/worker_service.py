@@ -16,6 +16,7 @@ import httpx
 from redis.asyncio import Redis
 
 from nexora_api.config import Settings
+from nexora_api.connector_mcp import CONNECTOR_SERVER_KEY, ConnectorMcpAdapter
 from nexora_api.embeddings import OpenAIEmbeddingsAdapter
 from nexora_api.evaluation_judge_worker import EvaluationJudgeWorker
 from nexora_api.executor import DurableAgentExecutor
@@ -262,11 +263,17 @@ def build_worker(
     retriever: RagEmbeddingPipeline | None = None,
     worker_id: str | None = None,
 ) -> AgentWorker:
+    resolved_mcp_adapters = dict(
+        mcp_adapters if mcp_adapters is not None else build_mcp_adapters(config)
+    )
+    # "connector" is a built-in, context-aware transport. It is never supplied by a
+    # tenant and cannot be replaced by an operator URL.
+    resolved_mcp_adapters[CONNECTOR_SERVER_KEY] = ConnectorMcpAdapter(settings)
     executor = DurableAgentExecutor(
         store=ExecutorStore(settings, spend=config.spend_policy()),
         router=ModelRouter(config.candidates()),
         adapters=adapters if adapters is not None else build_provider_adapters(settings, config),
-        gateway=McpGateway(settings, adapters=mcp_adapters),
+        gateway=McpGateway(settings, adapters=resolved_mcp_adapters),
         profiles=config.execution_profiles(),
         retriever=retriever,
     )
