@@ -1,4 +1,4 @@
-"""Context-aware read-only browser tool for standard agents."""
+"""Context-aware site-bound browser tools for standard agents."""
 
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -9,6 +9,7 @@ from nexora_api.config import Settings
 from nexora_api.mcp_gateway import McpAdapterError
 
 BROWSER_SERVER_KEY = "browser"
+_SUPPORTED = {"page.inspect": "/inspect", "page.action": "/action"}
 
 
 class BrowserMcpAdapter:
@@ -41,7 +42,7 @@ class BrowserMcpAdapter:
         arguments: dict[str, object],
         timeout_seconds: float,
     ) -> Any:
-        if context.agent_kind != "standard" or remote_name != "page.inspect":
+        if context.agent_kind != "standard" or remote_name not in _SUPPORTED:
             raise McpAdapterError("browser_standard_run_required", retryable=False)
         origin = self._origin(context.agent_snapshot)
         path = arguments.get("path", "/")
@@ -51,12 +52,27 @@ class BrowserMcpAdapter:
         if urlsplit(target).netloc != urlsplit(origin).netloc:
             raise McpAdapterError("browser_origin_not_allowed", retryable=False)
 
+        payload: dict[str, object] = {"url": target, "allowed_origin": origin}
+        if remote_name == "page.action":
+            action = arguments.get("action")
+            selector = arguments.get("selector")
+            if action not in {"click", "fill"} or not isinstance(selector, str) or not selector:
+                raise McpAdapterError("browser_action_invalid", retryable=False)
+            payload["action"] = action
+            payload["selector"] = selector
+            if action == "fill":
+                value = arguments.get("value")
+                if not isinstance(value, str):
+                    raise McpAdapterError("browser_action_invalid", retryable=False)
+                payload["value"] = value
+
         headers = {"Authorization": "Bearer " + self.token}
-        payload = {"url": target, "allowed_origin": origin}
+        endpoint = _SUPPORTED[remote_name]
+        mutation = remote_name == "page.action"
         try:
             if self.client is not None:
                 response = await self.client.post(
-                    self.base_url + "/inspect",
+                    self.base_url + endpoint,
                     json=payload,
                     headers=headers,
                     timeout=timeout_seconds,
@@ -64,24 +80,26 @@ class BrowserMcpAdapter:
             else:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
-                        self.base_url + "/inspect",
+                        self.base_url + endpoint,
                         json=payload,
                         headers=headers,
                         timeout=timeout_seconds,
                     )
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
-            raise McpAdapterError("browser_runtime_unavailable", retryable=True) from exc
+            raise McpAdapterError(
+                "browser_runtime_unavailable", retryable=not mutation
+            ) from exc
 
         if response.status_code == 403:
             raise McpAdapterError("browser_origin_not_allowed", retryable=False)
         if response.status_code >= 500:
-            raise McpAdapterError("browser_runtime_error", retryable=True)
+            raise McpAdapterError("browser_runtime_error", retryable=not mutation)
         if not response.is_success:
             raise McpAdapterError("browser_request_rejected", retryable=False)
         try:
             result = response.json()
         except ValueError as exc:
-            raise McpAdapterError("browser_invalid_response", retryable=True) from exc
+            raise McpAdapterError("browser_invalid_response", retryable=not mutation) from exc
         if not isinstance(result, dict) or result.get("ok") is not True:
-            raise McpAdapterError("browser_invalid_response", retryable=True)
+            raise McpAdapterError("browser_invalid_response", retryable=not mutation)
         return result
