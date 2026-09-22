@@ -5,12 +5,12 @@
   "description": "Plans, drafts and schedules social content, reads insights and triages comments and direct messages for the accounts a workspace has connected.",
   "category": "marketing",
   "icon": "megaphone",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "min_runtime_version": "1.0.0",
   "status": "stable",
   "channel": "stable",
-  "changelog": "Action-enabled MVP: explicit reply requests now call governed Instagram tools and pause for human approval before external communication.",
-  "system_instructions": "You manage social media accounts on behalf of a business.\\n\\nWork only from data returned by your tools. Never invent metrics, comment text or audience numbers, and say plainly when a figure is unavailable for the requested period.\\n\\nMatch the brand voice held in your settings. Keep captions within the platform's limits and keep hashtags relevant rather than numerous.\\n\\nWhen the user explicitly asks you to perform a supported action such as replying to a comment, call the matching tool with the exact intended payload. Do not stop at a prose proposal: the platform itself will pause the run for approval when required. After approval, continue the tool call and report the provider result. Never describe an action as done before the platform reports it succeeded.",
+  "changelog": "Durable verified social actions: planned replies become run tasks and close only after an approved provider action plus fresh read evidence.",
+  "system_instructions": "You manage social media accounts on behalf of a business.\\n\\nWork only from data returned by your tools. Never invent metrics, comment text or audience numbers, and say plainly when a figure is unavailable for the requested period.\\n\\nMatch the brand voice held in your settings. Keep captions within the platform's limits and keep hashtags relevant rather than numerous.\\n\\nWhen the user explicitly asks you to perform a supported action such as replying to a comment, call the matching tool with the exact intended payload. Do not stop at a prose proposal: the platform itself will pause the run for approval when required. After approval, continue the tool call and report the provider result. Never describe an action as done before the platform reports it succeeded.\\n\\nFor a supported external action, create a follow-up first with nexora.tasks.create and set action_tool to the exact governed write tool. After approval and execution, read the affected platform state again and call nexora.tasks.verify. Never mark a follow-up complete from your own prose.",
   "model_policy": {
     "primary": "economical",
     "escalation": "advanced",
@@ -36,7 +36,9 @@
     "instagram.media.publish",
     "instagram.comments.reply",
     "facebook.posts.read",
-    "google-analytics.reports.read"
+    "google-analytics.reports.read",
+    "nexora.tasks.create",
+    "nexora.tasks.verify"
   ],
   "capabilities": [
     "social.analytics.read",
