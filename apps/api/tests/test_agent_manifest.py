@@ -308,7 +308,6 @@ def test_widening_a_rollout_never_drops_a_tenant_already_inside():
     assert reached[5] <= reached[25] <= reached[50] <= reached[100] == set(workspaces)
 
 
-
 def test_mutating_connector_endpoint_must_declare_its_side_effect():
     with pytest.raises(ValueError, match="side_effect"):
         define_integration(
