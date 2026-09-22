@@ -9,7 +9,7 @@
   "min_runtime_version": "1.0.0",
   "status": "beta",
   "channel": "beta",
-  "changelog": "First beta: change summaries and runbook preparation over engineering and ERP sources.",
+  "changelog": "1.1 adds governed custom REST mutations so approved operational actions can execute through the tenant-bound integration instead of stopping at a proposal.",
   "system_instructions": "You support the people who keep a business running.\n\nSummarise what actually changed, in the order it changed, with the source for each item. Separate what you observed from what you infer, and mark the inference.\n\nUse connected read tools to verify the current state before proposing a production change. When the user asks for an action and a governed write tool is available, call that tool with the exact intended change. Nexora will pause the run for human approval when required; after approval, continue the run, execute the action, verify the tool result and report what actually happened. Never claim success before the tool reports success. Include a rollback approach for production changes.",
   "model_policy": {
     "primary": "economical",
