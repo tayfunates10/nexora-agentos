@@ -5,15 +5,49 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   # A half-published release is worse than a slow one, so runs queue instead.
   group: release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  gate:
+    name: Require green Platform CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for this commit's Platform CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="/repos/$GITHUB_REPOSITORY/actions/workflows/platform-ci.yml/runs"
+          for attempt in $(seq 1 80); do
+            response="$(gh api "$api" -f head_sha="$GITHUB_SHA" -f per_page=10)"
+            run="$(printf '%s' "$response" | jq -c '
+              [.workflow_runs[] | select(.head_sha == env.GITHUB_SHA and (.event == "push" or .event == "workflow_dispatch"))]
+              | sort_by(.created_at) | reverse | .[0] // empty
+            ')"
+            if [ -n "$run" ]; then
+              status="$(printf '%s' "$run" | jq -r '.status')"
+              conclusion="$(printf '%s' "$run" | jq -r '.conclusion // ""')"
+              echo "Platform CI: $status ${conclusion:-pending}"
+              if [ "$status" = "completed" ]; then
+                test "$conclusion" = "success"
+                exit 0
+              fi
+            else
+              echo "Platform CI for $GITHUB_SHA has not appeared yet."
+            fi
+            sleep 15
+          done
+          echo "Timed out waiting for Platform CI for $GITHUB_SHA" >&2
+          exit 1
+
   # The console, the platform services and the standard agents release on separate
   # clocks. This job decides which images a change actually affects, so a console change
   # never reissues the API image and an agent package never rebuilds either of them.
   scope:
+    needs: gate
     runs-on: ubuntu-latest
     outputs:
       images: ${{ steps.resolve.outputs.images }}
