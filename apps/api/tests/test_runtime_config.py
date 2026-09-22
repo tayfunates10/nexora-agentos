@@ -59,6 +59,7 @@ def test_operator_configuration_builds_routing_and_profiles(tmp_path):
     assert candidate.provider == "openai"
     assert candidate.capabilities == frozenset({ModelCapability.TEXT, ModelCapability.TOOLS})
     assert profile.allowed_tools == frozenset({"lookup"})
+    assert profile.allowed_server_keys == frozenset()
     assert profile.max_steps == 4
     assert config.providers == frozenset({"openai"})
     assert config.model_capabilities("openai")["operator-model"] == candidate.capabilities
@@ -375,3 +376,22 @@ def test_shipped_example_runtime_config_starts_a_worker_without_operator_secrets
 
     monkeypatch.delenv("NEXORA_SPEND_ALERT_SIGNING_SECRET", raising=False)
     assert build_spend_alert_notifier(Settings(), config, worker_id="worker-1") is None
+
+
+def test_connector_server_family_can_be_allowed_but_not_redefined_as_remote_mcp(tmp_path):
+    configured = document()
+    configured["profiles"]["default"]["allowed_server_keys"] = ["connector"]
+    config = load_runtime_config(write(tmp_path, configured))
+
+    assert config.execution_profiles()["default"].allowed_server_keys == frozenset({"connector"})
+
+    invalid = document(
+        mcp_servers={
+            "connector": {
+                "transport": "streamable_http",
+                "url": "https://mcp.example.test/mcp",
+            }
+        }
+    )
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(write(tmp_path, invalid))
