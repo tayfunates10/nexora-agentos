@@ -16,7 +16,6 @@ from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.connector_runtime import ConnectorError
 from nexora_api.integration_manifest import load_connector
-from nexora_api.integration_repository import IntegrationRepository
 from nexora_api.mcp_gateway import McpAdapterError
 from nexora_api.tool_repository import ToolGovernanceRepository
 from nexora_api.tooling import PolicyDecision, ToolPolicyInput, ToolUpsertInput
@@ -106,6 +105,10 @@ class ConnectorMcpAdapter:
     """Context-aware adapter for integrations stored in the tenant vault."""
 
     def __init__(self, settings: Settings):
+        # Local import avoids a cycle: integration_repository owns the Integration API
+        # contracts, which import this module only for post-connect tool provisioning.
+        from nexora_api.integration_repository import IntegrationRepository
+
         self.repository = IntegrationRepository(settings)
 
     @staticmethod
