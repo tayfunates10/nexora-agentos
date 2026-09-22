@@ -98,7 +98,6 @@ class ContextAdapter:
         self.calls.append((execution_context, remote_name, arguments, timeout_seconds))
         return {"ok": True}
 
-
 def test_context_aware_adapter_receives_the_governed_workspace_context():
     adapter = ContextAdapter()
     gateway = McpGateway(Settings(), adapters={"remote": adapter})
@@ -122,7 +121,6 @@ def test_context_aware_adapter_receives_the_governed_workspace_context():
     assert repository.successes == [
         (repository.call_id, {"ok": True}, execution_context.workspace_id)
     ]
-
 
 
 def test_standard_agent_public_tool_is_governed_by_immutable_alias():
