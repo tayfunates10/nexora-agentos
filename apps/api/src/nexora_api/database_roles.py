@@ -103,6 +103,10 @@ API_WRITES: Mapping[str, frozenset[str]] = {
     "agent_update_policies": frozenset({"INSERT", "UPDATE"}),
     "tenant_agents": frozenset({"INSERT", "UPDATE", "DELETE"}),
     "tenant_agent_version_events": frozenset({"INSERT"}),
+    # Connector actions run inside the worker. OAuth refresh may atomically rotate the
+    # sealed credential and repoint the tenant integration; catalog and bindings stay read-only.
+    "tenant_integrations": frozenset({"UPDATE"}),
+    "integration_credentials": frozenset({"INSERT", "UPDATE", "DELETE"}),
     "agent_integration_bindings": frozenset({"INSERT", "UPDATE", "DELETE"}),
 }
 
