@@ -879,9 +879,7 @@ class TenantAgentRepository:
                     action,
                     request_id,
                 )
-                await self._settle_status(
-                    connection, row["workspace_id"], row["id"], manifest
-                )
+                await self._settle_status(connection, row["workspace_id"], row["id"], manifest)
                 await self.workspaces.audit(
                     connection,
                     actor,
