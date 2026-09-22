@@ -16,6 +16,21 @@ test("resolvePublicHost rejects private and mixed DNS answers", async () => {
   );
 });
 
+test("resolvePublicHost normalizes IPv6 literals and rejects reserved ranges", async () => {
+  assert.deepEqual(
+    await resolvePublicHost("[2606:4700:4700::1111]"),
+    ["2606:4700:4700::1111"],
+  );
+  await assert.rejects(resolvePublicHost("[::1]"), /host_not_routable/);
+  await assert.rejects(resolvePublicHost("[2001:db8::1]"), /host_not_routable/);
+});
+
+test("resolvePublicHost rejects reserved IPv4 documentation and benchmark ranges", async () => {
+  for (const address of ["192.0.2.1", "198.18.0.1", "198.51.100.10", "203.0.113.7"]) {
+    await assert.rejects(resolvePublicHost(address), /host_not_routable/);
+  }
+});
+
 test("resolvePublicHost returns deduplicated public addresses", async () => {
   const addresses = await resolvePublicHost("example.test", async () => [
     { address: "93.184.216.34", family: 4 },
