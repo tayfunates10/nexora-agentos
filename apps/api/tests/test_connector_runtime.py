@@ -90,8 +90,7 @@ def test_runtime_maps_only_declared_fields_and_keeps_credentials_out_of_argument
         "method": "POST",
         "url": "https://site.example.com/posts",
         "body": {"title": "Search update", "status": "draft"},
-        "authorization": "Basic "
-        + base64.b64encode(b"editor:application-password").decode(),
+        "authorization": "Basic " + base64.b64encode(b"editor:application-password").decode(),
     }
 
 
