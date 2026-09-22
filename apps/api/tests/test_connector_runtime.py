@@ -43,7 +43,6 @@ def mutation_endpoint(path="/repos/{owner}/{repo}/issues"):
     )
     return connector.endpoint_for("issues.write")
 
-
 def test_mutation_arguments_become_path_body_and_idempotency_header_value():
     endpoint = mutation_endpoint()
     path, params, body, idempotency = ConnectorRuntime._request_parts(
@@ -62,7 +61,6 @@ def test_mutation_arguments_become_path_body_and_idempotency_header_value():
     assert body == {"title": "Production incident"}
     assert idempotency == "run-12345678"
 
-
 def test_connector_config_resolves_path_without_exposing_config_to_body():
     endpoint = mutation_endpoint("/v1/{account_id}/issues")
     path, params, body, idempotency = ConnectorRuntime._request_parts(
@@ -79,7 +77,6 @@ def test_connector_config_resolves_path_without_exposing_config_to_body():
     assert path == "/v1/business%2F42/issues"
     assert "account_id" not in body
     assert idempotency == "run-abcdefgh"
-
 
 def test_shipped_write_connectors_require_idempotency_and_are_not_read_effects():
     repository = Path(__file__).resolve().parents[3]
@@ -99,7 +96,6 @@ def test_shipped_write_connectors_require_idempotency_and_are_not_read_effects()
         assert endpoint.side_effect != "read"
         assert endpoint.retry == "never"
         assert "idempotency_key" in endpoint.input_schema["required"]
-
 
 
 def test_side_effecting_endpoint_cannot_use_safe_retry():
