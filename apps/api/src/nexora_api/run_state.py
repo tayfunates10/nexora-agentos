@@ -49,6 +49,8 @@ class ExecutionContext:
     agent_snapshot: dict[str, Any] | None = None
     # None means legacy/custom behavior: the runtime profile remains the only tool allowlist.
     allowed_tools: frozenset[str] | None = None
+    # Public manifest tool name -> immutable internal governance contract name.
+    tool_aliases: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +145,7 @@ class RunStateStore:
                 instructions = snapshot.get("instructions")
                 model_profile = snapshot.get("model_profile")
                 allowed = snapshot.get("allowed_tools")
+                aliases = snapshot.get("tool_aliases", {})
                 if (
                     not isinstance(instructions, str)
                     or not instructions
@@ -150,13 +153,20 @@ class RunStateStore:
                     or not model_profile
                     or not isinstance(allowed, list)
                     or any(not isinstance(name, str) for name in allowed)
+                    or not isinstance(aliases, dict)
+                    or any(
+                        not isinstance(public, str) or not isinstance(internal, str)
+                        for public, internal in aliases.items()
+                    )
                 ):
                     return ClaimResult("ack")
                 allowed_tools = frozenset(allowed)
+                tool_aliases = dict(aliases)
             else:
                 instructions = run["instructions"]
                 model_profile = run["model_profile"]
                 allowed_tools = None
+                tool_aliases = None
 
             if run["status"] in ("succeeded", "failed", "cancelled"):
                 terminal = "cancelled" if run["status"] == "cancelled" else run["status"]
@@ -248,6 +258,7 @@ class RunStateStore:
                 agent_kind=agent_kind,
                 agent_snapshot=snapshot,
                 allowed_tools=allowed_tools,
+                tool_aliases=tool_aliases,
             )
             return ClaimResult("execute", context)
 
