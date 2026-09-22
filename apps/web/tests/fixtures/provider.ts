@@ -466,6 +466,12 @@ export async function startProvider() {
               id: randomUUID(), event_no: 1, event_type: "run.queued",
               payload: { request_id: "fixture-request" }, created_at: now,
             }]);
+            runTasks.set(id, [{
+              id, workspace_id: workspaceId, run_id: id, parent_task_id: null,
+              kind: "goal", title: "Run goal", description: JSON.parse(body).input,
+              status: "planned", action_tool_name: null, verification_state: "not_required",
+              dependencies: [], evidence: [], created_at: now, updated_at: now, completed_at: null,
+            }]);
             runIdempotency.set(scopedKey, id);
             return send(row, 201);
           }
@@ -520,6 +526,12 @@ export async function startProvider() {
             run.cancel_requested_at = now;
             run.finished_at = now;
             run.updated_at = now;
+            const goal = runTasks.get(runId)?.find(task => task.kind === "goal");
+            if (goal) {
+              goal.status = "cancelled";
+              goal.updated_at = now;
+              goal.completed_at = now;
+            }
             const events = runEvents.get(runId) ?? [];
             events.push({
               id: randomUUID(), event_no: events.length + 1, event_type: "run.cancelled",
