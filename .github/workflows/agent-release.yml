@@ -12,6 +12,7 @@ on:
       - 'apps/api/src/nexora_api/agent_manifest.py'
       - 'apps/api/src/nexora_api/integration_manifest.py'
       - 'scripts/publish_catalog.py'
+      - '.github/workflows/agent-release.yml'
       - 'scripts/release_scope.py'
       - '.github/workflows/agent-release.yml'
   push:
@@ -105,8 +106,18 @@ jobs:
           CONNECTORS: ${{ needs.validate.outputs.connectors }}
         run: |
           set -euo pipefail
-          test -n "$NEXORA_PLATFORM_URL" && test -n "$NEXORA_PLATFORM_TOKEN"
-          python scripts/publish_catalog.py --publish \
-            --base-url "$NEXORA_PLATFORM_URL" \
-            ${AGENTS:+--agents $AGENTS} \
-            ${CONNECTORS:+--connectors $CONNECTORS}
+          if [ -z "$NEXORA_PLATFORM_URL" ] || [ -z "$NEXORA_PLATFORM_TOKEN" ]; then
+            echo "::notice::Catalog packages validated, but production catalog publishing is not configured. Set production variable NEXORA_PLATFORM_URL and secret NEXORA_PLATFORM_TOKEN to enable it."
+            exit 0
+          fi
+
+          args=(--publish --base-url "$NEXORA_PLATFORM_URL")
+          if [ -n "$AGENTS" ]; then
+            read -r -a selected_agents <<< "$AGENTS"
+            args+=(--agents "${selected_agents[@]}")
+          fi
+          if [ -n "$CONNECTORS" ]; then
+            read -r -a selected_connectors <<< "$CONNECTORS"
+            args+=(--connectors "${selected_connectors[@]}")
+          fi
+          python scripts/publish_catalog.py "${args[@]}"
