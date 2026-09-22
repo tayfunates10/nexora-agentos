@@ -373,12 +373,7 @@ class TenantAgentRepository:
                 """INSERT INTO tool_policies
                    (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
                    VALUES (%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (workspace_id,tool_id) DO UPDATE SET
-                     decision=EXCLUDED.decision,
-                     reason=EXCLUDED.reason,
-                     updated_by_issuer=EXCLUDED.updated_by_issuer,
-                     updated_by_subject=EXCLUDED.updated_by_subject,
-                     updated_at=now()""",
+                   ON CONFLICT (workspace_id,tool_id) DO NOTHING""",
                 (
                     workspace_id,
                     tool_id,
