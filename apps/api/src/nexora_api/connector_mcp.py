@@ -5,6 +5,7 @@ integration UUID and capability; credentials stay sealed in the IntegrationRepos
 and are opened only after the gateway has authorized a call for the current workspace.
 """
 
+import hashlib
 import json
 from uuid import UUID
 
@@ -175,6 +176,36 @@ class ConnectorMcpAdapter:
         return integration_id, capability
 
     @staticmethod
+    def _config_fingerprint(config: dict[str, object]) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                config,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+
+    @classmethod
+    def _validate_standard_target(cls, spec, row, config: dict[str, object]) -> None:
+        expected_config = spec.get("config_fingerprint")
+        if (
+            not isinstance(expected_config, str)
+            or cls._config_fingerprint(config) != expected_config
+        ):
+            raise McpAdapterError("connector_config_changed", retryable=False)
+
+        if "credential_reference" not in spec:
+            raise McpAdapterError("connector_snapshot_invalid", retryable=False)
+        expected_credential = spec.get("credential_reference")
+        if expected_credential is not None:
+            if not isinstance(expected_credential, str):
+                raise McpAdapterError("connector_snapshot_invalid", retryable=False)
+            current_credential = row["credential_reference"]
+            if current_credential is None or str(current_credential) != expected_credential:
+                raise McpAdapterError("connector_credential_changed", retryable=False)
+
+    @staticmethod
     def _standard_spec(context, integration_id: UUID, capability: str):
         if getattr(context, "agent_kind", "custom") != "standard":
             return None
@@ -223,6 +254,8 @@ class ConnectorMcpAdapter:
                 current_definition, document, config, row = await self.repository.resolve(
                     connection, context.workspace_id, integration_id
                 )
+                if spec is not None:
+                    self._validate_standard_target(spec, row, config)
                 document = await self.repository._refresh_if_needed(
                     connection,
                     context.workspace_id,
