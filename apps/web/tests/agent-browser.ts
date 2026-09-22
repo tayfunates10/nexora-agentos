@@ -34,6 +34,8 @@ export async function checkAgentRuns(
   await expect(page.getByTestId("run-summary").locator(".status").first()).toHaveText(t("runs.status.queued"));
   await expect(page.getByText(t("runs.statusHelp.queued"))).toBeVisible();
   await expect(page.getByRole("heading", { name: t("runDetail.result.pendingTitle") })).toBeVisible();
+  await expect(page.getByText(t("runDetail.plan.current"))).toBeVisible();
+  await expect(page.getByRole("cell", { name: t("runDetail.plan.status.planned"), exact: true })).toBeVisible();
   await expect(page.getByRole("listitem").filter({ hasText: t("runEvent.run.queued") })).toBeVisible();
 
   // A queued run is cancellable, and cancelling publishes no partial answer.
@@ -74,6 +76,42 @@ export async function checkAgentRuns(
     created_at: "2026-09-20T10:00:30Z", updated_at: "2026-09-20T10:01:00Z",
     started_at: "2026-09-20T10:00:30Z", finished_at: "2026-09-20T10:01:00Z",
   }]);
+  const firstTaskId = randomUUID();
+  const secondTaskId = randomUUID();
+  provider.runTasks.set(succeeded.id, [
+    {
+      id: succeeded.id, workspace_id: workspace.id, run_id: succeeded.id,
+      parent_task_id: null, kind: "goal", title: "Run goal",
+      description: "Review this week's incident state.", status: "succeeded",
+      action_tool_name: null, verification_state: "not_required",
+      dependencies: [], evidence: [], created_at: "2026-09-20T10:00:00Z",
+      updated_at: "2026-09-20T10:02:00Z", completed_at: "2026-09-20T10:02:00Z",
+    },
+    {
+      id: firstTaskId, workspace_id: workspace.id, run_id: succeeded.id,
+      parent_task_id: succeeded.id, kind: "follow_up", title: "Check incident source",
+      description: "Read the governed incident source.", status: "succeeded",
+      action_tool_name: null, verification_state: "verified",
+      dependencies: [], evidence: [{
+        id: randomUUID(), verification_tool_name: "search_incidents",
+        summary: "Two incidents are present in the source.", satisfied: true,
+        created_at: "2026-09-20T10:01:05Z",
+      }], created_at: "2026-09-20T10:00:20Z",
+      updated_at: "2026-09-20T10:01:05Z", completed_at: "2026-09-20T10:01:05Z",
+    },
+    {
+      id: secondTaskId, workspace_id: workspace.id, run_id: succeeded.id,
+      parent_task_id: succeeded.id, kind: "follow_up", title: "Prepare verified summary",
+      description: "Summarize only the state observed in the source.", status: "succeeded",
+      action_tool_name: null, verification_state: "verified",
+      dependencies: [firstTaskId], evidence: [{
+        id: randomUUID(), verification_tool_name: "search_incidents",
+        summary: "The final summary matches the fresh read.", satisfied: true,
+        created_at: "2026-09-20T10:01:30Z",
+      }], created_at: "2026-09-20T10:01:10Z",
+      updated_at: "2026-09-20T10:01:30Z", completed_at: "2026-09-20T10:01:30Z",
+    },
+  ]);
   provider.runResults.set(succeeded.id, {
     run_id: succeeded.id, workspace_id: workspace.id, agent_id: run.agent_id,
     trace_id: succeeded.trace_id, status: "succeeded",
@@ -93,6 +131,11 @@ export async function checkAgentRuns(
     page.getByRole("cell", { name: t("runDetail.actions.status.succeeded"), exact: true }),
   ).toBeVisible();
   await expect(page.getByText("search_incidents").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: t("runDetail.plan.title") })).toBeVisible();
+  await expect(page.getByText("Prepare verified summary")).toBeVisible();
+  await expect(page.getByText("The final summary matches the fresh read.")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "1", exact: true })).toBeVisible();
+  await expect(page.getByText(t("runDetail.plan.verification.verified")).first()).toBeVisible();
   await expect(page.getByText(t("runDetail.result.selectionNotice", { tools: "search_incidents" }))).toBeVisible();
 
   // The answer belongs to the requester: admin access does not open it.
