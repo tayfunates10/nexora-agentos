@@ -117,8 +117,8 @@ export async function checkCatalogAndIntegrations(
   await page.getByRole("button", { name: t("agents.startRun") }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]+$/);
   const standardRun = [...provider.runs.values()].at(-1);
-  expect(standardRun?.agent_id).toBe(instance.id);
-  await page.goto(`${detailUrl}/catalog/${instance.id}`);
+  expect(standardRun?.agent_id).toBe(agent.id);
+  await page.goto(`${detailUrl}/catalog/${agent.id}`);
 
   // ------------------------------------------------ updating and rolling back
   await settleReveals(page);
