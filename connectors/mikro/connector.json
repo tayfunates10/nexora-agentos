@@ -11,7 +11,8 @@
     "stock.read",
     "customers.read",
     "invoices.read",
-    "orders.read"
+    "orders.read",
+    "orders.write"
   ],
   "test_capability": "stock.read",
   "scopes": [],
@@ -62,6 +63,33 @@
       "capability": "orders.read",
       "method": "GET",
       "path": "/orders"
+    },
+    {
+      "capability": "orders.write",
+      "method": "POST",
+      "path": "/orders",
+      "description": "Create an order through the customer's Mikro integration service.",
+      "side_effect": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "order",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
     }
   ]
 }
