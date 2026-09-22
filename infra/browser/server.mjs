@@ -1,8 +1,7 @@
 import { createServer } from "node:http";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { timingSafeEqual } from "node:crypto";
 import { chromium } from "@playwright/test";
+import { hostResolverRule, resolvePublicHost, target } from "./policy.mjs";
 
 const PORT = Number(process.env.PORT ?? "8080");
 const TOKEN = process.env.NEXORA_BROWSER_RUNTIME_TOKEN ?? "";
@@ -20,60 +19,6 @@ function authorized(value) {
   const expected = Buffer.from("Bearer " + TOKEN);
   const actual = Buffer.from(value ?? "");
   return expected.length === actual.length && timingSafeEqual(expected, actual);
-}
-
-function publicIPv4(address) {
-  const parts = address.split(".").map(Number);
-  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-  const [a, b] = parts;
-  if (
-    a === 0 || a === 10 || a === 127 || a >= 224 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168)
-  ) return false;
-  return true;
-}
-
-function publicIPv6(address) {
-  const value = address.toLowerCase();
-  if (
-    value === "::" || value === "::1" || value.startsWith("fc") || value.startsWith("fd") ||
-    value.startsWith("fe8") || value.startsWith("fe9") || value.startsWith("fea") ||
-    value.startsWith("feb")
-  ) return false;
-  if (value.startsWith("::ffff:")) {
-    const mapped = value.slice(7);
-    return isIP(mapped) === 4 ? publicIPv4(mapped) : false;
-  }
-  return true;
-}
-
-async function assertPublicHost(hostname) {
-  const literal = isIP(hostname);
-  if (literal === 4 && !publicIPv4(hostname)) throw new Error("host_not_routable");
-  if (literal === 6 && !publicIPv6(hostname)) throw new Error("host_not_routable");
-  if (literal) return;
-  if (hostname.toLowerCase() === "localhost") throw new Error("host_not_routable");
-  const addresses = await lookup(hostname, { all: true, verbatim: true });
-  if (!addresses.length) throw new Error("host_unresolvable");
-  for (const entry of addresses) {
-    if (entry.family === 4 ? !publicIPv4(entry.address) : !publicIPv6(entry.address)) {
-      throw new Error("host_not_routable");
-    }
-  }
-}
-
-function target(value, allowedOrigin) {
-  const url = new URL(value);
-  const allowed = new URL(allowedOrigin);
-  if (
-    url.protocol !== "https:" || allowed.protocol !== "https:" ||
-    url.username || url.password || allowed.username || allowed.password ||
-    url.origin !== allowed.origin
-  ) throw new Error("origin_not_allowed");
-  return url;
 }
 
 async function bodyOf(request) {
@@ -108,7 +53,15 @@ async function evidence(page, initialResponse, action = null) {
   };
 }
 
-async function isolatedPage(url) {
+const activeBrowsers = new Set();
+
+async function isolatedPage(url, pinnedAddress) {
+  const resolverRule = hostResolverRule(url.hostname, pinnedAddress);
+  const browser = await chromium.launch({
+    headless: true,
+    ...(resolverRule ? { args: [`--host-resolver-rules=${resolverRule}`] } : {}),
+  });
+  activeBrowsers.add(browser);
   const context = await browser.newContext({
     acceptDownloads: false,
     serviceWorkers: "block",
@@ -128,10 +81,8 @@ async function isolatedPage(url) {
     }
   });
   page.on("dialog", dialog => void dialog.dismiss());
-  return { context, page };
+  return { browser, context, page };
 }
-
-const browser = await chromium.launch({ headless: true });
 
 const server = createServer(async (request, response) => {
   const send = (status, payload) => {
@@ -152,9 +103,8 @@ const server = createServer(async (request, response) => {
       return send(422, { error: "invalid_request" });
     }
     const url = target(input.url, input.allowed_origin);
-    await assertPublicHost(url.hostname);
-
-    const { context, page } = await isolatedPage(url);
+    const publicAddresses = await resolvePublicHost(url.hostname);
+    const { browser, context, page } = await isolatedPage(url, publicAddresses[0]);
     try {
       const result = await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 12_000 });
       if (!result) return send(502, { error: "navigation_failed" });
@@ -202,8 +152,11 @@ const server = createServer(async (request, response) => {
       }
       return send(200, await evidence(page, result, action));
     } finally {
-      // A fresh context per request means cookies/storage never cross tool calls or runs.
+      // A fresh browser process pins the already-validated DNS result, closing the
+      // validation-to-connect rebinding window. Context state cannot cross requests.
       await context.close();
+      activeBrowsers.delete(browser);
+      await browser.close();
     }
   } catch (error) {
     const code = error instanceof Error ? error.message : "browser_error";
@@ -215,9 +168,12 @@ const server = createServer(async (request, response) => {
 server.listen(PORT, "0.0.0.0");
 
 for (const signal of ["SIGTERM", "SIGINT"]) {
-  process.on(signal, async () => {
-    server.close();
-    await browser.close();
-    process.exit(0);
+  process.on(signal, () => {
+    server.close(async () => {
+      await Promise.all(
+        [...activeBrowsers].map(browser => browser.close().catch(() => {})),
+      );
+      process.exit(0);
+    });
   });
 }
