@@ -133,6 +133,11 @@ WORKER_WRITES: Mapping[str, frozenset[str]] = {
     # remain read-only to the worker identity.
     "tenant_agents": frozenset({"UPDATE"}),
     "tenant_agent_version_events": frozenset({"INSERT"}),
+    # Connector execution runs in the worker. OAuth refresh and credential rotation stay
+    # inside the vault boundary, so the worker needs the same narrowly scoped DML for
+    # connection state without any catalog or workspace-management privileges.
+    "tenant_integrations": frozenset({"UPDATE"}),
+    "integration_credentials": frozenset({"INSERT", "UPDATE", "DELETE"}),
 }
 
 WRITE_PRIVILEGES = frozenset({"INSERT", "UPDATE", "DELETE"})
