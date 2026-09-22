@@ -4,7 +4,7 @@
   "category": "content",
   "icon": "document",
   "description": "WordPress REST API with application passwords: read, draft and publish posts and pages on a self-hosted or managed site.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "available",
   "auth": "basic",
   "capabilities": [
