@@ -147,6 +147,7 @@ class ConnectorToolProvisioner:
                 (workspace_id, CONNECTOR_SERVER_KEY, prefix),
             )
 
+
 class ConnectorMcpAdapter:
     """Context-aware adapter for integrations stored in the tenant vault."""
 
