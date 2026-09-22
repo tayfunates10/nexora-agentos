@@ -127,10 +127,13 @@ export async function checkAgentRuns(
   await expect(page.getByText("Two incidents were recorded this week.")).toBeVisible();
   await expect(page.getByText(t("runEvent.model.completed"))).toBeVisible();
   await expect(page.getByRole("heading", { name: t("runDetail.actions.title") })).toBeVisible();
+  const actionsTable = page.getByRole("table").filter({
+    has: page.getByRole("columnheader", { name: t("runDetail.actions.name"), exact: true }),
+  });
   await expect(
-    page.getByRole("cell", { name: t("runDetail.actions.status.succeeded"), exact: true }),
+    actionsTable.getByRole("cell", { name: t("runDetail.actions.status.succeeded"), exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("search_incidents").first()).toBeVisible();
+  await expect(actionsTable.getByText("search_incidents", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: t("runDetail.plan.title") })).toBeVisible();
   await expect(page.getByText("Prepare verified summary")).toBeVisible();
   await expect(page.getByText("The final summary matches the fresh read.")).toBeVisible();
