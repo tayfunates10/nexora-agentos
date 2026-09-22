@@ -13,6 +13,8 @@ its manifest requires is bound to a connected account in the same workspace.
 and records where it came from. A later catalog release cannot change a fork's behaviour.
 """
 
+import hashlib
+import json
 from uuid import UUID, uuid4
 
 import psycopg
@@ -20,6 +22,7 @@ from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
 from nexora_api.agent_catalog import Channel
+from nexora_api.agents import AgentRun
 from nexora_api.agent_catalog_repository import offered_version
 from nexora_api.agent_manifest import AgentManifest, Version
 from nexora_api.auth import Principal
@@ -35,6 +38,7 @@ from nexora_api.tenant_agents import (
     IntegrationRequirement,
     Readiness,
     TenantAgent,
+    TenantAgentRunInput,
     TenantAgentSummary,
     TenantAgentUpdate,
     UpdateMode,
@@ -221,6 +225,162 @@ class TenantAgentRepository:
             return await self._view(
                 connection, workspace_id, await self._row(connection, workspace_id, agent_id)
             )
+
+    @staticmethod
+    def _run(row) -> AgentRun:
+        return AgentRun(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            agent_id=row["tenant_agent_id"],
+            trace_id=row["trace_id"],
+            status=row["status"],
+            attempt_count=row["attempt_count"],
+            cancel_requested_at=row["cancel_requested_at"],
+            finished_at=row["finished_at"],
+            failure_code=row["failure_code"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    async def create_run(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        agent_id: UUID,
+        body: TenantAgentRunInput,
+        idempotency_key: str,
+        request_id: str,
+    ) -> tuple[AgentRun, bool]:
+        """Queue one installed standard agent without turning it into a custom fork."""
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {"tenant_agent_id": str(agent_id), "input": body.input},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        async with self.connection() as connection:
+            await self.workspaces.scoped(
+                connection, principal, workspace_id, Permission.RUN_AGENTS
+            )
+            row = await self._row(connection, workspace_id, agent_id, lock=True)
+            manifest = await self._manifest(connection, row["version_id"])
+            bindings = await self._bindings(connection, workspace_id, agent_id)
+            readiness = self._readiness(manifest, bindings)
+            if row["status"] != InstanceStatus.ACTIVE or not readiness.ready:
+                raise HTTPException(409, "This standard agent is not ready to run")
+
+            by_key = {binding.binding_key: binding for binding in bindings}
+            declared_integrations = set(manifest.required_integrations) | set(
+                manifest.optional_integrations
+            )
+
+            def executable(tool_name: str) -> bool:
+                integration_key = tool_name.split(".", 1)[0]
+                if integration_key not in declared_integrations:
+                    return True
+                binding = by_key.get(integration_key)
+                return binding is not None and binding.status == IntegrationStatus.CONNECTED
+
+            allowed_tools = [
+                name
+                for name in [*manifest.required_tools, *manifest.optional_tools]
+                if executable(name)
+            ]
+            snapshot = {
+                "kind": "standard",
+                "tenant_agent_id": str(agent_id),
+                "catalog_agent_id": str(row["catalog_agent_id"]),
+                "version_id": str(row["version_id"]),
+                "version": row["version"],
+                "instructions": row["instructions_override"] or manifest.system_instructions,
+                "model_profile": manifest.model_policy.primary,
+                "settings": row["settings"],
+                "allowed_tools": allowed_tools,
+                "manifest": manifest.model_dump(mode="json"),
+                "bindings": {
+                    binding.binding_key: {
+                        "tenant_integration_id": str(binding.tenant_integration_id),
+                        "status": binding.status.value,
+                    }
+                    for binding in bindings
+                },
+            }
+
+            existing_result = await connection.execute(
+                """SELECT id,workspace_id,tenant_agent_id,trace_id,status,attempt_count,
+                          cancel_requested_at,finished_at,failure_code,created_at,updated_at,
+                          request_hash
+                   FROM agent_runs
+                   WHERE workspace_id=%s AND requested_by_issuer=%s
+                     AND requested_by_subject=%s AND idempotency_key=%s
+                   FOR UPDATE""",
+                (workspace_id, principal.issuer, principal.subject, idempotency_key),
+            )
+            existing = await existing_result.fetchone()
+            if existing:
+                if existing["request_hash"] != fingerprint:
+                    raise HTTPException(409)
+                if existing["tenant_agent_id"] is None:
+                    raise HTTPException(409)
+                return self._run(existing), False
+
+            run_id = uuid4()
+            trace_id = uuid4()
+            result = await connection.execute(
+                """INSERT INTO agent_runs
+                   (id,workspace_id,tenant_agent_id,agent_snapshot,requested_by_issuer,
+                    requested_by_subject,input_text,request_hash,idempotency_key,trace_id,status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'queued')
+                   RETURNING id,workspace_id,tenant_agent_id,trace_id,status,attempt_count,
+                             cancel_requested_at,finished_at,failure_code,created_at,updated_at""",
+                (
+                    run_id,
+                    workspace_id,
+                    agent_id,
+                    Jsonb(snapshot),
+                    principal.issuer,
+                    principal.subject,
+                    body.input,
+                    fingerprint,
+                    idempotency_key,
+                    trace_id,
+                ),
+            )
+            created = await result.fetchone()
+            await connection.execute(
+                """INSERT INTO agent_run_events
+                   (id,workspace_id,run_id,event_no,event_type,payload)
+                   VALUES (%s,%s,%s,1,'run.queued',%s)""",
+                (
+                    uuid4(),
+                    workspace_id,
+                    run_id,
+                    Jsonb({"request_id": request_id, "agent_kind": "standard"}),
+                ),
+            )
+            await connection.execute(
+                """INSERT INTO job_outbox (id,workspace_id,run_id,topic,payload)
+                   VALUES (%s,%s,%s,'agent.run.queued.v1',%s)""",
+                (
+                    uuid4(),
+                    workspace_id,
+                    run_id,
+                    Jsonb(
+                        {
+                            "run_id": str(run_id),
+                            "workspace_id": str(workspace_id),
+                            "agent_id": str(agent_id),
+                            "trace_id": str(trace_id),
+                            "agent_kind": "standard",
+                        }
+                    ),
+                ),
+            )
+            await self.workspaces.audit(
+                connection, principal, workspace_id, "tenant_agent_run.created", request_id
+            )
+            return self._run(created), True
 
     async def list_instances(
         self, principal: Principal, workspace_id: UUID, limit: int, cursor: UUID | None
