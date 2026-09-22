@@ -13,13 +13,19 @@ async def executable_run(connection, context: ExecutionContext):
         (context.run_id, context.workspace_id),
     )
     run = await result.fetchone()
+    run_agent_id = None
+    if run:
+        run_agent_id = (
+            run["tenant_agent_id"] if context.agent_kind == "standard" else run["agent_id"]
+        )
     if (
         not run
         or run["status"] != "running"
         or not run["live_lease"]
         or run["cancel_requested_at"] is not None
         or run["attempt_count"] != context.attempt_count
-        or run["agent_id"] != context.agent_id
+        or run_agent_id != context.agent_id
+        or (context.agent_kind == "standard") != (run["tenant_agent_id"] is not None)
         or run["trace_id"] != context.trace_id
     ):
         raise ToolContractError("execution_fenced")
