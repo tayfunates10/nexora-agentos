@@ -22,8 +22,10 @@ class Repository:
         self.call_id = uuid4()
         self.failures = []
         self.successes = []
+        self.prepared_tools = []
 
     async def prepare_call(self, context, call_key, tool_name, arguments):
+        self.prepared_tools.append(tool_name)
         return SimpleNamespace(
             action="execute",
             call_id=self.call_id,
@@ -48,18 +50,20 @@ class Repository:
         return True
 
 
-def context():
-    return ExecutionContext(
-        job_id=uuid4(),
-        workspace_id=uuid4(),
-        run_id=uuid4(),
-        agent_id=uuid4(),
-        trace_id=uuid4(),
-        input_text="search",
-        instructions="use governed tools",
-        model_profile="default",
-        attempt_count=1,
-    )
+def context(**overrides):
+    values = {
+        "job_id": uuid4(),
+        "workspace_id": uuid4(),
+        "run_id": uuid4(),
+        "agent_id": uuid4(),
+        "trace_id": uuid4(),
+        "input_text": "search",
+        "instructions": "use governed tools",
+        "model_profile": "default",
+        "attempt_count": 1,
+    }
+    values.update(overrides)
+    return ExecutionContext(**values)
 
 
 @pytest.mark.parametrize("retryable", [False, True])
@@ -118,3 +122,25 @@ def test_context_aware_adapter_receives_the_governed_workspace_context():
     assert repository.successes == [
         (repository.call_id, {"ok": True}, execution_context.workspace_id)
     ]
+
+
+
+def test_standard_agent_public_tool_is_governed_by_immutable_alias():
+    gateway = McpGateway(Settings(), adapters={"remote": ContextAdapter()})
+    repository = Repository()
+    gateway.repository = repository
+    execution_context = context(
+        agent_kind="standard",
+        tool_aliases={"mikro.stock.read": "connector.0123456789abcdef"},
+    )
+
+    asyncio.run(
+        gateway.invoke(
+            execution_context,
+            "tool-step-1",
+            "mikro.stock.read",
+            {},
+        )
+    )
+
+    assert repository.prepared_tools == ["connector.0123456789abcdef"]
