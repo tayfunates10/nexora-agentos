@@ -26,7 +26,6 @@ from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.integration_manifest import ConnectorManifest
 from nexora_api.integrations import IntegrationStatus
-from nexora_api.tool_contracts import validate_registration_schema
 from nexora_api.tenant_agents import (
     AgentBinding,
     CatalogEntry,
@@ -44,6 +43,7 @@ from nexora_api.tenant_agents import (
     UpdatePolicyInput,
     VersionEvent,
 )
+from nexora_api.tool_contracts import validate_registration_schema
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
