@@ -31,6 +31,40 @@
       "allowed_server_keys": [
         "connector"
       ]
+    },
+    "economical": {
+      "allowed_workspaces": [
+        "00000000-0000-0000-0000-000000000000"
+      ],
+      "allowed_providers": [
+        "openai"
+      ],
+      "allowed_tools": [],
+      "max_steps": 16,
+      "max_output_tokens": 2048,
+      "max_total_tokens": 64000,
+      "timeout_seconds": 60,
+      "max_context_chars": 100000,
+      "allowed_server_keys": [
+        "connector"
+      ]
+    },
+    "advanced": {
+      "allowed_workspaces": [
+        "00000000-0000-0000-0000-000000000000"
+      ],
+      "allowed_providers": [
+        "openai"
+      ],
+      "allowed_tools": [],
+      "max_steps": 24,
+      "max_output_tokens": 4096,
+      "max_total_tokens": 128000,
+      "timeout_seconds": 90,
+      "max_context_chars": 160000,
+      "allowed_server_keys": [
+        "connector"
+      ]
     }
   },
   "mcp_servers": {},
