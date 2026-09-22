@@ -49,6 +49,7 @@ def test_browser_adapter_sends_only_snapshotted_origin_and_relative_path():
                 {"path": "/services"},
                 5.0,
             )
+
     result = asyncio.run(exercise())
     assert result["title"] == "Services"
     assert seen["authorization"] == "Bearer " + ("x" * 32)
@@ -66,6 +67,7 @@ def test_browser_adapter_rejects_paths_that_can_escape_the_origin(path):
 
     async def exercise():
         await adapter.call_tool_for_context(_context(), "page.inspect", {"path": path}, 5.0)
+
     with pytest.raises(McpAdapterError) as raised:
         asyncio.run(exercise())
     assert raised.value.code == "browser_path_invalid"
@@ -81,6 +83,7 @@ def test_browser_adapter_requires_a_standard_run_snapshot():
 
     async def exercise():
         await adapter.call_tool_for_context(context, "page.inspect", {"path": "/"}, 5.0)
+
     with pytest.raises(McpAdapterError) as raised:
         asyncio.run(exercise())
     assert raised.value.code == "browser_standard_run_required"
