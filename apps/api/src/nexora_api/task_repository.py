@@ -44,7 +44,8 @@ class RunTaskRepository:
 
     async def _view(self, connection, row) -> RunTask:
         dependencies = await connection.execute(
-            """SELECT depends_on_task_id FROM run_task_dependencies\n               WHERE task_id=%s ORDER BY depends_on_task_id""",
+            """SELECT depends_on_task_id FROM run_task_dependencies
+               WHERE task_id=%s ORDER BY depends_on_task_id""",
             (row["id"],),
         )
         evidence = await connection.execute(
@@ -130,7 +131,8 @@ class RunTaskRepository:
                         "verification_state": existing["verification_state"]}
 
             root_result = await connection.execute(
-                """SELECT id FROM run_tasks\n                   WHERE workspace_id=%s AND run_id=%s AND kind='goal' FOR SHARE""",
+                """SELECT id FROM run_tasks
+                   WHERE workspace_id=%s AND run_id=%s AND kind='goal' FOR SHARE""",
                 (context.workspace_id, context.run_id),
             )
             root = await root_result.fetchone()
@@ -193,7 +195,8 @@ class RunTaskRepository:
         async with self.connection() as connection:
             await executable_run(connection, context)
             duplicate = await connection.execute(
-                """SELECT task_id,satisfied FROM run_task_evidence\n                   WHERE run_id=%s AND idempotency_key=%s""",
+                """SELECT task_id,satisfied FROM run_task_evidence
+                   WHERE run_id=%s AND idempotency_key=%s""",
                 (context.run_id, idempotency_key),
             )
             previous = await duplicate.fetchone()
