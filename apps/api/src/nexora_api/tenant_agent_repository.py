@@ -27,6 +27,7 @@ from nexora_api.agent_manifest import AgentManifest, Version
 from nexora_api.agents import AgentRun
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
+from nexora_api.integration_manifest import load_connector
 from nexora_api.integrations import IntegrationStatus
 from nexora_api.tenant_agents import (
     AgentBinding,
@@ -242,6 +243,150 @@ class TenantAgentRepository:
             updated_at=row["updated_at"],
         )
 
+    async def _connector_run_contracts(
+        self,
+        connection,
+        principal: Principal,
+        workspace_id: UUID,
+        manifest: AgentManifest,
+        bindings: list[AgentBinding],
+    ) -> tuple[list[str], dict[str, str], dict[str, dict[str, object]]]:
+        """Freeze connector contracts and register immutable governed tool aliases."""
+        by_key = {binding.binding_key: binding for binding in bindings}
+        declared_integrations = set(manifest.required_integrations) | set(
+            manifest.optional_integrations
+        )
+        required_tools = set(manifest.required_tools)
+        allowed_tools: list[str] = []
+        aliases: dict[str, str] = {}
+        connector_tools: dict[str, dict[str, object]] = {}
+
+        for public_name in [*manifest.required_tools, *manifest.optional_tools]:
+            integration_key, separator, capability = public_name.partition(".")
+            if not separator or integration_key not in declared_integrations:
+                allowed_tools.append(public_name)
+                continue
+
+            binding = by_key.get(integration_key)
+            if binding is None or binding.status != IntegrationStatus.CONNECTED:
+                if public_name in required_tools:
+                    raise HTTPException(409, f"Required tool is not connected: {public_name}")
+                continue
+
+            result = await connection.execute(
+                """SELECT t.integration_definition_id,t.status,d.manifest
+                   FROM tenant_integrations t
+                   JOIN integration_definitions d ON d.id=t.integration_definition_id
+                   WHERE t.workspace_id=%s AND t.id=%s
+                   FOR SHARE OF t""",
+                (workspace_id, binding.tenant_integration_id),
+            )
+            integration = await result.fetchone()
+            if (
+                integration is None
+                or integration["integration_definition_id"] != integration_key
+                or integration["status"] != IntegrationStatus.CONNECTED
+            ):
+                if public_name in required_tools:
+                    raise HTTPException(409, f"Required tool is unavailable: {public_name}")
+                continue
+
+            definition = load_connector(integration["manifest"])
+            endpoint = definition.endpoint_for(capability)
+            if endpoint is None:
+                if public_name in required_tools:
+                    raise HTTPException(
+                        409, f"Required connector capability is not executable: {public_name}"
+                    )
+                continue
+
+            definition_document = definition.model_dump(mode="json")
+            contract_document = {
+                "public_name": public_name,
+                "definition_id": definition.id,
+                "definition_version": definition.version,
+                "endpoint": endpoint.model_dump(mode="json"),
+            }
+            digest = hashlib.sha256(
+                json.dumps(
+                    contract_document,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            internal_name = f"connector.{digest[:48]}"
+            tool_id = uuid4()
+            await connection.execute(
+                """INSERT INTO tool_definitions
+                   (id,workspace_id,name,server_key,remote_name,description,input_schema,
+                    output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
+                   VALUES (%s,%s,%s,'connector',%s,%s,%s,NULL,%s,true,%s,%s)
+                   ON CONFLICT (workspace_id,name) DO NOTHING""",
+                (
+                    tool_id,
+                    workspace_id,
+                    internal_name,
+                    public_name,
+                    f"{definition.name}: {capability}",
+                    Jsonb(endpoint.input_schema),
+                    endpoint.side_effect,
+                    principal.issuer,
+                    principal.subject,
+                ),
+            )
+            stored_result = await connection.execute(
+                """SELECT id,server_key,remote_name,input_schema,side_effect,enabled
+                   FROM tool_definitions
+                   WHERE workspace_id=%s AND name=%s""",
+                (workspace_id, internal_name),
+            )
+            stored = await stored_result.fetchone()
+            if (
+                stored is None
+                or stored["server_key"] != "connector"
+                or stored["remote_name"] != public_name
+                or stored["input_schema"] != endpoint.input_schema
+                or stored["side_effect"] != endpoint.side_effect
+            ):
+                raise HTTPException(409, "Connector tool contract collision")
+            if not stored["enabled"]:
+                if public_name in required_tools:
+                    raise HTTPException(409, f"Required tool is disabled: {public_name}")
+                continue
+
+            decision = "allow" if endpoint.side_effect == "read" else "require_approval"
+            reason = (
+                "Standard connector read capability"
+                if endpoint.side_effect == "read"
+                else "Standard connector side effect requires approval"
+            )
+            await connection.execute(
+                """INSERT INTO tool_policies
+                   (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
+                   VALUES (%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (workspace_id,tool_id) DO NOTHING""",
+                (
+                    workspace_id,
+                    stored["id"],
+                    decision,
+                    reason,
+                    principal.issuer,
+                    principal.subject,
+                ),
+            )
+
+            allowed_tools.append(public_name)
+            aliases[public_name] = internal_name
+            connector_tools[public_name] = {
+                "binding_key": integration_key,
+                "tenant_integration_id": str(binding.tenant_integration_id),
+                "definition_id": definition.id,
+                "capability": capability,
+                "definition": definition_document,
+            }
+
+        return allowed_tools, aliases, connector_tools
+
     async def create_run(
         self,
         principal: Principal,
@@ -268,23 +413,13 @@ class TenantAgentRepository:
             if row["status"] != InstanceStatus.ACTIVE or not readiness.ready:
                 raise HTTPException(409, "This standard agent is not ready to run")
 
-            by_key = {binding.binding_key: binding for binding in bindings}
-            declared_integrations = set(manifest.required_integrations) | set(
-                manifest.optional_integrations
+            allowed_tools, tool_aliases, connector_tools = await self._connector_run_contracts(
+                connection,
+                principal,
+                workspace_id,
+                manifest,
+                bindings,
             )
-
-            def executable(tool_name: str) -> bool:
-                integration_key = tool_name.split(".", 1)[0]
-                if integration_key not in declared_integrations:
-                    return True
-                binding = by_key.get(integration_key)
-                return binding is not None and binding.status == IntegrationStatus.CONNECTED
-
-            allowed_tools = [
-                name
-                for name in [*manifest.required_tools, *manifest.optional_tools]
-                if executable(name)
-            ]
             snapshot = {
                 "kind": "standard",
                 "tenant_agent_id": str(agent_id),
@@ -295,6 +430,8 @@ class TenantAgentRepository:
                 "model_profile": manifest.model_policy.primary,
                 "settings": row["settings"],
                 "allowed_tools": allowed_tools,
+                "tool_aliases": tool_aliases,
+                "connector_tools": connector_tools,
                 "manifest": manifest.model_dump(mode="json"),
                 "bindings": {
                     binding.binding_key: {
