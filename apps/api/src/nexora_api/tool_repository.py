@@ -26,6 +26,7 @@ from nexora_api.tool_contracts import (
 from nexora_api.tooling import (
     ApprovalStatus,
     ToolApproval,
+    RunAction,
     ToolDefinition,
     ToolPolicy,
     ToolPolicyInput,
@@ -211,6 +212,94 @@ class ToolGovernanceRepository:
                 (workspace_id, cursor, cursor, limit),
             )
             return [self._tool_summary(row) for row in await result.fetchall()]
+
+    @staticmethod
+    def _run_action(row) -> RunAction:
+        snapshot = row["agent_snapshot"]
+        action_name = row["stored_tool_name"]
+        if isinstance(snapshot, dict):
+            aliases = snapshot.get("tool_aliases")
+            if isinstance(aliases, dict):
+                for public_name, internal_name in aliases.items():
+                    if internal_name == row["stored_tool_name"]:
+                        action_name = public_name
+                        break
+        return RunAction(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            run_id=row["run_id"],
+            action_name=action_name,
+            side_effect=row["side_effect"],
+            status=row["status"],
+            policy_decision=row["policy_decision"],
+            attempt_count=row["attempt_count"],
+            error_code=row["error_code"],
+            approval_id=row["approval_id"],
+            approval_status=row["approval_status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
+        )
+
+    async def list_run_actions(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        run_id: UUID,
+        limit: int,
+        cursor: UUID | None,
+    ) -> list[RunAction]:
+        async with self.connection() as connection:
+            await self.workspaces.scoped(connection, principal, workspace_id, Permission.READ)
+            run_result = await connection.execute(
+                "SELECT id FROM agent_runs WHERE workspace_id=%s AND id=%s",
+                (workspace_id, run_id),
+            )
+            if await run_result.fetchone() is None:
+                raise HTTPException(404)
+
+            cursor_created_at = None
+            if cursor is not None:
+                cursor_result = await connection.execute(
+                    """SELECT created_at FROM tool_calls
+                       WHERE workspace_id=%s AND run_id=%s AND id=%s""",
+                    (workspace_id, run_id, cursor),
+                )
+                cursor_row = await cursor_result.fetchone()
+                if cursor_row is None:
+                    raise HTTPException(404)
+                cursor_created_at = cursor_row["created_at"]
+
+            result = await connection.execute(
+                """SELECT c.id,c.workspace_id,c.run_id,c.status,c.policy_decision,
+                          c.attempt_count,c.error_code,c.created_at,c.updated_at,
+                          c.started_at,c.finished_at,t.name AS stored_tool_name,t.side_effect,
+                          a.id AS approval_id,a.status AS approval_status,r.agent_snapshot
+                   FROM tool_calls c
+                   JOIN tool_definitions t
+                     ON t.id=c.tool_id AND t.workspace_id=c.workspace_id
+                   JOIN agent_runs r
+                     ON r.id=c.run_id AND r.workspace_id=c.workspace_id
+                   LEFT JOIN tool_approvals a
+                     ON a.tool_call_id=c.id AND a.workspace_id=c.workspace_id
+                   WHERE c.workspace_id=%s AND c.run_id=%s
+                     AND (
+                       %s::timestamptz IS NULL
+                       OR (c.created_at,c.id) > (%s::timestamptz,%s::uuid)
+                     )
+                   ORDER BY c.created_at,c.id
+                   LIMIT %s""",
+                (
+                    workspace_id,
+                    run_id,
+                    cursor_created_at,
+                    cursor_created_at,
+                    cursor,
+                    limit,
+                ),
+            )
+            return [self._run_action(row) for row in await result.fetchall()]
 
     async def set_policy(
         self,
