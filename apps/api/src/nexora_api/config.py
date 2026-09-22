@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # Client secrets belong to the operator and never reach the database or a tenant.
     integration_oauth_clients: SecretStr | None = None
     integration_request_timeout_seconds: float = Field(default=5.0, gt=0.0, le=30.0)
+    # Optional isolated Playwright service. Standard agents only receive the browser tool
+    # when both values are configured; the browser origin itself is frozen in the run snapshot.
+    browser_runtime_url: str | None = None
+    browser_runtime_token: SecretStr | None = None
     # The runtime contract standard agents declare a minimum against. It moves with the
     # platform, independently of any agent version.
     agent_runtime_version: str = "1.0.0"
@@ -85,6 +89,24 @@ class Settings(BaseSettings):
             return None
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value):
             raise ValueError("secret_vault_active_key must be a short key identifier")
+        return value
+
+    @field_validator("browser_runtime_url")
+    @classmethod
+    def _browser_runtime_url(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        if not value.startswith(("http://", "https://")) or len(value) > 500:
+            raise ValueError("browser_runtime_url must be an http(s) URL")
+        return value.rstrip("/")
+
+    @field_validator("browser_runtime_token")
+    @classmethod
+    def _browser_runtime_token(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None or not value.get_secret_value():
+            return None
+        if len(value.get_secret_value()) < 32:
+            raise ValueError("browser_runtime_token must be at least 32 characters")
         return value
 
     @field_validator("agent_runtime_version")
