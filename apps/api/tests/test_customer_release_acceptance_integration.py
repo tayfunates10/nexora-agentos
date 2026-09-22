@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import psycopg
 import pytest
@@ -18,8 +18,6 @@ from catalog_support import (
     workspace,
 )
 from conftest import PLATFORM_ADMIN
-from test_executor import Adapter
-from test_tool_governance_integration import clear_unpublished_outbox
 
 from nexora_api.browser_mcp import BROWSER_SERVER_KEY
 from nexora_api.connector_mcp import CONNECTOR_SERVER_KEY
@@ -39,6 +37,8 @@ from nexora_api.model_routing import (
 from nexora_api.outbox import QUEUE_STREAM
 from nexora_api.task_mcp import TASK_SERVER_KEY, TaskMcpAdapter
 from nexora_api.worker import AgentWorker
+from test_executor import Adapter
+from test_tool_governance_integration import clear_unpublished_outbox
 
 pytestmark = [
     pytest.mark.integration,
@@ -194,7 +194,9 @@ def seo_provider():
                 "nexora.tasks.create",
                 {
                     "title": "Create the approved SEO draft",
-                    "description": "Persist the customer-approved SEO improvement as a WordPress draft.",
+                    "description": (
+                        "Persist the customer-approved SEO improvement as a WordPress draft."
+                    ),
                     "action_tool": "wordpress.posts.create",
                     "idempotency_key": "seo-task-0001",
                 },
@@ -292,7 +294,9 @@ def reporting_provider():
                 "nexora.tasks.create",
                 {
                     "title": "Review the weekly conversion drop",
-                    "description": "Investigate the measured conversion drop before any external change.",
+                    "description": (
+                        "Investigate the measured conversion drop before any external change."
+                    ),
                     "idempotency_key": "report-task-0001",
                 },
             ),
@@ -335,7 +339,15 @@ def _connect(client, owner, workspace_id, definition_id, credentials, account):
     return response.json()
 
 
-def _publish_agent(client, admin, package, slug, required_integrations, required_tools, **overrides):
+def _publish_agent(
+    client,
+    admin,
+    package,
+    slug,
+    required_integrations,
+    required_tools,
+    **overrides,
+):
     create_catalog_agent(client, admin, package, slug)
     return publish_version(
         client,
@@ -722,7 +734,10 @@ def test_customer_demo_workspace_completes_release_gate(keys, platform_settings)
             owner,
             workspace_id,
             reporting["id"],
-            "Create a durable follow-up for the measured conversion drop; do not change any external system.",
+            (
+                "Create a durable follow-up for the measured conversion drop; "
+                "do not change any external system."
+            ),
             "customer-report-run-0001",
         )
         report_model = reporting_provider()
