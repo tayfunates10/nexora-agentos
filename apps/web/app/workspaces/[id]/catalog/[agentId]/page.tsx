@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { api } from "../../../../../lib/server/api";
@@ -187,6 +188,37 @@ export default async function AgentInstance({ params, searchParams }: {
             <button type="submit" className="button danger">{ui.t("catalog.remove")}</button>
           </form>
         </div>}
+      </Panel>
+
+      <Panel labelledBy="run-standard-agent-title">
+        <h2 id="run-standard-agent-title" className="section-title">
+          {ui.t("agents.startWith", { agentName: agent.display_name })}
+        </h2>
+        {agent.status === "active" && agent.readiness.ready
+          ? <form className="form" action="/workspaces/runs/start" method="post">
+            <input type="hidden" name="csrf" value={session.csrf}/>
+            <input type="hidden" name="workspace" value={id}/>
+            <input type="hidden" name="agent" value={agent.id}/>
+            <input type="hidden" name="idempotency" value={randomUUID()}/>
+            <Field
+              id={`task-${agent.id}`}
+              label={ui.t("agents.taskLabel")}
+              help={ui.t("agents.taskHelp")}
+            >
+              <textarea
+                className="field-control" id={`task-${agent.id}`} name="input" required
+                rows={5} maxLength={20000} aria-describedby={`task-${agent.id}-help`}
+              />
+            </Field>
+            <div>
+              <button type="submit" className="button">{ui.t("agents.startRun")}</button>
+            </div>
+          </form>
+          : <Notice tone="warning">
+            {agent.readiness.ready
+              ? ui.t(`catalog.instanceStatusHelp.${agent.status}` as MessageKey)
+              : ui.t("catalog.notReady", { count: String(missing.length) })}
+          </Notice>}
       </Panel>
 
       <Reveal>
