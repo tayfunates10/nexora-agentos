@@ -644,6 +644,40 @@ export async function startProvider() {
         });
       }
 
+      const standardRun = url.pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/tenant-agents\/([^/]+)\/runs$/,
+      );
+      if (standardRun) {
+        const [, workspaceId, agentId] = standardRun;
+        const scope = workspaces.get(workspaceId);
+        const agent = tenantAgents.get(agentId);
+        if (!scope || !agent || agent.workspace_id !== workspaceId) return send({}, 404);
+        if (request.method !== "POST") return send({}, 405);
+        if (agent.status !== "active" || !agent.readiness.ready) return send({}, 409);
+        const key = request.headers["idempotency-key"];
+        if (typeof key !== "string" || key.length < 8) return send({}, 400);
+        const scopedKey = workspaceId + ":" + key;
+        const existingId = runIdempotency.get(scopedKey);
+        if (existingId) return send(runs.get(existingId), 200);
+        const input = JSON.parse(body);
+        if (typeof input.input !== "string" || !input.input.trim()) return send({}, 422);
+        const id = randomUUID();
+        const now = new Date().toISOString();
+        const row = {
+          id, workspace_id: workspaceId, agent_id: agent.id, agent_name: agent.display_name,
+          trace_id: randomUUID(), status: "queued", attempt_count: 0, requested_by_me: true,
+          cancel_requested_at: null, finished_at: null, failure_code: null,
+          created_at: now, updated_at: now,
+        };
+        runs.set(id, row);
+        runEvents.set(id, [{
+          id: randomUUID(), event_no: 1, event_type: "run.queued",
+          payload: { request_id: "fixture-request", agent_kind: "standard" }, created_at: now,
+        }]);
+        runIdempotency.set(scopedKey, id);
+        return send(row, 201);
+      }
+
       const instances = url.pathname.match(
         /^\/api\/v1\/workspaces\/([^/]+)\/tenant-agents(?:\/([^/]+))?(\/update|\/rollback|\/history|\/fork|\/bindings\/[a-z0-9-]+)?$/,
       );
