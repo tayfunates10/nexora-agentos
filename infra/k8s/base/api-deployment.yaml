@@ -63,6 +63,23 @@ spec:
               valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_REDIS_URL}}
             - name: NEXORA_METRICS_TOKEN
               valueFrom: {secretKeyRef: {name: nexora-secrets, key: NEXORA_METRICS_TOKEN}}
+            # Master keys for the integration vault, as a JSON object of base64 256-bit
+            # keys. Without them the API refuses to store a tenant credential rather
+            # than keeping it readable.
+            - name: NEXORA_SECRET_VAULT_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: nexora-secrets
+                  key: NEXORA_SECRET_VAULT_KEYS
+                  optional: true
+            # OAuth application registrations per connector. The client secrets belong
+            # to the operator and never reach the database or a tenant.
+            - name: NEXORA_INTEGRATION_OAUTH_CLIENTS
+              valueFrom:
+                secretKeyRef:
+                  name: nexora-secrets
+                  key: NEXORA_INTEGRATION_OAUTH_CLIENTS
+                  optional: true
           # Readiness depends on PostgreSQL and Redis; liveness deliberately does not,
           # so a dependency outage removes traffic instead of restarting every pod.
           startupProbe:

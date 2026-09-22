@@ -20,6 +20,16 @@ data:
   NEXORA_AUTH_JWKS_MIN_REFRESH_SECONDS: "10"
   NEXORA_API_RATE_LIMIT_REQUESTS: "120"
   NEXORA_API_RATE_LIMIT_WINDOW_SECONDS: "60"
+  # Which master key new credentials are sealed under. Several keys may be loaded at
+  # once so a rotation can still read what the previous key sealed.
+  NEXORA_SECRET_VAULT_ACTIVE_KEY: ""
+  # Verified token subjects that may publish and roll out standard agents. This is the
+  # only way platform administration is granted: no API call and no workspace role
+  # implies it. Comma separated.
+  NEXORA_PLATFORM_ADMIN_SUBJECTS: ""
+  # The runtime contract standard agents declare a minimum against. It moves with the
+  # platform, independently of any agent version.
+  NEXORA_AGENT_RUNTIME_VERSION: "1.0.0"
 ---
 apiVersion: v1
 kind: ConfigMap

@@ -1,0 +1,29 @@
+{
+  "id": "webhook",
+  "name": "Outbound webhook",
+  "category": "custom",
+  "icon": "plug",
+  "description": "A signed outbound webhook a tenant receives on its own endpoint. Payloads are signed with a shared secret held in the vault.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "webhook",
+  "capabilities": [
+    "events.deliver"
+  ],
+  "scopes": [],
+  "credential_fields": [
+    {
+      "key": "endpoint_url",
+      "label": "Endpoint URL",
+      "secret": false,
+      "required": true
+    },
+    {
+      "key": "signing_secret",
+      "label": "Signing secret",
+      "secret": true,
+      "required": true,
+      "help": "At least 32 characters; used to sign every delivery."
+    }
+  ]
+}

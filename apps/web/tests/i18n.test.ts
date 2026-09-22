@@ -27,6 +27,11 @@ const IDENTICAL_BY_DESIGN = new Set<string>([
   "format.milliseconds", "format.microsUnit",
   // Terms this product keeps identical in Turkish on purpose.
   "runs.column.agent", "runDetail.steps.model", "spend.column.model",
+  // "Beta" is the release stage as it is written in Turkish too.
+  "integrations.definitionStatus.beta", "catalog.channel.beta", "studio.agentStatus.beta",
+  // Agent Studio is a product name, and "Platform" and "Manifest" are the Turkish
+  // technical terms as well.
+  "studio.title", "studio.area", "studio.eyebrow", "studio.manifestLabel",
 ]);
 
 /** Sample values for every variable a message declares, typed the way it uses them. */

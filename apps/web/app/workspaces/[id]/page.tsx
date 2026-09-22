@@ -16,10 +16,12 @@ import { Icon, type IconName } from "../../../components/ui/Icon.tsx";
 import { Reveal } from "../../../components/ui/Reveal.tsx";
 import type { MessageKey } from "../../../messages/en.ts";
 
-// The seven modules of the console, in the order the control centre presents them. A wide
-// card spans half the row; the middle row holds three narrower ones.
+// The modules of the console, in the order the control centre presents them. A wide
+// card spans half the row; the narrow ones sit three to a row.
 const MODULES: { slug: string; key: string; icon: IconName; wide: boolean }[] = [
   { slug: "agents", key: "agents", icon: "agents", wide: true },
+  { slug: "catalog", key: "catalog", icon: "catalog", wide: true },
+  { slug: "integrations", key: "integrations", icon: "integrations", wide: true },
   { slug: "runs", key: "runs", icon: "runs", wide: true },
   { slug: "approvals", key: "approvals", icon: "approvals", wide: false },
   { slug: "tools", key: "tools", icon: "tools", wide: false },

@@ -1,0 +1,67 @@
+{
+  "id": "mikro",
+  "name": "Mikro ERP",
+  "category": "erp",
+  "icon": "database",
+  "description": "Mikro ERP service endpoint: stock, customer and invoice records exposed by the customer's own Mikro integration service.",
+  "version": "1.0.0",
+  "status": "beta",
+  "auth": "api_key",
+  "capabilities": [
+    "stock.read",
+    "customers.read",
+    "invoices.read",
+    "orders.read"
+  ],
+  "test_capability": "stock.read",
+  "scopes": [],
+  "credential_fields": [
+    {
+      "key": "base_url",
+      "label": "Service URL",
+      "secret": false,
+      "required": true,
+      "help": "The HTTPS endpoint of the customer's Mikro integration service."
+    },
+    {
+      "key": "api_key",
+      "label": "Service API key",
+      "secret": true,
+      "required": true
+    },
+    {
+      "key": "company_code",
+      "label": "Company code",
+      "secret": false,
+      "required": false
+    }
+  ],
+  "base_url_field": "base_url",
+  "credential_placement": {
+    "kind": "header",
+    "header": "X-API-Key",
+    "value_field": "api_key"
+  },
+  "endpoints": [
+    {
+      "capability": "stock.read",
+      "method": "GET",
+      "path": "/stock"
+    },
+    {
+      "capability": "customers.read",
+      "method": "GET",
+      "path": "/customers"
+    },
+    {
+      "capability": "invoices.read",
+      "method": "GET",
+      "path": "/invoices"
+    },
+    {
+      "capability": "orders.read",
+      "method": "GET",
+      "path": "/orders"
+    }
+  ]
+}

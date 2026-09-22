@@ -46,6 +46,19 @@ RUNTIME_TABLES = frozenset(
         "workspace_spend_budget_events",
         "workspace_spend_alerts",
         "workspace_spend_alert_outbox",
+        "platform_events",
+        "catalog_agents",
+        "catalog_agent_versions",
+        "catalog_agent_entitlements",
+        "agent_rollouts",
+        "integration_definitions",
+        "tenant_integrations",
+        "integration_credentials",
+        "integration_oauth_states",
+        "agent_update_policies",
+        "tenant_agents",
+        "tenant_agent_version_events",
+        "agent_integration_bindings",
     }
 )
 
@@ -76,6 +89,21 @@ API_WRITES: Mapping[str, frozenset[str]] = {
     "workspace_spend_budget_events": frozenset({"INSERT"}),
     "workspace_spend_alerts": frozenset({"INSERT"}),
     "workspace_spend_alert_outbox": frozenset({"INSERT"}),
+    "platform_events": frozenset({"INSERT"}),
+    "catalog_agents": frozenset({"INSERT", "UPDATE"}),
+    "catalog_agent_versions": frozenset({"INSERT", "UPDATE"}),
+    "catalog_agent_entitlements": frozenset({"INSERT", "DELETE"}),
+    "agent_rollouts": frozenset({"INSERT", "UPDATE"}),
+    "integration_definitions": frozenset({"INSERT", "UPDATE"}),
+    "tenant_integrations": frozenset({"INSERT", "UPDATE", "DELETE"}),
+    # Rotation writes a new credential and drops the superseded row; no ciphertext is
+    # ever edited in place.
+    "integration_credentials": frozenset({"INSERT", "UPDATE", "DELETE"}),
+    "integration_oauth_states": frozenset({"INSERT", "DELETE"}),
+    "agent_update_policies": frozenset({"INSERT", "UPDATE"}),
+    "tenant_agents": frozenset({"INSERT", "UPDATE", "DELETE"}),
+    "tenant_agent_version_events": frozenset({"INSERT"}),
+    "agent_integration_bindings": frozenset({"INSERT", "UPDATE", "DELETE"}),
 }
 
 WORKER_WRITES: Mapping[str, frozenset[str]] = {

@@ -1,0 +1,59 @@
+{
+  "id": "wordpress",
+  "name": "WordPress",
+  "category": "content",
+  "icon": "document",
+  "description": "WordPress REST API with application passwords: read, draft and publish posts and pages on a self-hosted or managed site.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "basic",
+  "capabilities": [
+    "posts.read",
+    "posts.create",
+    "posts.publish",
+    "media.upload",
+    "pages.read"
+  ],
+  "test_capability": "posts.read",
+  "scopes": [],
+  "credential_fields": [
+    {
+      "key": "site_url",
+      "label": "Site URL",
+      "secret": false,
+      "required": true,
+      "help": "The site root, for example https://example.com"
+    },
+    {
+      "key": "username",
+      "label": "User name",
+      "secret": false,
+      "required": true
+    },
+    {
+      "key": "password",
+      "label": "Application password",
+      "secret": true,
+      "required": true,
+      "help": "Generated in the WordPress user profile; never a login password."
+    }
+  ],
+  "base_url_field": "site_url",
+  "credential_placement": {
+    "kind": "basic",
+    "value_field": "password",
+    "username_field": "username"
+  },
+  "endpoints": [
+    {
+      "capability": "posts.read",
+      "method": "GET",
+      "path": "/wp-json/wp/v2/posts"
+    },
+    {
+      "capability": "pages.read",
+      "method": "GET",
+      "path": "/wp-json/wp/v2/pages"
+    }
+  ]
+}

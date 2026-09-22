@@ -1,0 +1,43 @@
+{
+  "id": "google-ads",
+  "name": "Google Ads",
+  "category": "advertising",
+  "icon": "target",
+  "description": "Google Ads API: campaign structure, keyword and conversion performance for a linked customer account.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "oauth2",
+  "capabilities": [
+    "campaigns.read",
+    "insights.read",
+    "keywords.read",
+    "budgets.read",
+    "budgets.update"
+  ],
+  "test_capability": "campaigns.read",
+  "scopes": [
+    "https://www.googleapis.com/auth/adwords"
+  ],
+  "oauth": {
+    "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_url": "https://oauth2.googleapis.com/token",
+    "default_scopes": [
+      "https://www.googleapis.com/auth/adwords"
+    ],
+    "refreshable": true,
+    "refresh_margin_seconds": 300
+  },
+  "base_url": "https://googleads.googleapis.com",
+  "credential_placement": {
+    "kind": "bearer_header",
+    "value_field": "access_token"
+  },
+  "endpoints": [
+    {
+      "capability": "campaigns.read",
+      "method": "GET",
+      "path": "/v18/customers:listAccessibleCustomers"
+    }
+  ],
+  "credential_fields": []
+}

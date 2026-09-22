@@ -1,0 +1,115 @@
+{
+  "id": "nexora.documents",
+  "slug": "documents",
+  "name": "Documents & Knowledge",
+  "description": "Answers questions strictly from the workspace's own documents, with citations, and summarises or compares sources on request.",
+  "category": "knowledge",
+  "icon": "document",
+  "version": "1.0.0",
+  "min_runtime_version": "1.0.0",
+  "status": "stable",
+  "channel": "stable",
+  "changelog": "First stable release: permission-aware retrieval with mandatory citations.",
+  "system_instructions": "You answer questions from the workspace's documents and nothing else.\n\nEvery factual sentence carries a citation to a retrieved chunk. If retrieval returns nothing relevant, say that the documents do not cover the question. Do not fall back on general knowledge, and do not reconcile contradictory sources by choosing one silently: show both.\n\nYou only see documents the requester is allowed to see. Never speculate about what other documents might exist.",
+  "model_policy": {
+    "primary": "economical",
+    "escalation": "advanced",
+    "fallback": "default"
+  },
+  "reasoning": {
+    "effort": "medium",
+    "max_steps": 8,
+    "escalate_after_steps": 4
+  },
+  "required_integrations": [],
+  "optional_integrations": [
+    "wordpress",
+    "github"
+  ],
+  "required_tools": [],
+  "optional_tools": [
+    "wordpress.posts.read",
+    "github.repos.read"
+  ],
+  "capabilities": [
+    "documents.search",
+    "documents.answer",
+    "documents.summarize",
+    "documents.compare"
+  ],
+  "permissions": [
+    "workspace.read",
+    "knowledge.read"
+  ],
+  "approval_required": [],
+  "memory": {
+    "enabled": false,
+    "scope": "run",
+    "retention_days": 30,
+    "max_items": 100
+  },
+  "rag": {
+    "enabled": true,
+    "top_k": 10,
+    "min_score": 0.25,
+    "source_tags": []
+  },
+  "budget": {
+    "max_run_micros": 1500000,
+    "daily_micros": 40000000,
+    "max_tokens_per_run": 200000
+  },
+  "rate_limits": {
+    "runs_per_hour": 120,
+    "tool_calls_per_run": 20
+  },
+  "settings_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "citation_style": {
+        "type": "string",
+        "enum": [
+          "inline",
+          "footnote"
+        ]
+      },
+      "primary_language": {
+        "type": "string",
+        "enum": [
+          "tr",
+          "en"
+        ]
+      }
+    }
+  },
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "task": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "task"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "answer": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "citations": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

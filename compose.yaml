@@ -51,6 +51,12 @@ services:
       NEXORA_OTEL_SAMPLE_RATIO: ${NEXORA_OTEL_SAMPLE_RATIO:-1.0}
       NEXORA_METRICS_TOKEN: ${NEXORA_METRICS_TOKEN:-}
       NEXORA_LOG_LEVEL: ${NEXORA_LOG_LEVEL:-INFO}
+      # Integration vault. Without master keys the API refuses to store a tenant
+      # credential rather than keeping it readable.
+      NEXORA_SECRET_VAULT_KEYS: ${NEXORA_SECRET_VAULT_KEYS:-}
+      NEXORA_SECRET_VAULT_ACTIVE_KEY: ${NEXORA_SECRET_VAULT_ACTIVE_KEY:-}
+      NEXORA_INTEGRATION_OAUTH_CLIENTS: ${NEXORA_INTEGRATION_OAUTH_CLIENTS:-}
+      NEXORA_PLATFORM_ADMIN_SUBJECTS: ${NEXORA_PLATFORM_ADMIN_SUBJECTS:-}
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       postgres: {condition: service_healthy}

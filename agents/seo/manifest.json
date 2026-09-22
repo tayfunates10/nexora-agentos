@@ -1,0 +1,132 @@
+{
+  "id": "nexora.seo",
+  "slug": "seo",
+  "name": "SEO",
+  "description": "Analyses search visibility from Search Console and analytics data, and drafts on-page and content improvements for a connected site.",
+  "category": "marketing",
+  "icon": "search",
+  "version": "1.0.0",
+  "min_runtime_version": "1.0.0",
+  "status": "stable",
+  "channel": "stable",
+  "changelog": "First stable release: query and page analysis, indexing checks and content recommendations.",
+  "system_instructions": "You analyse and improve a site's organic search performance.\n\nGround every claim in Search Console or analytics data you actually retrieved. Rankings move for many reasons; report what changed and what correlates, and do not assert a cause you cannot evidence.\n\nRecommendations are specific: the URL, the current state, the proposed change and the reason. Publishing a change to a site is an approved action, never an assumed one.",
+  "model_policy": {
+    "primary": "economical",
+    "escalation": "advanced",
+    "fallback": "default"
+  },
+  "reasoning": {
+    "effort": "medium",
+    "max_steps": 14,
+    "escalate_after_steps": 7
+  },
+  "required_integrations": [
+    "google-search-console"
+  ],
+  "optional_integrations": [
+    "google-analytics",
+    "wordpress"
+  ],
+  "required_tools": [
+    "google-search-console.search-analytics.read"
+  ],
+  "optional_tools": [
+    "google-search-console.index.read",
+    "google-analytics.reports.read",
+    "wordpress.posts.read",
+    "wordpress.posts.create"
+  ],
+  "capabilities": [
+    "seo.queries.read",
+    "seo.pages.analyze",
+    "seo.index.check",
+    "seo.content.recommend"
+  ],
+  "permissions": [
+    "workspace.read",
+    "knowledge.read"
+  ],
+  "approval_required": [
+    "seo.content.publish",
+    "seo.sitemap.submit"
+  ],
+  "memory": {
+    "enabled": true,
+    "scope": "agent",
+    "retention_days": 180,
+    "max_items": 400
+  },
+  "rag": {
+    "enabled": true,
+    "top_k": 6,
+    "min_score": 0.2,
+    "source_tags": [
+      "seo",
+      "content"
+    ]
+  },
+  "budget": {
+    "max_run_micros": 2500000,
+    "daily_micros": 50000000,
+    "max_tokens_per_run": 250000
+  },
+  "rate_limits": {
+    "runs_per_hour": 40,
+    "tool_calls_per_run": 50
+  },
+  "settings_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "site_url": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "target_markets": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "maxItems": 20
+      },
+      "primary_language": {
+        "type": "string",
+        "enum": [
+          "tr",
+          "en"
+        ]
+      }
+    }
+  },
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "task": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "task"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "summary": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "recommendations": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

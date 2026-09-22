@@ -1,0 +1,46 @@
+{
+  "id": "smtp",
+  "name": "SMTP mail",
+  "category": "messaging",
+  "icon": "mail",
+  "description": "Outbound SMTP relay for agent-authored mail. Sending is an external communication and always requires approval.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "basic",
+  "capabilities": [
+    "mail.send"
+  ],
+  "scopes": [],
+  "credential_fields": [
+    {
+      "key": "host",
+      "label": "SMTP host",
+      "secret": false,
+      "required": true
+    },
+    {
+      "key": "port",
+      "label": "Port",
+      "secret": false,
+      "required": true
+    },
+    {
+      "key": "username",
+      "label": "User name",
+      "secret": false,
+      "required": true
+    },
+    {
+      "key": "password",
+      "label": "Password",
+      "secret": true,
+      "required": true
+    },
+    {
+      "key": "from_address",
+      "label": "From address",
+      "secret": false,
+      "required": true
+    }
+  ]
+}

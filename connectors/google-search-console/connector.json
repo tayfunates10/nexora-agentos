@@ -1,0 +1,46 @@
+{
+  "id": "google-search-console",
+  "name": "Google Search Console",
+  "category": "analytics",
+  "icon": "search",
+  "description": "Search Console API: query, page and device level search performance plus indexing state for a verified property.",
+  "version": "1.0.0",
+  "status": "available",
+  "auth": "oauth2",
+  "capabilities": [
+    "search-analytics.read",
+    "sitemaps.read",
+    "index.read"
+  ],
+  "test_capability": "search-analytics.read",
+  "scopes": [
+    "https://www.googleapis.com/auth/webmasters.readonly"
+  ],
+  "oauth": {
+    "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_url": "https://oauth2.googleapis.com/token",
+    "default_scopes": [
+      "https://www.googleapis.com/auth/webmasters.readonly"
+    ],
+    "refreshable": true,
+    "refresh_margin_seconds": 300
+  },
+  "base_url": "https://searchconsole.googleapis.com",
+  "credential_placement": {
+    "kind": "bearer_header",
+    "value_field": "access_token"
+  },
+  "endpoints": [
+    {
+      "capability": "search-analytics.read",
+      "method": "GET",
+      "path": "/webmasters/v3/sites"
+    },
+    {
+      "capability": "sitemaps.read",
+      "method": "GET",
+      "path": "/webmasters/v3/sites"
+    }
+  ],
+  "credential_fields": []
+}

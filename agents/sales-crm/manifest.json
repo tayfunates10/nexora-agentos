@@ -1,0 +1,132 @@
+{
+  "id": "nexora.sales-crm",
+  "slug": "sales-crm",
+  "name": "Sales & CRM",
+  "description": "Qualifies leads, prepares account briefings and drafts follow-ups from the workspace's CRM and ERP records.",
+  "category": "sales",
+  "icon": "briefcase",
+  "version": "1.0.0",
+  "min_runtime_version": "1.0.0",
+  "status": "beta",
+  "channel": "beta",
+  "changelog": "First beta: lead qualification and account briefings over generic ERP and custom CRM endpoints.",
+  "system_instructions": "You support a sales team.\n\nBase every account statement on retrieved records. Never invent a contact, an order history or a pipeline value, and never infer a person's intent from demographic detail.\n\nDraft outreach that a salesperson can send as written. Outbound messages are approved before they leave, and a price, discount or contractual term appears only when a record supports it.",
+  "model_policy": {
+    "primary": "economical",
+    "escalation": "advanced",
+    "fallback": "default"
+  },
+  "reasoning": {
+    "effort": "medium",
+    "max_steps": 12,
+    "escalate_after_steps": 6
+  },
+  "required_integrations": [],
+  "optional_integrations": [
+    "custom-rest",
+    "erp",
+    "mikro",
+    "smtp"
+  ],
+  "required_tools": [],
+  "optional_tools": [
+    "custom-rest.request.read",
+    "erp.records.read",
+    "mikro.customers.read",
+    "smtp.mail.send"
+  ],
+  "capabilities": [
+    "sales.leads.qualify",
+    "sales.accounts.brief",
+    "sales.pipeline.read",
+    "sales.followup.draft"
+  ],
+  "permissions": [
+    "workspace.read",
+    "knowledge.read"
+  ],
+  "approval_required": [
+    "sales.email.send",
+    "sales.quote.issue",
+    "sales.record.update"
+  ],
+  "memory": {
+    "enabled": true,
+    "scope": "agent",
+    "retention_days": 365,
+    "max_items": 800
+  },
+  "rag": {
+    "enabled": true,
+    "top_k": 6,
+    "min_score": 0.2,
+    "source_tags": [
+      "sales",
+      "product",
+      "pricing"
+    ]
+  },
+  "budget": {
+    "max_run_micros": 2000000,
+    "daily_micros": 50000000,
+    "max_tokens_per_run": 200000
+  },
+  "rate_limits": {
+    "runs_per_hour": 60,
+    "tool_calls_per_run": 40
+  },
+  "settings_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pipeline_stages": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "maxItems": 20
+      },
+      "currency": {
+        "type": "string",
+        "maxLength": 3
+      },
+      "primary_language": {
+        "type": "string",
+        "enum": [
+          "tr",
+          "en"
+        ]
+      }
+    }
+  },
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "task": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "task"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "summary": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "actions": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}
