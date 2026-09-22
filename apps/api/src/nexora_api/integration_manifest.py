@@ -258,6 +258,11 @@ class ConnectorManifest(BaseModel):
             undeclared = sorted(seen - set(self.capabilities))
             if undeclared:
                 raise ValueError(f"endpoints reference undeclared capabilities: {undeclared}")
+            for endpoint in self.endpoints:
+                if len(f"{self.id}.{endpoint.capability}") > 64:
+                    raise ValueError("connector tool name exceeds the platform tool-name limit")
+                if 37 + len(endpoint.capability) > 128:
+                    raise ValueError("connector capability is too long for an executable target")
         placement = self.credential_placement
         if placement is not None and self.auth != "oauth2":
             # OAuth tokens are minted by the platform; every other style is filled in by
