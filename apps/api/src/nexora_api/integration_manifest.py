@@ -138,6 +138,7 @@ class ConnectorEndpoint(BaseModel):
             raise ValueError(f"Invalid connector tool contract: {exc.code}") from None
         return self
 
+
 class CredentialField(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
