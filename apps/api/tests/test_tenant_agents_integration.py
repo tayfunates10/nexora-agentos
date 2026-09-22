@@ -134,6 +134,8 @@ def test_installed_standard_agent_is_runnable_and_provisions_governed_write_tool
         "operations",
         slug,
         "1.1.0",
+        status="stable",
+        channel="stable",
         required_integrations=["custom-rest"],
         optional_integrations=[],
         required_tools=["custom-rest.request.write"],
