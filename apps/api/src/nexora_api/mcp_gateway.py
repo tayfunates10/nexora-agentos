@@ -91,7 +91,10 @@ class McpGateway:
 
     async def _invoke(self, context, call_key, tool_name, arguments, is_cancelled, active):
         started = time.perf_counter()
-        plan = await self.repository.prepare_call(context, call_key, tool_name, arguments)
+        governed_tool_name = (context.tool_aliases or {}).get(tool_name, tool_name)
+        plan = await self.repository.prepare_call(
+            context, call_key, governed_tool_name, arguments
+        )
         server_key = plan.tool.server_key
         record(
             active,
