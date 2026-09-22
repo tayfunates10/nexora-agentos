@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 
 import psycopg
@@ -45,16 +46,16 @@ def admin(client, keys):
 def standard_agent(client, admin, slug, version="1.0.0", **manifest):
     """A catalog agent whose required integration is one a test can actually connect."""
     create_catalog_agent(client, admin, "social-media", slug)
+    manifest.setdefault("required_integrations", ["mikro"])
+    manifest.setdefault("optional_integrations", ["erp"])
+    manifest.setdefault("required_tools", [])
+    manifest.setdefault("optional_tools", [])
     return publish_version(
         client,
         admin,
         "social-media",
         slug,
         version,
-        required_integrations=["mikro"],
-        optional_integrations=["erp"],
-        required_tools=[],
-        optional_tools=[],
         **manifest,
     )
 
@@ -104,6 +105,133 @@ def test_an_agent_without_its_required_connection_never_becomes_active(client, a
     assert bound.json()["readiness"]["ready"] is True
     assert bound.json()["status"] == "active"
     assert SECRET not in bound.text
+
+
+def test_standard_agent_runs_directly_with_an_immutable_execution_snapshot(
+    client, admin, keys, platform_settings
+):
+    owner = headers(keys, "owner-standard-run")
+    space = workspace(client, owner, "Standard run")
+    slug = unique_slug("standard-run-agent")
+    standard_agent(
+        client,
+        admin,
+        slug,
+        "1.0.0",
+        system_instructions="Version one instructions.",
+        model_policy={"primary": "balanced-v1"},
+        required_tools=["mikro.stock.read"],
+    )
+    integration = connect_api_key(client, owner, space, "mikro", SECRET).json()
+    instance = install(
+        client,
+        owner,
+        space,
+        slug,
+        bindings={"mikro": integration["id"]},
+    ).json()
+
+    run_headers = {**owner, "Idempotency-Key": "standard-run-0001"}
+    created = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Inspect the current account and summarize what should be done."},
+        headers=run_headers,
+    )
+    assert created.status_code == 201, created.text
+    run = created.json()
+    assert run["agent_id"] == instance["id"]
+    assert run["status"] == "queued"
+
+    replay = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Inspect the current account and summarize what should be done."},
+        headers=run_headers,
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["id"] == run["id"]
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        stored = connection.execute(
+            """SELECT agent_id,tenant_agent_id,agent_snapshot
+               FROM agent_runs WHERE id=%s""",
+            (run["id"],),
+        ).fetchone()
+        assert stored[0] is None
+        assert str(stored[1]) == instance["id"]
+        snapshot = stored[2]
+        assert snapshot["version"] == "1.0.0"
+        assert snapshot["instructions"] == "Version one instructions."
+        assert snapshot["model_profile"] == "balanced-v1"
+        assert snapshot["bindings"]["mikro"]["tenant_integration_id"] == integration["id"]
+        assert snapshot["allowed_tools"] == ["mikro.stock.read"]
+        internal_name = snapshot["tool_aliases"]["mikro.stock.read"]
+        assert internal_name.startswith("connector.")
+        connector_tool = snapshot["connector_tools"]["mikro.stock.read"]
+        assert connector_tool["binding_key"] == "mikro"
+        assert connector_tool["tenant_integration_id"] == integration["id"]
+        assert connector_tool["definition_id"] == "mikro"
+        assert connector_tool["capability"] == "stock.read"
+        assert SECRET not in json.dumps(snapshot)
+
+        governed = connection.execute(
+            """SELECT d.server_key,d.remote_name,d.side_effect,d.enabled,p.decision
+               FROM tool_definitions d
+               LEFT JOIN tool_policies p
+                 ON p.workspace_id=d.workspace_id AND p.tool_id=d.id
+               WHERE d.workspace_id=%s AND d.name=%s""",
+            (space, internal_name),
+        ).fetchone()
+        assert governed == ("connector", "mikro.stock.read", "read", True, "allow")
+
+        payload = connection.execute(
+            "SELECT payload FROM job_outbox WHERE run_id=%s", (run["id"],)
+        ).fetchone()[0]
+        assert payload["agent_kind"] == "standard"
+        assert payload["agent_id"] == instance["id"]
+
+    publish_version(
+        client,
+        admin,
+        "social-media",
+        slug,
+        "1.1.0",
+        required_integrations=["mikro"],
+        optional_integrations=["erp"],
+        required_tools=[],
+        optional_tools=[],
+        system_instructions="Version two instructions.",
+        model_policy={"primary": "advanced-v2"},
+    )
+    moved = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/update",
+        json={"version": "1.1.0"},
+        headers=owner,
+    )
+    assert moved.status_code == 200, moved.text
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        snapshot = connection.execute(
+            "SELECT agent_snapshot FROM agent_runs WHERE id=%s", (run["id"],)
+        ).fetchone()[0]
+        assert snapshot["version"] == "1.0.0"
+        assert snapshot["instructions"] == "Version one instructions."
+        assert snapshot["model_profile"] == "balanced-v1"
+
+
+def test_paused_standard_agent_cannot_queue_a_run(client, admin, keys):
+    owner = headers(keys, "owner-paused-run")
+    space = workspace(client, owner, "Paused run")
+    slug = unique_slug("paused-run-agent")
+    standard_agent(client, admin, slug)
+    instance = install(client, owner, space, slug).json()
+    assert instance["status"] == "paused"
+
+    response = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Try to run before the required account is connected."},
+        headers={**owner, "Idempotency-Key": "paused-standard-run-0001"},
+    )
+    assert response.status_code == 409
 
 
 def test_installing_with_bindings_activates_immediately(client, admin, keys):
