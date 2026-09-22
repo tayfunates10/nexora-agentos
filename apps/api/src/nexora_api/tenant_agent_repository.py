@@ -494,7 +494,8 @@ class TenantAgentRepository:
                 continue
 
             result = await connection.execute(
-                """SELECT t.integration_definition_id,t.status,d.manifest
+                """SELECT t.integration_definition_id,t.status,t.auth_type,
+                          t.credential_reference,t.config,d.manifest
                    FROM tenant_integrations t
                    JOIN integration_definitions d ON d.id=t.integration_definition_id
                    WHERE t.workspace_id=%s AND t.id=%s
@@ -521,12 +522,28 @@ class TenantAgentRepository:
                 continue
 
             definition_document = definition.model_dump(mode="json")
+            config_fingerprint = hashlib.sha256(
+                json.dumps(
+                    integration["config"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest()
+            credential_reference = (
+                str(integration["credential_reference"])
+                if integration["auth_type"] != "oauth2"
+                and integration["credential_reference"] is not None
+                else None
+            )
             contract_document = {
                 "public_name": public_name,
                 "definition_id": definition.id,
                 "definition_version": definition.version,
                 "endpoint": endpoint.model_dump(mode="json"),
                 "tenant_integration_id": str(binding.tenant_integration_id),
+                "config_fingerprint": config_fingerprint,
+                "credential_reference": credential_reference,
             }
             digest = hashlib.sha256(
                 json.dumps(
@@ -605,6 +622,8 @@ class TenantAgentRepository:
                 "tenant_integration_id": str(binding.tenant_integration_id),
                 "definition_id": definition.id,
                 "capability": capability,
+                "config_fingerprint": config_fingerprint,
+                "credential_reference": credential_reference,
                 "definition": definition_document,
             }
 
