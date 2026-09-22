@@ -25,8 +25,8 @@ from nexora_api.tool_contracts import (
 )
 from nexora_api.tooling import (
     ApprovalStatus,
-    ToolApproval,
     RunAction,
+    ToolApproval,
     ToolDefinition,
     ToolPolicy,
     ToolPolicyInput,
