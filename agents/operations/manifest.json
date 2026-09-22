@@ -5,7 +5,7 @@
   "description": "Watches operational signals across connected systems, summarises what changed and prepares the runbook step a human should take next.",
   "category": "operations",
   "icon": "activity",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "min_runtime_version": "1.0.0",
   "status": "beta",
   "channel": "beta",
