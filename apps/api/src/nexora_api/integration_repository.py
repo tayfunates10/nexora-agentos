@@ -609,7 +609,8 @@ class IntegrationRepository:
             raise ConnectorError("invalid_integration_tool")
         async with self.connection() as connection:
             bound = await connection.execute(
-                """SELECT b.tenant_integration_id,t.status AS agent_status,\n                          i.status AS integration_status
+                """SELECT b.tenant_integration_id,t.status AS agent_status,
+                          i.status AS integration_status
                    FROM agent_integration_bindings b
                    JOIN tenant_agents t
                      ON t.id=b.tenant_agent_id AND t.workspace_id=b.workspace_id
