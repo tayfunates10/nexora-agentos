@@ -1,5 +1,6 @@
 import asyncio
 import os
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -63,6 +64,84 @@ def install(client, caller, space, slug, **body):
     return client.post(
         f"/api/v1/workspaces/{space}/tenant-agents", json={"slug": slug, **body}, headers=caller
     )
+
+
+
+def test_installed_standard_agent_is_runnable_and_provisions_governed_write_tool(
+    client, admin, keys, platform_settings
+):
+    owner = headers(keys, "owner-action-runtime")
+    space = workspace(client, owner, "Action runtime")
+    publish_connector(client, admin, "custom-rest")
+    slug = unique_slug("action-agent")
+    create_catalog_agent(client, admin, "operations", slug)
+    publish_version(
+        client,
+        admin,
+        "operations",
+        slug,
+        "1.1.0",
+        required_integrations=["custom-rest"],
+        optional_integrations=[],
+        required_tools=["custom-rest.request.write"],
+        optional_tools=[],
+    )
+    integration = client.post(
+        f"/api/v1/workspaces/{space}/integrations",
+        json={
+            "integration_definition_id": "custom-rest",
+            "display_name": "Customer API",
+            "account_identifier": "customer-api",
+            "credentials": {
+                "access_token": "customer-rest-token-0000000001",
+                "base_url": "https://api.example.com",
+            },
+        },
+        headers=owner,
+    )
+    assert integration.status_code == 201, integration.text
+
+    installed = install(
+        client,
+        owner,
+        space,
+        slug,
+        bindings={"custom-rest": integration.json()["id"]},
+    )
+    assert installed.status_code == 201, installed.text
+    instance = installed.json()
+    assert instance["status"] == "active"
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        projection = connection.execute(
+            """SELECT origin_catalog_agent_id,origin_version_id,manifest
+               FROM agent_definitions WHERE id=%s AND workspace_id=%s""",
+            (instance["id"], space),
+        ).fetchone()
+        assert projection is not None
+        assert projection[2]["required_tools"] == ["custom-rest.request.write"]
+
+        tool = connection.execute(
+            """SELECT t.server_key,t.remote_name,t.side_effect,p.decision
+               FROM tool_definitions t
+               JOIN tool_policies p
+                 ON p.tool_id=t.id AND p.workspace_id=t.workspace_id
+               WHERE t.workspace_id=%s AND t.name='custom-rest.request.write'""",
+            (space,),
+        ).fetchone()
+        assert tool == (
+            "nexora-integrations",
+            "custom-rest.request.write",
+            "write",
+            "require_approval",
+        )
+
+    queued = client.post(
+        f"/api/v1/workspaces/{space}/runs",
+        json={"agent_id": instance["id"], "input": "Update the customer system."},
+        headers={**owner, "Idempotency-Key": str(uuid4())},
+    )
+    assert queued.status_code == 202, queued.text
 
 
 def test_an_agent_without_its_required_connection_never_becomes_active(client, admin, keys):
