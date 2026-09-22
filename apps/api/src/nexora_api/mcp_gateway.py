@@ -137,7 +137,7 @@ class McpGateway:
             raise McpGatewayError("mcp_server_unavailable", retryable=True)
 
         try:
-            call_tool = getattr(adapter, "call_tool")
+            call_tool = adapter.call_tool
             if getattr(adapter, "requires_context", False):
                 call = call_tool(
                     execution.remote_name,
