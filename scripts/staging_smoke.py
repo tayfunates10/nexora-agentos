@@ -85,16 +85,42 @@ def _uuid(name: str) -> str:
     return raw
 
 
+def _optional_tool(name: str) -> str | None:
+    value = os.getenv(name, "").strip() or None
+    if value and not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", value):
+        raise SmokeError(f"{name} is not a valid tool name")
+    return value
+
+
+def _tool_names(name: str) -> tuple[str, ...]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return ()
+    values = tuple(part.strip() for part in raw.split(",") if part.strip())
+    if len(values) > 20 or not values:
+        raise SmokeError(f"{name} must contain between 1 and 20 tool names")
+    for value in values:
+        if not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", value):
+            raise SmokeError(f"{name} contains an invalid tool name")
+    return values
+
+
 @dataclass(frozen=True)
 class Config:
     api_url: str
     access_token: str
     workspace_id: str
     agent_id: str
+    agent_kind: str
     prompt: str
     expected_text: str | None
     expected_source_key: str | None
     approval_tool: str | None
+    expected_tools: tuple[str, ...]
+    require_task_graph: bool
+    require_verified_task: bool
+    expected_verified_action_tool: str | None
+    forbid_external_mutations: bool
     timeout_seconds: float
     poll_seconds: float
     require_retrieval: bool
@@ -104,9 +130,13 @@ class Config:
 
     @classmethod
     def from_env(cls) -> "Config":
-        approval_tool = os.getenv("NEXORA_STAGING_APPROVAL_TOOL", "").strip() or None
-        if approval_tool and not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", approval_tool):
-            raise SmokeError("NEXORA_STAGING_APPROVAL_TOOL is not a valid tool name")
+        approval_tool = _optional_tool("NEXORA_STAGING_APPROVAL_TOOL")
+        agent_kind = os.getenv("NEXORA_STAGING_AGENT_KIND", "custom").strip().lower()
+        if agent_kind not in {"custom", "standard"}:
+            raise SmokeError("NEXORA_STAGING_AGENT_KIND must be custom or standard")
+        expected_verified_action_tool = _optional_tool(
+            "NEXORA_STAGING_EXPECT_VERIFIED_ACTION_TOOL"
+        )
         require_observability = _env_bool("NEXORA_STAGING_REQUIRE_OBSERVABILITY", False)
         worker_admin_url = _base_url(
             "NEXORA_STAGING_WORKER_ADMIN_URL", required=require_observability
@@ -127,6 +157,7 @@ class Config:
             access_token=_required("NEXORA_STAGING_ACCESS_TOKEN"),
             workspace_id=_uuid("NEXORA_STAGING_WORKSPACE_ID"),
             agent_id=_uuid("NEXORA_STAGING_AGENT_ID"),
+            agent_kind=agent_kind,
             prompt=prompt,
             expected_text=os.getenv("NEXORA_STAGING_EXPECT_TEXT", "").strip() or None,
             expected_source_key=os.getenv(
@@ -134,6 +165,13 @@ class Config:
             ).strip()
             or None,
             approval_tool=approval_tool,
+            expected_tools=_tool_names("NEXORA_STAGING_EXPECT_TOOLS"),
+            require_task_graph=_env_bool("NEXORA_STAGING_REQUIRE_TASK_GRAPH", False),
+            require_verified_task=_env_bool("NEXORA_STAGING_REQUIRE_VERIFIED_TASK", False),
+            expected_verified_action_tool=expected_verified_action_tool,
+            forbid_external_mutations=_env_bool(
+                "NEXORA_STAGING_FORBID_EXTERNAL_MUTATIONS", False
+            ),
             timeout_seconds=_bounded_float(
                 "NEXORA_STAGING_TIMEOUT_SECONDS", 180.0, 10.0, 600.0
             ),
