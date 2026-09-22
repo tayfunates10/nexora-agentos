@@ -89,7 +89,11 @@ class DurableAgentExecutor:
         advertised = tuple(
             ProviderTool(t.name, t.description, t.input_schema)
             for t in tools
-            if t.enabled and t.name in profile.allowed_tools
+            if (
+                t.enabled
+                and t.name in profile.allowed_tools
+                and (context.allowed_tools is None or t.name in context.allowed_tools)
+            )
         )
         if len(tools) > 100 or len(advertised) > 32:
             raise TerminalExecutionError("tool_limit_exceeded")
