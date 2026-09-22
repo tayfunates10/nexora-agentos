@@ -1,7 +1,7 @@
 import hashlib
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import psycopg
@@ -21,6 +21,8 @@ class JobPayload(BaseModel):
     workspace_id: UUID
     agent_id: UUID
     trace_id: UUID
+    # Old custom-agent jobs omitted this field; default keeps them replay-compatible.
+    agent_kind: Literal["custom", "standard"] = "custom"
 
 
 class WorkerJob(BaseModel):
@@ -43,6 +45,10 @@ class ExecutionContext:
     instructions: str
     model_profile: str
     attempt_count: int
+    agent_kind: Literal["custom", "standard"] = "custom"
+    agent_snapshot: dict[str, Any] | None = None
+    # None means legacy/custom behavior: the runtime profile remains the only tool allowlist.
+    allowed_tools: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -112,7 +118,7 @@ class RunStateStore:
             run_result = await connection.execute(
                 """SELECT r.*,a.instructions,a.model_profile
                    FROM agent_runs r
-                   JOIN agent_definitions a
+                   LEFT JOIN agent_definitions a
                      ON a.id=r.agent_id AND a.workspace_id=r.workspace_id
                    WHERE r.id=%s AND r.workspace_id=%s
                    FOR UPDATE OF r""",
@@ -121,8 +127,11 @@ class RunStateStore:
             run = await run_result.fetchone()
             if not run:
                 return ClaimResult("ack")
+            agent_kind = "standard" if run["tenant_agent_id"] is not None else "custom"
+            target_agent_id = run["tenant_agent_id"] or run["agent_id"]
             if (
-                run["agent_id"] != durable_payload.agent_id
+                target_agent_id != durable_payload.agent_id
+                or agent_kind != durable_payload.agent_kind
                 or run["trace_id"] != durable_payload.trace_id
             ):
                 return ClaimResult("ack")
@@ -204,16 +213,40 @@ class RunStateStore:
                 "run.started",
                 {"attempt": state["attempt_count"], "job_id": str(job.job_id)},
             )
+            snapshot = run["agent_snapshot"] if agent_kind == "standard" else None
+            if agent_kind == "standard":
+                if not isinstance(snapshot, dict):
+                    return ClaimResult("ack")
+                instructions = snapshot.get("instructions")
+                model_profile = snapshot.get("model_profile")
+                allowed = snapshot.get("allowed_tools")
+                if (
+                    not isinstance(instructions, str)
+                    or not instructions
+                    or not isinstance(model_profile, str)
+                    or not model_profile
+                    or not isinstance(allowed, list)
+                    or any(not isinstance(name, str) for name in allowed)
+                ):
+                    return ClaimResult("ack")
+                allowed_tools = frozenset(allowed)
+            else:
+                instructions = run["instructions"]
+                model_profile = run["model_profile"]
+                allowed_tools = None
             context = ExecutionContext(
                 job_id=job.job_id,
                 workspace_id=run["workspace_id"],
                 run_id=run["id"],
-                agent_id=run["agent_id"],
+                agent_id=target_agent_id,
                 trace_id=run["trace_id"],
                 input_text=run["input_text"],
-                instructions=run["instructions"],
-                model_profile=run["model_profile"],
+                instructions=instructions,
+                model_profile=model_profile,
                 attempt_count=state["attempt_count"],
+                agent_kind=agent_kind,
+                agent_snapshot=snapshot,
+                allowed_tools=allowed_tools,
             )
             return ClaimResult("execute", context)
 
@@ -410,8 +443,11 @@ class RunStateStore:
                             {
                                 "run_id": str(run["id"]),
                                 "workspace_id": str(run["workspace_id"]),
-                                "agent_id": str(run["agent_id"]),
+                                "agent_id": str(run["tenant_agent_id"] or run["agent_id"]),
                                 "trace_id": str(run["trace_id"]),
+                                "agent_kind": (
+                                    "standard" if run["tenant_agent_id"] is not None else "custom"
+                                ),
                             }
                         ),
                         delay,
@@ -555,8 +591,9 @@ class RunStateStore:
                     {
                         "run_id": str(run["id"]),
                         "workspace_id": str(run["workspace_id"]),
-                        "agent_id": str(run["agent_id"]),
+                        "agent_id": str(run["tenant_agent_id"] or run["agent_id"]),
                         "trace_id": str(run["trace_id"]),
+                        "agent_kind": "standard" if run["tenant_agent_id"] is not None else "custom",
                     }
                 ),
             ),
