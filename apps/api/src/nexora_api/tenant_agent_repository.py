@@ -270,6 +270,136 @@ class TenantAgentRepository:
         browser_snapshot: dict[str, str] | None = None
 
         for public_name in [*manifest.required_tools, *manifest.optional_tools]:
+            if public_name in {"nexora.tasks.create", "nexora.tasks.verify"}:
+                if public_name == "nexora.tasks.create":
+                    remote_name = "child.create"
+                    description = (
+                        "Create a durable follow-up task inside this run without "
+                        "performing an external action."
+                    )
+                    input_schema = {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "minLength": 1, "maxLength": 300},
+                            "description": {"type": "string", "maxLength": 2000},
+                            "action_tool": {"type": "string", "minLength": 2, "maxLength": 64},
+                            "depends_on": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "minLength": 36,
+                                    "maxLength": 36,
+                                },
+                                "maxItems": 20,
+                            },
+                            "idempotency_key": {
+                                "type": "string",
+                                "minLength": 8,
+                                "maxLength": 128,
+                            },
+                        },
+                        "required": ["title", "idempotency_key"],
+                        "additionalProperties": False,
+                    }
+                else:
+                    remote_name = "task.verify"
+                    description = (
+                        "Complete a follow-up only after a successful governed action "
+                        "and later read evidence."
+                    )
+                    input_schema = {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "minLength": 36,
+                                "maxLength": 36,
+                            },
+                            "verification_tool": {
+                                "type": "string",
+                                "minLength": 2,
+                                "maxLength": 64,
+                            },
+                            "summary": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000,
+                            },
+                            "satisfied": {"type": "boolean"},
+                            "idempotency_key": {
+                                "type": "string",
+                                "minLength": 8,
+                                "maxLength": 128,
+                            },
+                        },
+                        "required": [
+                            "task_id",
+                            "verification_tool",
+                            "summary",
+                            "satisfied",
+                            "idempotency_key",
+                        ],
+                        "additionalProperties": False,
+                    }
+                digest = hashlib.sha256(
+                    json.dumps(
+                        {"public_name": public_name, "input_schema": input_schema},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                internal_name = f"tasks.{digest[:48]}"
+                await connection.execute(
+                    """INSERT INTO tool_definitions
+                       (id,workspace_id,name,server_key,remote_name,description,input_schema,
+                        output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
+                       VALUES (%s,%s,%s,'tasks',%s,%s,%s,NULL,'write',true,%s,%s)
+                       ON CONFLICT (workspace_id,name) DO NOTHING""",
+                    (
+                        uuid4(),
+                        workspace_id,
+                        internal_name,
+                        remote_name,
+                        description,
+                        Jsonb(input_schema),
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                stored_result = await connection.execute(
+                    """SELECT id,server_key,remote_name,input_schema,side_effect,enabled
+                       FROM tool_definitions WHERE workspace_id=%s AND name=%s""",
+                    (workspace_id, internal_name),
+                )
+                stored = await stored_result.fetchone()
+                if (
+                    stored is None
+                    or stored["server_key"] != "tasks"
+                    or stored["remote_name"] != remote_name
+                    or stored["input_schema"] != input_schema
+                    or stored["side_effect"] != "write"
+                ):
+                    raise HTTPException(409, "Task tool contract collision")
+                if not stored["enabled"]:
+                    if public_name in required_tools:
+                        raise HTTPException(409, "Required task capability is disabled")
+                    continue
+                await connection.execute(
+                    """INSERT INTO tool_policies
+                       (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
+                       VALUES (%s,%s,'allow','Internal run task metadata only',%s,%s)
+                       ON CONFLICT (workspace_id,tool_id) DO NOTHING""",
+                    (
+                        workspace_id,
+                        stored["id"],
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                allowed_tools.append(public_name)
+                aliases[public_name] = internal_name
+                continue
+
             if public_name == "browser.page.inspect":
                 configured = (
                     self.settings.browser_runtime_url is not None
@@ -582,6 +712,21 @@ class TenantAgentRepository:
                 ),
             )
             created = await result.fetchone()
+            await connection.execute(
+                """INSERT INTO run_tasks
+                   (id,workspace_id,run_id,parent_task_id,kind,title,description,status,
+                    action_tool_name,verification_state,idempotency_key,request_hash)
+                   VALUES (%s,%s,%s,NULL,'goal','Run goal',%s,'planned',
+                           NULL,'not_required',%s,%s)""",
+                (
+                    run_id,
+                    workspace_id,
+                    run_id,
+                    body.input[:2000],
+                    f"goal:{run_id}",
+                    fingerprint,
+                ),
+            )
             await connection.execute(
                 """INSERT INTO agent_run_events
                    (id,workspace_id,run_id,event_no,event_type,payload)
