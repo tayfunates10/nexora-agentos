@@ -34,6 +34,8 @@ from nexora_api.rag_repository import RagRepository
 from nexora_api.rate_limit import IdentityRateLimiter
 from nexora_api.spend import router as spend_router
 from nexora_api.spend_repository import SpendRepository
+from nexora_api.task_repository import RunTaskRepository
+from nexora_api.tasks import router as task_router
 from nexora_api.telemetry import configure_telemetry, record, record_error, span
 from nexora_api.tenant_agent_repository import TenantAgentRepository
 from nexora_api.tenant_agents import router as tenant_agent_router
@@ -74,6 +76,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
         app.state.mcp_gateway = McpGateway(settings)
         app.state.rag = RagRepository(settings)
         app.state.spend = SpendRepository(settings)
+        app.state.run_tasks = RunTaskRepository(settings)
         app.state.identity_rate_limiter = IdentityRateLimiter(
             redis,
             settings.api_rate_limit_requests,
@@ -191,6 +194,7 @@ def create_app(settings: Settings | None = None, probe: Probe | None = None) -> 
     app.include_router(evaluation_router)
     app.include_router(evaluation_judge_router)
     app.include_router(tool_router)
+    app.include_router(task_router)
     app.include_router(knowledge_router)
     app.include_router(spend_router)
     app.include_router(agent_studio_router)
