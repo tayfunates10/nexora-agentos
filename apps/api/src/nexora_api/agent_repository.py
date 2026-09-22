@@ -162,7 +162,12 @@ class AgentRuntimeRepository:
         async with self.connection() as connection:
             await self.workspaces.scoped(connection, principal, workspace_id, Permission.RUN_AGENTS)
             agent = await connection.execute(
-                "SELECT id FROM agent_definitions WHERE workspace_id=%s AND id=%s",
+                """SELECT a.id
+                   FROM agent_definitions a
+                   LEFT JOIN tenant_agents t
+                     ON t.id=a.id AND t.workspace_id=a.workspace_id
+                   WHERE a.workspace_id=%s AND a.id=%s
+                     AND (t.id IS NULL OR t.status='active')""",
                 (workspace_id, body.agent_id),
             )
             if not await agent.fetchone():
