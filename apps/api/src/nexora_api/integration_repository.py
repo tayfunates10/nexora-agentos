@@ -54,7 +54,6 @@ from nexora_api.integrations import (
     OAuthStartInput,
     TenantIntegration,
 )
-from nexora_api.tool_contracts import validate_registration_schema
 from nexora_api.secret_vault import (
     SealedSecret,
     SecretUnreadable,
@@ -63,6 +62,7 @@ from nexora_api.secret_vault import (
     credential_aad,
     mask,
 )
+from nexora_api.tool_contracts import validate_registration_schema
 from nexora_api.workspace_repository import WorkspaceRepository
 from nexora_api.workspaces import Permission
 
