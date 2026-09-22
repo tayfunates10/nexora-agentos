@@ -54,6 +54,11 @@
       "capability": "pages.read",
       "method": "GET",
       "path": "/wp-json/wp/v2/pages"
+    },
+    {
+      "capability": "posts.create",
+      "method": "POST",
+      "path": "/wp-json/wp/v2/posts"
     }
   ]
 }
