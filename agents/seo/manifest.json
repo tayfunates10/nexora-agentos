@@ -5,7 +5,7 @@
   "description": "Analyses search visibility from Search Console and analytics data, and drafts on-page and content improvements for a connected site.",
   "category": "marketing",
   "icon": "search",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "min_runtime_version": "1.0.0",
   "status": "stable",
   "channel": "stable",
