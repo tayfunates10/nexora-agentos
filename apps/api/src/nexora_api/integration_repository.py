@@ -596,6 +596,53 @@ class IntegrationRepository:
         document = self._unseal(workspace_id, integration_id, credential_row)
         return definition, document, row["config"], row
 
+    async def invoke_bound(
+        self,
+        workspace_id: UUID,
+        agent_id: UUID,
+        tool_name: str,
+        arguments: dict[str, object],
+    ):
+        """Execute a connector capability through the installed agent's own binding."""
+        binding_key, separator, capability = tool_name.partition(".")
+        if not separator or not capability:
+            raise ConnectorError("invalid_integration_tool")
+        async with self.connection() as connection:
+            bound = await connection.execute(
+                """SELECT b.tenant_integration_id,t.status AS agent_status,i.status AS integration_status
+                   FROM agent_integration_bindings b
+                   JOIN tenant_agents t
+                     ON t.id=b.tenant_agent_id AND t.workspace_id=b.workspace_id
+                   JOIN tenant_integrations i
+                     ON i.id=b.tenant_integration_id AND i.workspace_id=b.workspace_id
+                   WHERE b.workspace_id=%s AND b.tenant_agent_id=%s AND b.binding_key=%s""",
+                (workspace_id, agent_id, binding_key),
+            )
+            binding = await bound.fetchone()
+            if binding is None:
+                raise ConnectorError("integration_not_bound")
+            if binding["agent_status"] != "active":
+                raise ConnectorError("agent_not_active")
+            if binding["integration_status"] != IntegrationStatus.CONNECTED:
+                raise ConnectorError("integration_not_connected")
+
+            integration_id = binding["tenant_integration_id"]
+            definition, document, config, _ = await self.resolve(
+                connection, workspace_id, integration_id
+            )
+            if definition.id != binding_key or capability not in definition.capabilities:
+                raise ConnectorError("capability_not_declared")
+            document = await self._refresh_if_needed(
+                connection, workspace_id, integration_id, definition, document
+            )
+            return await self.runtime.invoke(
+                definition,
+                capability,
+                document,
+                config,
+                arguments,
+            )
+
     async def test(
         self, principal: Principal, workspace_id: UUID, integration_id: UUID, request_id: str
     ) -> ConnectionTest:
