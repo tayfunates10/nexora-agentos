@@ -260,9 +260,7 @@ class TenantAgentRepository:
             ).encode()
         ).hexdigest()
         async with self.connection() as connection:
-            await self.workspaces.scoped(
-                connection, principal, workspace_id, Permission.RUN_AGENTS
-            )
+            await self.workspaces.scoped(connection, principal, workspace_id, Permission.RUN_AGENTS)
             row = await self._row(connection, workspace_id, agent_id, lock=True)
             manifest = await self._manifest(connection, row["version_id"])
             bindings = await self._bindings(connection, workspace_id, agent_id)
