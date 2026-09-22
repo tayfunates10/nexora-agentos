@@ -63,9 +63,7 @@ class DemoConnectorAdapter:
             }
         }
 
-    async def call_tool_for_context(
-        self, context, remote_name, arguments, timeout_seconds
-    ):
+    async def call_tool_for_context(self, context, remote_name, arguments, timeout_seconds):
         del timeout_seconds
         capability = remote_name.split(":", 1)[1]
         self.calls.append((str(context.run_id), capability, dict(arguments)))
@@ -162,10 +160,7 @@ def _task_id(request):
 def _contains(request, key, value):
     return any(
         isinstance(payload, dict)
-        and (
-            payload.get(key) == value
-            or value in json.dumps(payload, sort_keys=True)
-        )
+        and (payload.get(key) == value or value in json.dumps(payload, sort_keys=True))
         for payload in _tool_payloads(request)
     )
 
@@ -605,9 +600,7 @@ def test_customer_demo_workspace_completes_release_gate(keys, platform_settings)
             settings_schema={
                 "type": "object",
                 "additionalProperties": False,
-                "properties": {
-                    "site_url": {"type": "string", "maxLength": 200}
-                },
+                "properties": {"site_url": {"type": "string", "maxLength": 200}},
                 "required": ["site_url"],
             },
         )
@@ -669,16 +662,17 @@ def test_customer_demo_workspace_completes_release_gate(keys, platform_settings)
                 "status": "draft",
             }
         ]
-        _assert_verified_task(
-            client, owner, workspace_id, seo_run, "wordpress.posts.create"
-        )
+        _assert_verified_task(client, owner, workspace_id, seo_run, "wordpress.posts.create")
         seo_actions = _action_names(client, owner, workspace_id, seo_run)
         assert ("wordpress.posts.create", "write", "succeeded") in seo_actions
-        assert sum(
-            1
-            for name, effect, status in seo_actions
-            if name == "wordpress.posts.read" and effect == "read" and status == "succeeded"
-        ) == 2
+        assert (
+            sum(
+                1
+                for name, effect, status in seo_actions
+                if name == "wordpress.posts.read" and effect == "read" and status == "succeeded"
+            )
+            == 2
+        )
 
         # 2. Social read -> durable task -> approval -> reply -> fresh read -> verification.
         clear_unpublished_outbox(settings)
@@ -712,18 +706,17 @@ def test_customer_demo_workspace_completes_release_gate(keys, platform_settings)
                 "message": "Yes, Saturday delivery is available by appointment.",
             }
         ]
-        _assert_verified_task(
-            client, owner, workspace_id, social_run, "instagram.comments.reply"
-        )
+        _assert_verified_task(client, owner, workspace_id, social_run, "instagram.comments.reply")
         social_actions = _action_names(client, owner, workspace_id, social_run)
         assert ("instagram.comments.reply", "external_communication", "succeeded") in social_actions
-        assert sum(
-            1
-            for name, effect, status in social_actions
-            if name == "instagram.comments.read"
-            and effect == "read"
-            and status == "succeeded"
-        ) == 2
+        assert (
+            sum(
+                1
+                for name, effect, status in social_actions
+                if name == "instagram.comments.read" and effect == "read" and status == "succeeded"
+            )
+            == 2
+        )
 
         # 3. Read-only reporting persists a follow-up and never performs an external mutation.
         clear_unpublished_outbox(settings)
