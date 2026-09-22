@@ -13,6 +13,9 @@ its manifest requires is bound to a connected account in the same workspace.
 and records where it came from. A later catalog release cannot change a fork's behaviour.
 """
 
+import hashlib
+import json
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import psycopg
@@ -22,8 +25,10 @@ from psycopg.types.json import Jsonb
 from nexora_api.agent_catalog import Channel
 from nexora_api.agent_catalog_repository import offered_version
 from nexora_api.agent_manifest import AgentManifest, Version
+from nexora_api.agents import AgentRun
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
+from nexora_api.integration_manifest import load_connector
 from nexora_api.integrations import IntegrationStatus
 from nexora_api.tenant_agents import (
     AgentBinding,
@@ -35,6 +40,7 @@ from nexora_api.tenant_agents import (
     IntegrationRequirement,
     Readiness,
     TenantAgent,
+    TenantAgentRunInput,
     TenantAgentSummary,
     TenantAgentUpdate,
     UpdateMode,
@@ -221,6 +227,607 @@ class TenantAgentRepository:
             return await self._view(
                 connection, workspace_id, await self._row(connection, workspace_id, agent_id)
             )
+
+    @staticmethod
+    def _run(row) -> AgentRun:
+        return AgentRun(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            agent_id=row["tenant_agent_id"],
+            trace_id=row["trace_id"],
+            status=row["status"],
+            attempt_count=row["attempt_count"],
+            cancel_requested_at=row["cancel_requested_at"],
+            finished_at=row["finished_at"],
+            failure_code=row["failure_code"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    async def _connector_run_contracts(
+        self,
+        connection,
+        principal: Principal,
+        workspace_id: UUID,
+        manifest: AgentManifest,
+        bindings: list[AgentBinding],
+        settings: dict[str, object],
+    ) -> tuple[
+        list[str],
+        dict[str, str],
+        dict[str, dict[str, object]],
+        dict[str, str] | None,
+    ]:
+        """Freeze connector contracts and register immutable governed tool aliases."""
+        by_key = {binding.binding_key: binding for binding in bindings}
+        declared_integrations = set(manifest.required_integrations) | set(
+            manifest.optional_integrations
+        )
+        required_tools = set(manifest.required_tools)
+        allowed_tools: list[str] = []
+        aliases: dict[str, str] = {}
+        connector_tools: dict[str, dict[str, object]] = {}
+        browser_snapshot: dict[str, str] | None = None
+
+        for public_name in [*manifest.required_tools, *manifest.optional_tools]:
+            if public_name in {"nexora.tasks.create", "nexora.tasks.verify"}:
+                if public_name == "nexora.tasks.create":
+                    remote_name = "child.create"
+                    description = (
+                        "Create a durable follow-up task inside this run without "
+                        "performing an external action."
+                    )
+                    input_schema = {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "minLength": 1, "maxLength": 300},
+                            "description": {"type": "string", "maxLength": 2000},
+                            "action_tool": {"type": "string", "minLength": 2, "maxLength": 64},
+                            "depends_on": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "minLength": 36,
+                                    "maxLength": 36,
+                                },
+                                "maxItems": 20,
+                            },
+                            "idempotency_key": {
+                                "type": "string",
+                                "minLength": 8,
+                                "maxLength": 128,
+                            },
+                        },
+                        "required": ["title", "idempotency_key"],
+                        "additionalProperties": False,
+                    }
+                else:
+                    remote_name = "task.verify"
+                    description = (
+                        "Complete a follow-up only after a successful governed action "
+                        "and later read evidence."
+                    )
+                    input_schema = {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "minLength": 36,
+                                "maxLength": 36,
+                            },
+                            "verification_tool": {
+                                "type": "string",
+                                "minLength": 2,
+                                "maxLength": 64,
+                            },
+                            "summary": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000,
+                            },
+                            "satisfied": {"type": "boolean"},
+                            "idempotency_key": {
+                                "type": "string",
+                                "minLength": 8,
+                                "maxLength": 128,
+                            },
+                        },
+                        "required": [
+                            "task_id",
+                            "verification_tool",
+                            "summary",
+                            "satisfied",
+                            "idempotency_key",
+                        ],
+                        "additionalProperties": False,
+                    }
+                digest = hashlib.sha256(
+                    json.dumps(
+                        {"public_name": public_name, "input_schema": input_schema},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                internal_name = f"tasks.{digest[:48]}"
+                await connection.execute(
+                    """INSERT INTO tool_definitions
+                       (id,workspace_id,name,server_key,remote_name,description,input_schema,
+                        output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
+                       VALUES (%s,%s,%s,'tasks',%s,%s,%s,NULL,'write',true,%s,%s)
+                       ON CONFLICT (workspace_id,name) DO NOTHING""",
+                    (
+                        uuid4(),
+                        workspace_id,
+                        internal_name,
+                        remote_name,
+                        description,
+                        Jsonb(input_schema),
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                stored_result = await connection.execute(
+                    """SELECT id,server_key,remote_name,input_schema,side_effect,enabled
+                       FROM tool_definitions WHERE workspace_id=%s AND name=%s""",
+                    (workspace_id, internal_name),
+                )
+                stored = await stored_result.fetchone()
+                if (
+                    stored is None
+                    or stored["server_key"] != "tasks"
+                    or stored["remote_name"] != remote_name
+                    or stored["input_schema"] != input_schema
+                    or stored["side_effect"] != "write"
+                ):
+                    raise HTTPException(409, "Task tool contract collision")
+                if not stored["enabled"]:
+                    if public_name in required_tools:
+                        raise HTTPException(409, "Required task capability is disabled")
+                    continue
+                await connection.execute(
+                    """INSERT INTO tool_policies
+                       (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
+                       VALUES (%s,%s,'allow','Internal run task metadata only',%s,%s)
+                       ON CONFLICT (workspace_id,tool_id) DO NOTHING""",
+                    (
+                        workspace_id,
+                        stored["id"],
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                allowed_tools.append(public_name)
+                aliases[public_name] = internal_name
+                continue
+
+            if public_name in {"browser.page.inspect", "browser.page.action"}:
+                configured = (
+                    self.settings.browser_runtime_url is not None
+                    and self.settings.browser_runtime_token is not None
+                )
+                site_url = settings.get("site_url")
+                if not configured or not isinstance(site_url, str):
+                    if public_name in required_tools:
+                        raise HTTPException(409, "Required browser capability is unavailable")
+                    continue
+                parsed = urlsplit(site_url)
+                if (
+                    parsed.scheme != "https"
+                    or not parsed.hostname
+                    or parsed.username
+                    or parsed.password
+                ):
+                    if public_name in required_tools:
+                        raise HTTPException(409, "Browser site_url must be a public HTTPS site")
+                    continue
+
+                allowed_origin = f"{parsed.scheme}://{parsed.netloc}"
+                is_action = public_name == "browser.page.action"
+                if is_action:
+                    remote_name = "page.action"
+                    side_effect = "write"
+                    description = (
+                        "Perform one approval-gated click or fill on an allowlisted customer page."
+                    )
+                    input_schema = {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "minLength": 1, "maxLength": 1000},
+                            "action": {"type": "string", "enum": ["click", "fill"]},
+                            "selector": {"type": "string", "minLength": 1, "maxLength": 500},
+                            "value": {"type": "string", "maxLength": 4000},
+                            "idempotency_key": {
+                                "type": "string",
+                                "minLength": 8,
+                                "maxLength": 128,
+                            },
+                        },
+                        "required": ["path", "action", "selector", "idempotency_key"],
+                        "additionalProperties": False,
+                    }
+                    policy_decision = "require_approval"
+                    policy_reason = "Browser UI mutation requires human approval"
+                else:
+                    remote_name = "page.inspect"
+                    side_effect = "read"
+                    description = "Render and inspect an allowlisted customer web page."
+                    input_schema = {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "minLength": 1, "maxLength": 1000}
+                        },
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    }
+                    policy_decision = "allow"
+                    policy_reason = "Run-scoped allowlisted browser inspection"
+
+                digest = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "public_name": public_name,
+                            "allowed_origin": allowed_origin,
+                            "input_schema": input_schema,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                internal_name = f"browser.{digest[:48]}"
+                await connection.execute(
+                    """INSERT INTO tool_definitions
+                       (id,workspace_id,name,server_key,remote_name,description,input_schema,
+                        output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
+                       VALUES (%s,%s,%s,'browser',%s,%s,%s,NULL,%s,true,%s,%s)
+                       ON CONFLICT (workspace_id,name) DO NOTHING""",
+                    (
+                        uuid4(),
+                        workspace_id,
+                        internal_name,
+                        remote_name,
+                        description,
+                        Jsonb(input_schema),
+                        side_effect,
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                stored_result = await connection.execute(
+                    """SELECT id,server_key,remote_name,input_schema,side_effect,enabled
+                       FROM tool_definitions
+                       WHERE workspace_id=%s AND name=%s""",
+                    (workspace_id, internal_name),
+                )
+                stored = await stored_result.fetchone()
+                if (
+                    stored is None
+                    or stored["server_key"] != "browser"
+                    or stored["remote_name"] != remote_name
+                    or stored["input_schema"] != input_schema
+                    or stored["side_effect"] != side_effect
+                ):
+                    raise HTTPException(409, "Browser tool contract collision")
+                if not stored["enabled"]:
+                    if public_name in required_tools:
+                        raise HTTPException(409, "Required browser capability is disabled")
+                    continue
+                await connection.execute(
+                    """INSERT INTO tool_policies
+                       (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
+                       VALUES (%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (workspace_id,tool_id) DO NOTHING""",
+                    (
+                        workspace_id,
+                        stored["id"],
+                        policy_decision,
+                        policy_reason,
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                allowed_tools.append(public_name)
+                aliases[public_name] = internal_name
+                browser_snapshot = {"allowed_origin": allowed_origin}
+                continue
+
+            integration_key, separator, capability = public_name.partition(".")
+            if not separator or integration_key not in declared_integrations:
+                allowed_tools.append(public_name)
+                continue
+
+            binding = by_key.get(integration_key)
+            if binding is None or binding.status != IntegrationStatus.CONNECTED:
+                if public_name in required_tools:
+                    raise HTTPException(409, f"Required tool is not connected: {public_name}")
+                continue
+
+            result = await connection.execute(
+                """SELECT t.integration_definition_id,t.status,t.auth_type,
+                          t.credential_reference,t.config,d.manifest
+                   FROM tenant_integrations t
+                   JOIN integration_definitions d ON d.id=t.integration_definition_id
+                   WHERE t.workspace_id=%s AND t.id=%s
+                   FOR SHARE OF t""",
+                (workspace_id, binding.tenant_integration_id),
+            )
+            integration = await result.fetchone()
+            if (
+                integration is None
+                or integration["integration_definition_id"] != integration_key
+                or integration["status"] != IntegrationStatus.CONNECTED
+            ):
+                if public_name in required_tools:
+                    raise HTTPException(409, f"Required tool is unavailable: {public_name}")
+                continue
+
+            definition = load_connector(integration["manifest"])
+            endpoint = definition.endpoint_for(capability)
+            if endpoint is None:
+                if public_name in required_tools:
+                    raise HTTPException(
+                        409, f"Required connector capability is not executable: {public_name}"
+                    )
+                continue
+
+            definition_document = definition.model_dump(mode="json")
+            config_fingerprint = hashlib.sha256(
+                json.dumps(
+                    integration["config"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest()
+            credential_reference = (
+                str(integration["credential_reference"])
+                if integration["auth_type"] != "oauth2"
+                and integration["credential_reference"] is not None
+                else None
+            )
+            contract_document = {
+                "public_name": public_name,
+                "definition_id": definition.id,
+                "definition_version": definition.version,
+                "endpoint": endpoint.model_dump(mode="json"),
+                "tenant_integration_id": str(binding.tenant_integration_id),
+                "config_fingerprint": config_fingerprint,
+                "credential_reference": credential_reference,
+            }
+            digest = hashlib.sha256(
+                json.dumps(
+                    contract_document,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            internal_name = f"connector.{digest[:48]}"
+            tool_id = uuid4()
+            await connection.execute(
+                """INSERT INTO tool_definitions
+                   (id,workspace_id,name,server_key,remote_name,description,input_schema,
+                    output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
+                   VALUES (%s,%s,%s,'connector',%s,%s,%s,%s,%s,true,%s,%s)
+                   ON CONFLICT (workspace_id,name) DO NOTHING""",
+                (
+                    tool_id,
+                    workspace_id,
+                    internal_name,
+                    f"{binding.tenant_integration_id}:{capability}",
+                    endpoint.description,
+                    Jsonb(endpoint.input_schema),
+                    Jsonb(endpoint.output_schema) if endpoint.output_schema is not None else None,
+                    endpoint.side_effect,
+                    principal.issuer,
+                    principal.subject,
+                ),
+            )
+            stored_result = await connection.execute(
+                """SELECT id,server_key,remote_name,input_schema,output_schema,side_effect,enabled
+                   FROM tool_definitions
+                   WHERE workspace_id=%s AND name=%s""",
+                (workspace_id, internal_name),
+            )
+            stored = await stored_result.fetchone()
+            if (
+                stored is None
+                or stored["server_key"] != "connector"
+                or stored["remote_name"] != f"{binding.tenant_integration_id}:{capability}"
+                or stored["input_schema"] != endpoint.input_schema
+                or stored["output_schema"] != endpoint.output_schema
+                or stored["side_effect"] != endpoint.side_effect
+            ):
+                raise HTTPException(409, "Connector tool contract collision")
+            if not stored["enabled"]:
+                if public_name in required_tools:
+                    raise HTTPException(409, f"Required tool is disabled: {public_name}")
+                continue
+
+            decision = "allow" if endpoint.side_effect == "read" else "require_approval"
+            reason = (
+                "Standard connector read capability"
+                if endpoint.side_effect == "read"
+                else "Standard connector side effect requires approval"
+            )
+            await connection.execute(
+                """INSERT INTO tool_policies
+                   (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
+                   VALUES (%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (workspace_id,tool_id) DO NOTHING""",
+                (
+                    workspace_id,
+                    stored["id"],
+                    decision,
+                    reason,
+                    principal.issuer,
+                    principal.subject,
+                ),
+            )
+
+            allowed_tools.append(public_name)
+            aliases[public_name] = internal_name
+            connector_tools[public_name] = {
+                "binding_key": integration_key,
+                "tenant_integration_id": str(binding.tenant_integration_id),
+                "definition_id": definition.id,
+                "capability": capability,
+                "config_fingerprint": config_fingerprint,
+                "credential_reference": credential_reference,
+                "definition": definition_document,
+            }
+
+        return allowed_tools, aliases, connector_tools, browser_snapshot
+
+    async def create_run(
+        self,
+        principal: Principal,
+        workspace_id: UUID,
+        agent_id: UUID,
+        body: TenantAgentRunInput,
+        idempotency_key: str,
+        request_id: str,
+    ) -> tuple[AgentRun, bool]:
+        """Queue one installed standard agent without turning it into a custom fork."""
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {"tenant_agent_id": str(agent_id), "input": body.input},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        async with self.connection() as connection:
+            await self.workspaces.scoped(connection, principal, workspace_id, Permission.RUN_AGENTS)
+            row = await self._row(connection, workspace_id, agent_id, lock=True)
+            manifest = await self._manifest(connection, row["version_id"])
+            bindings = await self._bindings(connection, workspace_id, agent_id)
+            readiness = self._readiness(manifest, bindings)
+            if row["status"] != InstanceStatus.ACTIVE or not readiness.ready:
+                raise HTTPException(409, "This standard agent is not ready to run")
+
+            (
+                allowed_tools,
+                tool_aliases,
+                connector_tools,
+                browser_snapshot,
+            ) = await self._connector_run_contracts(
+                connection,
+                principal,
+                workspace_id,
+                manifest,
+                bindings,
+                row["settings"],
+            )
+            snapshot = {
+                "kind": "standard",
+                "tenant_agent_id": str(agent_id),
+                "catalog_agent_id": str(row["catalog_agent_id"]),
+                "version_id": str(row["version_id"]),
+                "version": row["version"],
+                "instructions": row["instructions_override"] or manifest.system_instructions,
+                "model_profile": manifest.model_policy.primary,
+                "settings": row["settings"],
+                "allowed_tools": allowed_tools,
+                "tool_aliases": tool_aliases,
+                "connector_tools": connector_tools,
+                "browser": browser_snapshot,
+                "manifest": manifest.model_dump(mode="json"),
+                "bindings": {
+                    binding.binding_key: {
+                        "tenant_integration_id": str(binding.tenant_integration_id),
+                        "status": binding.status.value,
+                    }
+                    for binding in bindings
+                },
+            }
+
+            existing_result = await connection.execute(
+                """SELECT id,workspace_id,tenant_agent_id,trace_id,status,attempt_count,
+                          cancel_requested_at,finished_at,failure_code,created_at,updated_at,
+                          request_hash
+                   FROM agent_runs
+                   WHERE workspace_id=%s AND requested_by_issuer=%s
+                     AND requested_by_subject=%s AND idempotency_key=%s
+                   FOR UPDATE""",
+                (workspace_id, principal.issuer, principal.subject, idempotency_key),
+            )
+            existing = await existing_result.fetchone()
+            if existing:
+                if existing["request_hash"] != fingerprint:
+                    raise HTTPException(409)
+                if existing["tenant_agent_id"] is None:
+                    raise HTTPException(409)
+                return self._run(existing), False
+
+            run_id = uuid4()
+            trace_id = uuid4()
+            result = await connection.execute(
+                """INSERT INTO agent_runs
+                   (id,workspace_id,tenant_agent_id,agent_snapshot,requested_by_issuer,
+                    requested_by_subject,input_text,request_hash,idempotency_key,trace_id,status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'queued')
+                   RETURNING id,workspace_id,tenant_agent_id,trace_id,status,attempt_count,
+                             cancel_requested_at,finished_at,failure_code,created_at,updated_at""",
+                (
+                    run_id,
+                    workspace_id,
+                    agent_id,
+                    Jsonb(snapshot),
+                    principal.issuer,
+                    principal.subject,
+                    body.input,
+                    fingerprint,
+                    idempotency_key,
+                    trace_id,
+                ),
+            )
+            created = await result.fetchone()
+            await connection.execute(
+                """INSERT INTO run_tasks
+                   (id,workspace_id,run_id,parent_task_id,kind,title,description,status,
+                    action_tool_name,verification_state,idempotency_key,request_hash)
+                   VALUES (%s,%s,%s,NULL,'goal','Run goal',%s,'planned',
+                           NULL,'not_required',%s,%s)""",
+                (
+                    run_id,
+                    workspace_id,
+                    run_id,
+                    body.input[:2000],
+                    f"goal:{run_id}",
+                    fingerprint,
+                ),
+            )
+            await connection.execute(
+                """INSERT INTO agent_run_events
+                   (id,workspace_id,run_id,event_no,event_type,payload)
+                   VALUES (%s,%s,%s,1,'run.queued',%s)""",
+                (
+                    uuid4(),
+                    workspace_id,
+                    run_id,
+                    Jsonb({"request_id": request_id, "agent_kind": "standard"}),
+                ),
+            )
+            await connection.execute(
+                """INSERT INTO job_outbox (id,workspace_id,run_id,topic,payload)
+                   VALUES (%s,%s,%s,'agent.run.queued.v1',%s)""",
+                (
+                    uuid4(),
+                    workspace_id,
+                    run_id,
+                    Jsonb(
+                        {
+                            "run_id": str(run_id),
+                            "workspace_id": str(workspace_id),
+                            "agent_id": str(agent_id),
+                            "trace_id": str(trace_id),
+                            "agent_kind": "standard",
+                        }
+                    ),
+                ),
+            )
+            await self.workspaces.audit(
+                connection, principal, workspace_id, "tenant_agent_run.created", request_id
+            )
+            return self._run(created), True
 
     async def list_instances(
         self, principal: Principal, workspace_id: UUID, limit: int, cursor: UUID | None

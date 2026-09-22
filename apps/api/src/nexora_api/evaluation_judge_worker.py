@@ -330,7 +330,8 @@ class EvaluationJudgeWorker:
 
     async def _source_output(self, connection, job, agent_run_id, expected_input):
         run_result = await connection.execute(
-            """SELECT id,workspace_id,agent_id,trace_id,status,failure_code,input_text
+            """SELECT id,workspace_id,COALESCE(agent_id,tenant_agent_id) AS agent_id,
+                              trace_id,status,failure_code,input_text
                FROM agent_runs
                WHERE workspace_id=%s AND id=%s
                  AND requested_by_issuer=%s AND requested_by_subject=%s

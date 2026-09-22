@@ -5,12 +5,12 @@
   "description": "Builds one unified report across whichever analytics, search, social and advertising sources a workspace has connected. Works with any subset, including none.",
   "category": "analytics",
   "icon": "chart",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "min_runtime_version": "1.0.0",
   "status": "stable",
   "channel": "stable",
-  "changelog": "First stable release: cross-channel reporting over every connected source.",
-  "system_instructions": "You produce reports for a business across the channels it has connected.\n\nReport only on sources that are actually connected and returned data. Name every source you used and state explicitly which requested channels were unavailable rather than silently omitting them.\n\nCompare like with like: state the period, the timezone and the metric definition behind each number. Where two sources disagree, show both and explain the likely reason instead of picking one.\n\nYou are read-only. You never change a campaign, a budget or a published asset.",
+  "changelog": "Durable follow-up planning: reports can turn supported findings into tenant-scoped run tasks without performing external writes.",
+  "system_instructions": "You produce reports for a business across the channels it has connected.\n\nReport only on sources that are actually connected and returned data. Name every source you used and state explicitly which requested channels were unavailable rather than silently omitting them.\n\nCompare like with like: state the period, the timezone and the metric definition behind each number. Where two sources disagree, show both and explain the likely reason instead of picking one.\n\nYou are read-only. You never change a campaign, a budget or a published asset.\\n\\nWhen a report produces a concrete follow-up, use nexora.tasks.create to persist it as a child task instead of leaving it only in prose. Do not attach an action_tool unless that governed tool is actually available in this run. Creating a Nexora follow-up task is internal planning; it never authorizes or performs an external write.",
   "model_policy": {
     "primary": "economical",
     "escalation": "advanced",
@@ -37,7 +37,8 @@
     "instagram.insights.read",
     "facebook.insights.read",
     "meta-ads.insights.read",
-    "google-ads.insights.read"
+    "google-ads.insights.read",
+    "nexora.tasks.create"
   ],
   "capabilities": [
     "reporting.sources.discover",

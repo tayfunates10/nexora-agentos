@@ -30,6 +30,40 @@ class ApprovalStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ToolCallStatus(StrEnum):
+    PLANNED = "planned"
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    DENIED = "denied"
+    CANCELLED = "cancelled"
+
+
+class RunAction(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    run_id: UUID
+    action_name: str
+    side_effect: ToolSideEffect
+    status: ToolCallStatus
+    policy_decision: PolicyDecision
+    attempt_count: int
+    error_code: str | None = None
+    approval_id: UUID | None = None
+    approval_status: ApprovalStatus | None = None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class RunActionPage(BaseModel):
+    items: list[RunAction]
+    next_cursor: UUID | None = None
+
+
 class ToolUpsertInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -162,6 +196,27 @@ async def set_tool_policy(
 ):
     return await repository(request).set_policy(
         principal, workspace_id, tool_name, body, request.state.request_id
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/runs/{run_id}/actions",
+    response_model=RunActionPage,
+)
+async def list_run_actions(
+    workspace_id: UUID,
+    run_id: UUID,
+    principal: Identity,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: UUID | None = None,
+):
+    rows = await repository(request).list_run_actions(
+        principal, workspace_id, run_id, limit + 1, cursor
+    )
+    return RunActionPage(
+        items=rows[:limit],
+        next_cursor=rows[limit - 1].id if len(rows) > limit else None,
     )
 
 

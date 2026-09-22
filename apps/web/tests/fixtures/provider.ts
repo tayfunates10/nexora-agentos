@@ -5,7 +5,8 @@ import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
 import type { AddressInfo } from "node:net";
 import type { Agent, RunEvent, RunResult } from "../../lib/agent-contracts.ts";
 import type { Ingestion, KnowledgeSource } from "../../lib/knowledge-contracts.ts";
-import type { Tool, ToolApproval } from "../../lib/tool-contracts.ts";
+import type { RunAction, Tool, ToolApproval } from "../../lib/tool-contracts.ts";
+import type { RunTask } from "../../lib/task-contracts.ts";
 import type { EvalJudgeRun, EvalRun, EvalSuite } from "../../lib/evaluation-contracts.ts";
 import type { SpendRecord } from "../../lib/spend-contracts.ts";
 import type { IntegrationDefinition, TenantIntegration } from "../../lib/integration-contracts.ts";
@@ -27,6 +28,8 @@ export async function startProvider() {
   }>();
   const runEvents = new Map<string, RunEvent[]>();
   const runResults = new Map<string, RunResult>();
+  const runActions = new Map<string, RunAction[]>();
+  const runTasks = new Map<string, RunTask[]>();
   const runIdempotency = new Map<string, string>();
   const sources = new Map<string, KnowledgeSource & { workspace_id: string }>();
   const ingestions = new Map<string, Ingestion>();
@@ -435,7 +438,7 @@ export async function startProvider() {
       }
 
       const runRoute = url.pathname.match(
-        /^\/api\/v1\/workspaces\/([^/]+)\/runs(?:\/([^/]+))?(\/events|\/result|\/cancel)?$/,
+        /^\/api\/v1\/workspaces\/([^/]+)\/runs(?:\/([^/]+))?(\/events|\/actions|\/tasks|\/result|\/cancel)?$/,
       );
       if (runRoute) {
         const [, workspaceId, runId, resource] = runRoute;
@@ -462,6 +465,12 @@ export async function startProvider() {
             runEvents.set(id, [{
               id: randomUUID(), event_no: 1, event_type: "run.queued",
               payload: { request_id: "fixture-request" }, created_at: now,
+            }]);
+            runTasks.set(id, [{
+              id, workspace_id: workspaceId, run_id: id, parent_task_id: null,
+              kind: "goal", title: "Run goal", description: JSON.parse(body).input,
+              status: "planned", action_tool_name: null, verification_state: "not_required",
+              dependencies: [], evidence: [], created_at: now, updated_at: now, completed_at: null,
             }]);
             runIdempotency.set(scopedKey, id);
             return send(row, 201);
@@ -492,6 +501,12 @@ export async function startProvider() {
         if (resource === "/events") {
           return send({ items: runEvents.get(runId) ?? [], next_cursor: null });
         }
+        if (resource === "/actions") {
+          return send({ items: runActions.get(runId) ?? [], next_cursor: null });
+        }
+        if (resource === "/tasks") {
+          return send({ items: runTasks.get(runId) ?? [], next_cursor: null });
+        }
         if (resource === "/result") {
           // Workspace admin never overrides the original requester on raw output.
           if (!run.requested_by_me) return send({}, 404);
@@ -511,6 +526,12 @@ export async function startProvider() {
             run.cancel_requested_at = now;
             run.finished_at = now;
             run.updated_at = now;
+            const goal = runTasks.get(runId)?.find(task => task.kind === "goal");
+            if (goal) {
+              goal.status = "cancelled";
+              goal.updated_at = now;
+              goal.completed_at = now;
+            }
             const events = runEvents.get(runId) ?? [];
             events.push({
               id: randomUUID(), event_no: events.length + 1, event_type: "run.cancelled",
@@ -642,6 +663,40 @@ export async function startProvider() {
           })),
           next_cursor: null,
         });
+      }
+
+      const standardRun = url.pathname.match(
+        /^\/api\/v1\/workspaces\/([^/]+)\/tenant-agents\/([^/]+)\/runs$/,
+      );
+      if (standardRun) {
+        const [, workspaceId, agentId] = standardRun;
+        const scope = workspaces.get(workspaceId);
+        const agent = tenantAgents.get(agentId);
+        if (!scope || !agent || agent.workspace_id !== workspaceId) return send({}, 404);
+        if (request.method !== "POST") return send({}, 405);
+        if (agent.status !== "active" || !agent.readiness.ready) return send({}, 409);
+        const key = request.headers["idempotency-key"];
+        if (typeof key !== "string" || key.length < 8) return send({}, 400);
+        const scopedKey = workspaceId + ":" + key;
+        const existingId = runIdempotency.get(scopedKey);
+        if (existingId) return send(runs.get(existingId), 200);
+        const input = JSON.parse(body);
+        if (typeof input.input !== "string" || !input.input.trim()) return send({}, 422);
+        const id = randomUUID();
+        const now = new Date().toISOString();
+        const row = {
+          id, workspace_id: workspaceId, agent_id: agent.id, agent_name: agent.display_name,
+          trace_id: randomUUID(), status: "queued", attempt_count: 0, requested_by_me: true,
+          cancel_requested_at: null, finished_at: null, failure_code: null,
+          created_at: now, updated_at: now,
+        };
+        runs.set(id, row);
+        runEvents.set(id, [{
+          id: randomUUID(), event_no: 1, event_type: "run.queued",
+          payload: { request_id: "fixture-request", agent_kind: "standard" }, created_at: now,
+        }]);
+        runIdempotency.set(scopedKey, id);
+        return send(row, 201);
       }
 
       const instances = url.pathname.match(
@@ -780,7 +835,7 @@ export async function startProvider() {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  return { issuer, workspaces, agents, runs, runEvents, runResults, tools, approvals,
+  return { issuer, workspaces, agents, runs, runEvents, runResults, runActions, runTasks, tools, approvals,
     integrations, connectors, catalogAgents, tenantAgents, agentHistory,
     sources, ingestions,
     evalSuites, evalRuns, evalJudgeRuns, spendRecords, budgets,

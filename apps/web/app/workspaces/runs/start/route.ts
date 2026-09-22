@@ -33,10 +33,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.redirect(new URL(target + "?error=invalid", config.origin), 303);
     }
 
-    const run = await api(session, `/api/v1/workspaces/${workspaceId}/runs`, runSchema, {
+    const standard = form.get("kind") === "standard";
+    const endpoint = standard
+      ? `/api/v1/workspaces/${workspaceId}/tenant-agents/${parsed.data.agent_id}/runs`
+      : `/api/v1/workspaces/${workspaceId}/runs`;
+    const body = standard ? { input: parsed.data.input } : parsed.data;
+    const run = await api(session, endpoint, runSchema, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey.data },
-      body: JSON.stringify(parsed.data),
+      body: JSON.stringify(body),
     });
     return NextResponse.redirect(
       new URL(`/workspaces/${workspaceId}/runs/${run.id}`, config.origin), 303,

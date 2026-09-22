@@ -59,6 +59,9 @@ RUNTIME_TABLES = frozenset(
         "tenant_agents",
         "tenant_agent_version_events",
         "agent_integration_bindings",
+        "run_tasks",
+        "run_task_dependencies",
+        "run_task_evidence",
     }
 )
 
@@ -104,6 +107,8 @@ API_WRITES: Mapping[str, frozenset[str]] = {
     "tenant_agents": frozenset({"INSERT", "UPDATE", "DELETE"}),
     "tenant_agent_version_events": frozenset({"INSERT"}),
     "agent_integration_bindings": frozenset({"INSERT", "UPDATE", "DELETE"}),
+    # The API creates only the immutable root goal when a standard run is queued.
+    "run_tasks": frozenset({"INSERT"}),
 }
 
 WORKER_WRITES: Mapping[str, frozenset[str]] = {
@@ -132,6 +137,10 @@ WORKER_WRITES: Mapping[str, frozenset[str]] = {
     # remain read-only to the worker identity.
     "tenant_agents": frozenset({"UPDATE"}),
     "tenant_agent_version_events": frozenset({"INSERT"}),
+    # Follow-up planning and verification are worker-owned task-runtime mutations.
+    "run_tasks": frozenset({"INSERT", "UPDATE"}),
+    "run_task_dependencies": frozenset({"INSERT"}),
+    "run_task_evidence": frozenset({"INSERT"}),
 }
 
 WRITE_PRIVILEGES = frozenset({"INSERT", "UPDATE", "DELETE"})

@@ -16,6 +16,12 @@ import { currentSession } from "../../../../../lib/server/session";
 import { consoleChrome } from "../../../../../lib/server/chrome";
 import { workspaceSchema } from "../../../../../lib/workspace-contracts";
 import {
+  approvalStatusKey, runActionPageSchema, runActionStatusKey, sideEffectKey,
+} from "../../../../../lib/tool-contracts";
+import {
+  runTaskPageSchema, runTaskStatusKey, verificationStateKey,
+} from "../../../../../lib/task-contracts";
+import {
   formatDuration, formatNumber, formatTimestamp,
 } from "../../../../../lib/i18n/format.ts";
 import { ConsoleBreadcrumb, ConsoleShell } from "../../../../../components/shell/ConsoleShell.tsx";
@@ -63,6 +69,13 @@ export default async function RunDetail({ params, searchParams }: {
     const { ui } = chrome;
     const run = await api(session, base, runSchema);
     const events = await api(session, base + "/events?limit=100", runEventPageSchema);
+    const actions = await api(session, base + "/actions?limit=100", runActionPageSchema);
+    const tasks = await api(session, base + "/tasks?limit=100", runTaskPageSchema);
+    const currentTask = tasks.items.find(task =>
+      task.kind === "follow_up" && ["planned", "running", "blocked"].includes(task.status)
+    ) ?? tasks.items.find(task =>
+      task.kind === "goal" && ["planned", "running", "blocked"].includes(task.status)
+    );
     const terminal = TERMINAL_STATUSES.includes(run.status);
 
     let result: ResultState = { kind: "pending" };
@@ -147,6 +160,111 @@ export default async function RunDetail({ params, searchParams }: {
         {!terminal && run.cancel_requested_at !== null
           && <Hint>{ui.t("runDetail.cancelPending")}</Hint>}
       </Panel>
+
+      <SectionHead title={ui.t("runDetail.plan.title")}/>
+      {tasks.items.length === 0
+        ? <EmptyState title={ui.t("runDetail.plan.emptyTitle")}>
+          <p>{ui.t("runDetail.plan.emptyBody")}</p>
+        </EmptyState>
+        : <>
+          {currentTask && <Panel label={ui.t("runDetail.plan.current")}>
+            <DetailList>
+              <Detail label={ui.t("runDetail.plan.task")}>{currentTask.title}</Detail>
+              <Detail label={ui.t("runDetail.plan.status")}>
+                {ui.t(runTaskStatusKey(currentTask.status))}
+              </Detail>
+              <Detail label={ui.t("runDetail.plan.verification")}>
+                {ui.t(verificationStateKey(currentTask.verification_state))}
+              </Detail>
+              <Detail label={ui.t("runDetail.plan.action")}>
+                {currentTask.action_tool_name
+                  ? <code>{currentTask.action_tool_name}</code>
+                  : ui.t("common.none")}
+              </Detail>
+            </DetailList>
+            {currentTask.description && <p className="notice">{currentTask.description}</p>}
+          </Panel>}
+          <div className="table-scroll">
+            <table className="table">
+              <thead><tr>
+                <th scope="col">{ui.t("runDetail.plan.task")}</th>
+                <th scope="col">{ui.t("runDetail.plan.status")}</th>
+                <th scope="col">{ui.t("runDetail.plan.action")}</th>
+                <th scope="col">{ui.t("runDetail.plan.dependencies")}</th>
+                <th scope="col">{ui.t("runDetail.plan.verification")}</th>
+                <th scope="col">{ui.t("runDetail.plan.evidence")}</th>
+              </tr></thead>
+              <tbody>{tasks.items.map(task => {
+                const evidence = task.evidence[task.evidence.length - 1];
+                return <tr key={task.id}>
+                  <td data-label={ui.t("runDetail.plan.task")}>
+                    <strong>{task.title}</strong>
+                    <p className="field-help">{ui.t(task.kind === "goal"
+                      ? "runDetail.plan.kind.goal" : "runDetail.plan.kind.follow_up")}</p>
+                  </td>
+                  <td data-label={ui.t("runDetail.plan.status")}>
+                    {ui.t(runTaskStatusKey(task.status))}
+                  </td>
+                  <td data-label={ui.t("runDetail.plan.action")}>
+                    {task.action_tool_name ? <code>{task.action_tool_name}</code> : ui.t("common.none")}
+                  </td>
+                  <td data-label={ui.t("runDetail.plan.dependencies")}>
+                    {formatNumber(task.dependencies.length, ui.locale)}
+                  </td>
+                  <td data-label={ui.t("runDetail.plan.verification")}>
+                    {ui.t(verificationStateKey(task.verification_state))}
+                  </td>
+                  <td data-label={ui.t("runDetail.plan.evidence")}>
+                    {evidence
+                      ? <>
+                        <span>{evidence.summary}</span>
+                        <p className="field-help"><code>{evidence.verification_tool_name}</code></p>
+                      </>
+                      : ui.t("common.empty")}
+                  </td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>
+        </>}
+
+      <SectionHead title={ui.t("runDetail.actions.title")}/>
+      {actions.items.length === 0
+        ? <EmptyState title={ui.t("runDetail.actions.emptyTitle")}>
+          <p>{ui.t("runDetail.actions.emptyBody")}</p>
+        </EmptyState>
+        : <div className="table-scroll">
+          <table className="table">
+            <thead><tr>
+              <th scope="col">{ui.t("runDetail.actions.name")}</th>
+              <th scope="col">{ui.t("runDetail.actions.status")}</th>
+              <th scope="col">{ui.t("runDetail.actions.effect")}</th>
+              <th scope="col">{ui.t("runDetail.actions.attempts")}</th>
+              <th scope="col">{ui.t("runDetail.actions.approval")}</th>
+              <th scope="col">{ui.t("runDetail.actions.error")}</th>
+            </tr></thead>
+            <tbody>{actions.items.map(action => <tr key={action.id}>
+              <td data-label={ui.t("runDetail.actions.name")}><code>{action.action_name}</code></td>
+              <td data-label={ui.t("runDetail.actions.status")}>
+                {ui.t(runActionStatusKey(action.status))}
+              </td>
+              <td data-label={ui.t("runDetail.actions.effect")}>
+                {ui.t(sideEffectKey(action.side_effect))}
+              </td>
+              <td data-label={ui.t("runDetail.actions.attempts")}>
+                {formatNumber(action.attempt_count, ui.locale)}
+              </td>
+              <td data-label={ui.t("runDetail.actions.approval")}>
+                {action.approval_status
+                  ? ui.t(approvalStatusKey(action.approval_status))
+                  : ui.t("common.empty")}
+              </td>
+              <td data-label={ui.t("runDetail.actions.error")}>
+                {action.error_code ? <code>{action.error_code}</code> : ui.t("common.empty")}
+              </td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
 
       <SectionHead id="run-result-title" title={ui.t("runDetail.resultTitle")}/>
       {result.kind !== "result" && <EmptyState title={ui.t(

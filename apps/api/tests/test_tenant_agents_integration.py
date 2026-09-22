@@ -1,5 +1,8 @@
 import asyncio
+import json
 import os
+from types import SimpleNamespace
+from uuid import UUID
 
 import psycopg
 import pytest
@@ -15,8 +18,11 @@ from catalog_support import (
 )
 from conftest import PLATFORM_ADMIN
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
+from nexora_api.connector_mcp import ConnectorMcpAdapter
 from nexora_api.main import create_app
+from nexora_api.mcp_gateway import McpAdapterError
 from nexora_api.migrate import migrate
 
 pytestmark = [
@@ -45,16 +51,16 @@ def admin(client, keys):
 def standard_agent(client, admin, slug, version="1.0.0", **manifest):
     """A catalog agent whose required integration is one a test can actually connect."""
     create_catalog_agent(client, admin, "social-media", slug)
+    manifest.setdefault("required_integrations", ["mikro"])
+    manifest.setdefault("optional_integrations", ["erp"])
+    manifest.setdefault("required_tools", [])
+    manifest.setdefault("optional_tools", [])
     return publish_version(
         client,
         admin,
         "social-media",
         slug,
         version,
-        required_integrations=["mikro"],
-        optional_integrations=["erp"],
-        required_tools=[],
-        optional_tools=[],
         **manifest,
     )
 
@@ -104,6 +110,290 @@ def test_an_agent_without_its_required_connection_never_becomes_active(client, a
     assert bound.json()["readiness"]["ready"] is True
     assert bound.json()["status"] == "active"
     assert SECRET not in bound.text
+
+
+def test_standard_agent_runs_directly_with_an_immutable_execution_snapshot(
+    client, admin, keys, platform_settings
+):
+    owner = headers(keys, "owner-standard-run")
+    space = workspace(client, owner, "Standard run")
+    slug = unique_slug("standard-run-agent")
+    standard_agent(
+        client,
+        admin,
+        slug,
+        "1.0.0",
+        system_instructions="Version one instructions.",
+        model_policy={"primary": "balanced-v1"},
+        required_tools=["mikro.stock.read"],
+    )
+    integration = connect_api_key(client, owner, space, "mikro", SECRET).json()
+    instance = install(
+        client,
+        owner,
+        space,
+        slug,
+        bindings={"mikro": integration["id"]},
+    ).json()
+
+    run_headers = {**owner, "Idempotency-Key": "standard-run-0001"}
+    created = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Inspect the current account and summarize what should be done."},
+        headers=run_headers,
+    )
+    assert created.status_code == 201, created.text
+    run = created.json()
+    assert run["agent_id"] == instance["id"]
+    assert run["status"] == "queued"
+
+    replay = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Inspect the current account and summarize what should be done."},
+        headers=run_headers,
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["id"] == run["id"]
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        stored = connection.execute(
+            """SELECT agent_id,tenant_agent_id,agent_snapshot
+               FROM agent_runs WHERE id=%s""",
+            (run["id"],),
+        ).fetchone()
+        assert stored[0] is None
+        assert str(stored[1]) == instance["id"]
+        snapshot = stored[2]
+        assert snapshot["version"] == "1.0.0"
+        assert snapshot["instructions"] == "Version one instructions."
+        assert snapshot["model_profile"] == "balanced-v1"
+        assert snapshot["bindings"]["mikro"]["tenant_integration_id"] == integration["id"]
+        assert snapshot["allowed_tools"] == ["mikro.stock.read"]
+        internal_name = snapshot["tool_aliases"]["mikro.stock.read"]
+        assert internal_name.startswith("connector.")
+        connector_tool = snapshot["connector_tools"]["mikro.stock.read"]
+        assert connector_tool["binding_key"] == "mikro"
+        assert connector_tool["tenant_integration_id"] == integration["id"]
+        assert connector_tool["definition_id"] == "mikro"
+        assert connector_tool["capability"] == "stock.read"
+        assert len(connector_tool["config_fingerprint"]) == 64
+        assert connector_tool["credential_reference"] is not None
+        assert SECRET not in json.dumps(snapshot)
+
+        governed = connection.execute(
+            """SELECT d.server_key,d.remote_name,d.side_effect,d.enabled,p.decision
+               FROM tool_definitions d
+               LEFT JOIN tool_policies p
+                 ON p.workspace_id=d.workspace_id AND p.tool_id=d.id
+               WHERE d.workspace_id=%s AND d.name=%s""",
+            (space, internal_name),
+        ).fetchone()
+        assert governed == (
+            "connector",
+            f"{integration['id']}:stock.read",
+            "read",
+            True,
+            "allow",
+        )
+
+        payload = connection.execute(
+            "SELECT payload FROM job_outbox WHERE run_id=%s", (run["id"],)
+        ).fetchone()[0]
+        assert payload["agent_kind"] == "standard"
+        assert payload["agent_id"] == instance["id"]
+
+    publish_version(
+        client,
+        admin,
+        "social-media",
+        slug,
+        "1.1.0",
+        required_integrations=["mikro"],
+        optional_integrations=["erp"],
+        required_tools=[],
+        optional_tools=[],
+        system_instructions="Version two instructions.",
+        model_policy={"primary": "advanced-v2"},
+    )
+    moved = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/update",
+        json={"version": "1.1.0"},
+        headers=owner,
+    )
+    assert moved.status_code == 200, moved.text
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        snapshot = connection.execute(
+            "SELECT agent_snapshot FROM agent_runs WHERE id=%s", (run["id"],)
+        ).fetchone()[0]
+        assert snapshot["version"] == "1.0.0"
+        assert snapshot["instructions"] == "Version one instructions."
+        assert snapshot["model_profile"] == "balanced-v1"
+
+
+def test_rebinding_after_queue_fails_closed_before_connector_egress(
+    client, admin, keys, platform_settings
+):
+    owner = headers(keys, "owner-stale-binding")
+    space = workspace(client, owner, "Stale binding")
+    slug = unique_slug("stale-binding-agent")
+    standard_agent(
+        client,
+        admin,
+        slug,
+        required_tools=["mikro.stock.read"],
+    )
+    first = connect_api_key(
+        client,
+        owner,
+        space,
+        "mikro",
+        "stale-binding-key-0001",
+        display_name="Original account",
+        account_identifier="original",
+    ).json()
+    second = connect_api_key(
+        client,
+        owner,
+        space,
+        "mikro",
+        "stale-binding-key-0002",
+        display_name="Replacement account",
+        account_identifier="replacement",
+    ).json()
+    instance = install(
+        client,
+        owner,
+        space,
+        slug,
+        bindings={"mikro": first["id"]},
+    ).json()
+    created = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Read the original account."},
+        headers={**owner, "Idempotency-Key": "stale-binding-run-0001"},
+    )
+    assert created.status_code == 201, created.text
+
+    rebound = client.put(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/bindings/mikro",
+        json={"tenant_integration_id": second["id"]},
+        headers=owner,
+    )
+    assert rebound.status_code == 200, rebound.text
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        snapshot = connection.execute(
+            "SELECT agent_snapshot FROM agent_runs WHERE id=%s", (created.json()["id"],)
+        ).fetchone()[0]
+
+    context = SimpleNamespace(
+        workspace_id=UUID(space),
+        agent_id=UUID(instance["id"]),
+        agent_kind="standard",
+        agent_snapshot=snapshot,
+    )
+    adapter = ConnectorMcpAdapter(platform_settings)
+
+    async def exercise():
+        await adapter.call_tool_for_context(
+            context,
+            f"{first['id']}:stock.read",
+            {},
+            5.0,
+        )
+
+    with pytest.raises(McpAdapterError) as raised:
+        asyncio.run(exercise())
+    assert raised.value.code == "connector_binding_changed"
+    assert raised.value.retryable is False
+
+
+def test_standard_agent_browser_tools_freeze_origin_and_gate_ui_mutation(
+    client, admin, keys, platform_settings
+):
+    browser_settings = platform_settings.model_copy(
+        update={
+            "browser_runtime_url": "http://browser.internal:8080",
+            "browser_runtime_token": SecretStr("x" * 32),
+        }
+    )
+    client.app.state.tenant_agents.settings = browser_settings
+
+    owner = headers(keys, "owner-browser-standard-run")
+    space = workspace(client, owner, "Browser standard run")
+    slug = unique_slug("browser-standard-agent")
+    standard_agent(
+        client,
+        admin,
+        slug,
+        required_integrations=[],
+        optional_integrations=[],
+        required_tools=["browser.page.inspect"],
+        optional_tools=["browser.page.action"],
+        settings_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"site_url": {"type": "string", "maxLength": 200}},
+            "required": ["site_url"],
+        },
+    )
+    installed = install(client, owner, space, slug)
+    assert installed.status_code == 201, installed.text
+    instance = installed.json()
+    configured = client.patch(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}",
+        json={"settings": {"site_url": "https://example.com/start"}},
+        headers=owner,
+    )
+    assert configured.status_code == 200, configured.text
+
+    created = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Inspect the configured site and prepare a bounded change."},
+        headers={**owner, "Idempotency-Key": "browser-standard-run-0001"},
+    )
+    assert created.status_code == 201, created.text
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        snapshot = connection.execute(
+            "SELECT agent_snapshot FROM agent_runs WHERE id=%s", (created.json()["id"],)
+        ).fetchone()[0]
+        assert snapshot["browser"] == {"allowed_origin": "https://example.com"}
+        assert set(snapshot["allowed_tools"]) == {
+            "browser.page.inspect",
+            "browser.page.action",
+        }
+        inspect_name = snapshot["tool_aliases"]["browser.page.inspect"]
+        action_name = snapshot["tool_aliases"]["browser.page.action"]
+        rows = connection.execute(
+            """SELECT d.name,d.remote_name,d.side_effect,p.decision
+               FROM tool_definitions d
+               JOIN tool_policies p ON p.workspace_id=d.workspace_id AND p.tool_id=d.id
+               WHERE d.workspace_id=%s AND d.name=ANY(%s::text[])
+               ORDER BY d.remote_name""",
+            (space, [inspect_name, action_name]),
+        ).fetchall()
+        assert rows == [
+            (action_name, "page.action", "write", "require_approval"),
+            (inspect_name, "page.inspect", "read", "allow"),
+        ]
+
+
+def test_paused_standard_agent_cannot_queue_a_run(client, admin, keys):
+    owner = headers(keys, "owner-paused-run")
+    space = workspace(client, owner, "Paused run")
+    slug = unique_slug("paused-run-agent")
+    standard_agent(client, admin, slug)
+    instance = install(client, owner, space, slug).json()
+    assert instance["status"] == "paused"
+
+    response = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Try to run before the required account is connected."},
+        headers={**owner, "Idempotency-Key": "paused-standard-run-0001"},
+    )
+    assert response.status_code == 409
 
 
 def test_installing_with_bindings_activates_immediately(client, admin, keys):

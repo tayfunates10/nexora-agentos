@@ -27,6 +27,7 @@ SCOPE = r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$"
 AuthType = Literal["api_key", "oauth2", "basic", "bearer_token", "webhook"]
 ConnectorStatus = Literal["available", "beta", "deprecated", "disabled"]
 EndpointSideEffect = Literal["read", "write", "destructive", "external_communication"]
+EndpointRetry = Literal["safe", "idempotent", "never"]
 
 # Which fields each authentication style expects a tenant to provide. A definition that
 # contradicts its own auth type is rejected at publish time rather than at connect time.
@@ -111,6 +112,7 @@ class ConnectorEndpoint(BaseModel):
     path: str = Field(min_length=1, max_length=300)
     description: str = Field(default="Connector capability", min_length=1, max_length=1000)
     side_effect: EndpointSideEffect = "read"
+    retry: EndpointRetry = "safe"
     input_schema: dict[str, object] = Field(
         default_factory=lambda: {
             "type": "object",
@@ -130,6 +132,14 @@ class ConnectorEndpoint(BaseModel):
         placeholders = re.findall(r"{([^{}]+)}", self.path)
         if any(not re.fullmatch(FIELD_KEY, item) for item in placeholders):
             raise ValueError("Endpoint path placeholders must be connector field identifiers")
+        if self.side_effect == "read" and self.retry != "safe":
+            raise ValueError("Read connector endpoints must use safe retry semantics")
+        if self.side_effect != "read" and self.retry == "safe":
+            raise ValueError("Side-effecting connector endpoints cannot use safe retries")
+        if self.retry == "idempotent":
+            required = self.input_schema.get("required", [])
+            if "idempotency_key" not in required:
+                raise ValueError("Idempotent connector endpoints require idempotency_key")
         try:
             validate_registration_schema(self.input_schema, side_effect=self.side_effect)
             if self.output_schema is not None:

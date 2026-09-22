@@ -92,7 +92,8 @@
           "idempotency_key"
         ],
         "additionalProperties": false
-      }
+      },
+      "retry": "never"
     }
   ],
   "credential_fields": []

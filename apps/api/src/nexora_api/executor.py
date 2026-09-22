@@ -87,11 +87,27 @@ class DurableAgentExecutor:
             issuer=run["requested_by_issuer"], subject=run["requested_by_subject"]
         )
         tools = await self.gateway.repository.list_tools(principal, context.workspace_id, 101, None)
+        aliases = context.tool_aliases or {}
+        public_by_internal = {internal: public for public, internal in aliases.items()}
+
+        def executable(tool):
+            public_name = public_by_internal.get(tool.name, tool.name)
+            # If this public standard-agent tool was snapshotted to an immutable internal
+            # contract, the workspace-global connector tool with the same public name is
+            # deliberately hidden from this run.
+            if public_name in aliases and aliases[public_name] != tool.name:
+                return False
+            if context.allowed_tools is not None and public_name not in context.allowed_tools:
+                return False
+            return (
+                public_name in profile.allowed_tools
+                or tool.server_key in profile.allowed_server_keys
+            )
+
         advertised = tuple(
-            ProviderTool(t.name, t.description, t.input_schema)
+            ProviderTool(public_by_internal.get(t.name, t.name), t.description, t.input_schema)
             for t in tools
-            if t.enabled
-            and (t.name in profile.allowed_tools or t.server_key in profile.allowed_server_keys)
+            if t.enabled and executable(t)
         )
         if len(tools) > 100 or len(advertised) > 32:
             raise TerminalExecutionError("tool_limit_exceeded")

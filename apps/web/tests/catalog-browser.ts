@@ -102,7 +102,7 @@ export async function checkCatalogAndIntegrations(
   // Installed, but deliberately not running: its connection has not been chosen yet.
   await expect(page.getByRole("status")).toContainText(t("catalog.added"));
   await expect(page.getByText(t("catalog.instanceStatus.paused"))).toBeVisible();
-  await expect(page.getByText(t("catalog.notReady", { count: "1" }))).toBeVisible();
+  await expect(page.getByText(t("catalog.notReady", { count: "1" })).first()).toBeVisible();
 
   const agent = [...provider.tenantAgents.values()][0];
   expect(agent.readiness.ready).toBe(false);
@@ -110,6 +110,15 @@ export async function checkCatalogAndIntegrations(
   await expect(page.getByText(t("catalog.ready"))).toBeVisible();
   await expect(page.getByText(t("catalog.instanceStatus.active"))).toBeVisible();
   expect([...provider.tenantAgents.values()][0].bindings[0].binding_key).toBe("mikro");
+
+  // ------------------------------------------- running without a custom-agent fork
+  await page.getByLabel(t("agents.taskLabel"))
+    .fill("Inspect stock and report the current state.");
+  await page.getByRole("button", { name: t("agents.startRun") }).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]+$/);
+  const standardRun = [...provider.runs.values()].at(-1);
+  expect(standardRun?.agent_id).toBe(agent.id);
+  await page.goto(`${detailUrl}/catalog/${agent.id}`);
 
   // ------------------------------------------------ updating and rolling back
   await settleReveals(page);
@@ -151,7 +160,7 @@ export async function checkCatalogAndIntegrations(
   await expect(page.getByText(t("integrations.status.disabled"))).toBeVisible();
   // An agent is never left claiming it can run against a switched-off connection.
   await page.goto(`${detailUrl}/catalog/${instance.id}`);
-  await expect(page.getByText(t("catalog.notReady", { count: "1" }))).toBeVisible();
+  await expect(page.getByText(t("catalog.notReady", { count: "1" })).first()).toBeVisible();
   await expect(page.getByText(t("catalog.instanceStatus.paused"))).toBeVisible();
 
   await page.goto(detailUrl + "/integrations");

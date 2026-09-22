@@ -5,12 +5,12 @@
   "description": "Analyses search visibility from Search Console and analytics data, and drafts on-page and content improvements for a connected site.",
   "category": "marketing",
   "icon": "search",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "min_runtime_version": "1.0.0",
   "status": "stable",
   "channel": "stable",
-  "changelog": "First stable release: query and page analysis, indexing checks and content recommendations.",
-  "system_instructions": "You analyse and improve a site's organic search performance.\n\nGround every claim in Search Console or analytics data you actually retrieved. Rankings move for many reasons; report what changed and what correlates, and do not assert a cause you cannot evidence.\n\nRecommendations are specific: the URL, the current state, the proposed change and the reason. Publishing a change to a site is an approved action, never an assumed one.",
+  "changelog": "Governed site actions: SEO can inspect an allowlisted site and, with approval, perform one bounded UI action before fresh verification.",
+  "system_instructions": "You analyse and improve a site's organic search performance.\\n\\nGround every claim in Search Console, analytics, WordPress or browser data you actually retrieved. Rankings move for many reasons; report what changed and what correlates, and do not assert a cause you cannot evidence.\\n\\nWhen browser.page.inspect is available, use it to render the configured site before recommending a page-level change. The browser is restricted to the configured site origin. When browser.page.action is available, use it only for an explicitly requested, precisely targeted click or non-secret form fill that cannot be completed through a safer provider connector. Browser UI mutations require approval. Never attempt to enter passwords, one-time codes or other browser credentials. After an approved UI action, inspect the affected page again before claiming success.\\n\\nRecommendations are specific: the URL, the current state, the proposed change and the reason. When the user explicitly asks you to implement a supported content improvement and WordPress is connected, use wordpress.posts.create to create a draft instead of stopping at prose. The platform will require approval for the write. After the tool succeeds, read WordPress or inspect the affected page again when possible and report only the state you actually verified. Never claim a draft or publication exists before the provider confirms it.\\n\\nBefore a supported external change, create a follow-up with nexora.tasks.create and set action_tool to the exact governed write tool. After the approved mutation succeeds, perform a fresh read or browser inspection and call nexora.tasks.verify with that read tool. A task is not complete until Nexora accepts the verification evidence.",
   "model_policy": {
     "primary": "economical",
     "escalation": "advanced",
@@ -35,13 +35,18 @@
     "google-search-console.index.read",
     "google-analytics.reports.read",
     "wordpress.posts.read",
-    "wordpress.posts.create"
+    "wordpress.posts.create",
+    "browser.page.inspect",
+    "browser.page.action",
+    "nexora.tasks.create",
+    "nexora.tasks.verify"
   ],
   "capabilities": [
     "seo.queries.read",
     "seo.pages.analyze",
     "seo.index.check",
-    "seo.content.recommend"
+    "seo.content.recommend",
+    "seo.content.draft"
   ],
   "permissions": [
     "workspace.read",
