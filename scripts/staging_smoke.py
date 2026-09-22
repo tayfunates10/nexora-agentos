@@ -85,16 +85,42 @@ def _uuid(name: str) -> str:
     return raw
 
 
+def _optional_tool(name: str) -> str | None:
+    value = os.getenv(name, "").strip() or None
+    if value and not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", value):
+        raise SmokeError(f"{name} is not a valid tool name")
+    return value
+
+
+def _tool_names(name: str) -> tuple[str, ...]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return ()
+    values = tuple(part.strip() for part in raw.split(",") if part.strip())
+    if len(values) > 20 or not values:
+        raise SmokeError(f"{name} must contain between 1 and 20 tool names")
+    for value in values:
+        if not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", value):
+            raise SmokeError(f"{name} contains an invalid tool name")
+    return values
+
+
 @dataclass(frozen=True)
 class Config:
     api_url: str
     access_token: str
     workspace_id: str
     agent_id: str
+    agent_kind: str
     prompt: str
     expected_text: str | None
     expected_source_key: str | None
     approval_tool: str | None
+    expected_tools: tuple[str, ...]
+    require_task_graph: bool
+    require_verified_task: bool
+    expected_verified_action_tool: str | None
+    forbid_external_mutations: bool
     timeout_seconds: float
     poll_seconds: float
     require_retrieval: bool
@@ -104,9 +130,13 @@ class Config:
 
     @classmethod
     def from_env(cls) -> "Config":
-        approval_tool = os.getenv("NEXORA_STAGING_APPROVAL_TOOL", "").strip() or None
-        if approval_tool and not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", approval_tool):
-            raise SmokeError("NEXORA_STAGING_APPROVAL_TOOL is not a valid tool name")
+        approval_tool = _optional_tool("NEXORA_STAGING_APPROVAL_TOOL")
+        agent_kind = os.getenv("NEXORA_STAGING_AGENT_KIND", "custom").strip().lower()
+        if agent_kind not in {"custom", "standard"}:
+            raise SmokeError("NEXORA_STAGING_AGENT_KIND must be custom or standard")
+        expected_verified_action_tool = _optional_tool(
+            "NEXORA_STAGING_EXPECT_VERIFIED_ACTION_TOOL"
+        )
         require_observability = _env_bool("NEXORA_STAGING_REQUIRE_OBSERVABILITY", False)
         worker_admin_url = _base_url(
             "NEXORA_STAGING_WORKER_ADMIN_URL", required=require_observability
@@ -127,6 +157,7 @@ class Config:
             access_token=_required("NEXORA_STAGING_ACCESS_TOKEN"),
             workspace_id=_uuid("NEXORA_STAGING_WORKSPACE_ID"),
             agent_id=_uuid("NEXORA_STAGING_AGENT_ID"),
+            agent_kind=agent_kind,
             prompt=prompt,
             expected_text=os.getenv("NEXORA_STAGING_EXPECT_TEXT", "").strip() or None,
             expected_source_key=os.getenv(
@@ -134,6 +165,13 @@ class Config:
             ).strip()
             or None,
             approval_tool=approval_tool,
+            expected_tools=_tool_names("NEXORA_STAGING_EXPECT_TOOLS"),
+            require_task_graph=_env_bool("NEXORA_STAGING_REQUIRE_TASK_GRAPH", False),
+            require_verified_task=_env_bool("NEXORA_STAGING_REQUIRE_VERIFIED_TASK", False),
+            expected_verified_action_tool=expected_verified_action_tool,
+            forbid_external_mutations=_env_bool(
+                "NEXORA_STAGING_FORBID_EXTERNAL_MUTATIONS", False
+            ),
             timeout_seconds=_bounded_float(
                 "NEXORA_STAGING_TIMEOUT_SECONDS", 180.0, 10.0, 600.0
             ),
@@ -299,6 +337,99 @@ def _list_events(api: Client, workspace_id: str, run_id: str) -> list[dict[str, 
     raise SmokeError("run event pagination exceeded safety bound")
 
 
+def _list_run_actions(api: Client, workspace_id: str, run_id: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    cursor: str | None = None
+    for _ in range(20):
+        query = "?limit=100" + (f"&cursor={cursor}" if cursor else "")
+        _, page = api.request_json(
+            "GET", f"/api/v1/workspaces/{workspace_id}/runs/{run_id}/actions{query}"
+        )
+        items.extend(page.get("items", []))
+        cursor = page.get("next_cursor")
+        if not cursor:
+            return items
+    raise SmokeError("run action pagination exceeded safety bound")
+
+
+def _list_run_tasks(api: Client, workspace_id: str, run_id: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    cursor: str | None = None
+    for _ in range(20):
+        query = "?limit=100" + (f"&cursor={cursor}" if cursor else "")
+        _, page = api.request_json(
+            "GET", f"/api/v1/workspaces/{workspace_id}/runs/{run_id}/tasks{query}"
+        )
+        items.extend(page.get("items", []))
+        cursor = page.get("next_cursor")
+        if not cursor:
+            return items
+    raise SmokeError("run task pagination exceeded safety bound")
+
+
+def validate_release_evidence(
+    actions: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    *,
+    expected_tools: tuple[str, ...],
+    require_task_graph: bool,
+    require_verified_task: bool,
+    expected_verified_action_tool: str | None,
+    forbid_external_mutations: bool,
+) -> dict[str, int]:
+    succeeded_tools = {
+        str(action.get("action_name"))
+        for action in actions
+        if action.get("status") == "succeeded"
+    }
+    missing_tools = sorted(set(expected_tools) - succeeded_tools)
+    if missing_tools:
+        raise SmokeError(
+            "expected tools did not complete successfully: " + ", ".join(missing_tools)
+        )
+
+    if forbid_external_mutations:
+        unsafe = [
+            str(action.get("action_name"))
+            for action in actions
+            if action.get("status") == "succeeded"
+            and action.get("side_effect") != "read"
+            and not str(action.get("action_name", "")).startswith("nexora.tasks.")
+        ]
+        if unsafe:
+            raise SmokeError(
+                "read-only release scenario performed external mutations: "
+                + ", ".join(sorted(unsafe))
+            )
+
+    follow_ups = [task for task in tasks if task.get("kind") == "follow_up"]
+    if require_task_graph and not follow_ups:
+        raise SmokeError("release scenario persisted no follow-up task")
+
+    verified = [
+        task
+        for task in follow_ups
+        if task.get("status") == "succeeded"
+        and task.get("verification_state") == "verified"
+        and any(evidence.get("satisfied") is True for evidence in task.get("evidence", []))
+    ]
+    if expected_verified_action_tool:
+        verified = [
+            task
+            for task in verified
+            if task.get("action_tool_name") == expected_verified_action_tool
+        ]
+    if require_verified_task and not verified:
+        raise SmokeError("release scenario persisted no verified completed follow-up task")
+
+    return {
+        "action_count": len(actions),
+        "task_count": len(tasks),
+        "follow_up_count": len(follow_ups),
+        "verified_task_count": len(verified),
+    }
+
+
 def _find_pending_approval(
     api: Client, workspace_id: str, run_id: str, approval_tool: str
 ) -> dict[str, Any] | None:
@@ -386,12 +517,16 @@ def run(config: Config) -> dict[str, Any]:
     if workspace.get("id") != config.workspace_id:
         raise SmokeError("staging workspace identity mismatch")
 
-    _, agent = api.request_json(
-        "GET",
-        f"/api/v1/workspaces/{config.workspace_id}/agents/{config.agent_id}",
+    agent_path = (
+        f"/api/v1/workspaces/{config.workspace_id}/tenant-agents/{config.agent_id}"
+        if config.agent_kind == "standard"
+        else f"/api/v1/workspaces/{config.workspace_id}/agents/{config.agent_id}"
     )
+    _, agent = api.request_json("GET", agent_path)
     if agent.get("id") != config.agent_id:
         raise SmokeError("staging agent identity mismatch")
+    if config.agent_kind == "standard" and not agent.get("readiness", {}).get("ready"):
+        raise SmokeError("standard staging agent is not ready")
 
     if config.expected_source_key:
         sources = _list_sources(api, config.workspace_id)
@@ -401,10 +536,18 @@ def run(config: Config) -> dict[str, Any]:
     worker, metrics_before = _worker_metrics(config)
 
     idempotency_key = "staging-" + uuid4().hex
-    body = {"agent_id": config.agent_id, "input": config.prompt}
+    if config.agent_kind == "standard":
+        run_path = (
+            f"/api/v1/workspaces/{config.workspace_id}/tenant-agents/"
+            f"{config.agent_id}/runs"
+        )
+        body = {"input": config.prompt}
+    else:
+        run_path = f"/api/v1/workspaces/{config.workspace_id}/runs"
+        body = {"agent_id": config.agent_id, "input": config.prompt}
     status, created = api.request_json(
         "POST",
-        f"/api/v1/workspaces/{config.workspace_id}/runs",
+        run_path,
         body=body,
         headers={"Idempotency-Key": idempotency_key},
         expected=(201,),
@@ -421,7 +564,7 @@ def run(config: Config) -> dict[str, Any]:
 
     replay_status, replay = api.request_json(
         "POST",
-        f"/api/v1/workspaces/{config.workspace_id}/runs",
+        run_path,
         body=body,
         headers={"Idempotency-Key": idempotency_key},
         expected=(200,),
@@ -487,6 +630,18 @@ def run(config: Config) -> dict[str, Any]:
         if config.approval_tool and not approval_decided:
             raise SmokeError("approval flow completed without this smoke gate deciding the approval")
 
+        actions = _list_run_actions(api, config.workspace_id, created_run_id)
+        tasks = _list_run_tasks(api, config.workspace_id, created_run_id)
+        evidence_summary = validate_release_evidence(
+            actions,
+            tasks,
+            expected_tools=config.expected_tools,
+            require_task_graph=config.require_task_graph,
+            require_verified_task=config.require_verified_task,
+            expected_verified_action_tool=config.expected_verified_action_tool,
+            forbid_external_mutations=config.forbid_external_mutations,
+        )
+
         if worker:
             required_metrics = [
                 "nexora_agent_runs_total",
@@ -494,7 +649,7 @@ def run(config: Config) -> dict[str, Any]:
             ]
             if config.require_retrieval:
                 required_metrics.append("nexora_retrieval_queries_total")
-            if config.approval_tool:
+            if config.approval_tool or config.expected_tools:
                 required_metrics.append("nexora_tool_calls_total")
             _wait_metric_deltas(worker, metrics_before, required_metrics)
         elif config.require_retrieval:
@@ -515,9 +670,11 @@ def run(config: Config) -> dict[str, Any]:
             ],
             "selected_tools": result.get("selected_tools", []),
             "event_types": event_types,
+            "agent_kind": config.agent_kind,
             "approval_exercised": approval_decided,
             "retrieval_exercised": config.require_retrieval,
             "observability_verified": bool(worker),
+            "release_evidence": evidence_summary,
         }
     finally:
         if created_run_id and not terminal:

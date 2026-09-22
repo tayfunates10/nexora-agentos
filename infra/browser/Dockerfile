@@ -9,6 +9,7 @@ RUN npm ci --include=dev
 RUN npx playwright install --with-deps chromium
 
 COPY infra/browser/server.mjs infra/browser/server.mjs
+COPY infra/browser/policy.mjs infra/browser/policy.mjs
 RUN chown -R node:node /app /ms-playwright
 USER node
 EXPOSE 8080

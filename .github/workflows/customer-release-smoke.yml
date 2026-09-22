@@ -1,0 +1,93 @@
+name: Customer Autonomy Release Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-acceptance
+  cancel-in-progress: false
+
+jobs:
+  customer-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: SEO approved WordPress mutation and verification
+        env:
+          NEXORA_STAGING_API_URL: ${{ vars.NEXORA_STAGING_API_URL }}
+          NEXORA_STAGING_WORKER_ADMIN_URL: ${{ vars.NEXORA_STAGING_WORKER_ADMIN_URL }}
+          NEXORA_STAGING_WORKSPACE_ID: ${{ vars.NEXORA_STAGING_WORKSPACE_ID }}
+          NEXORA_STAGING_AGENT_ID: ${{ vars.NEXORA_STAGING_SEO_AGENT_ID }}
+          NEXORA_STAGING_AGENT_KIND: standard
+          NEXORA_STAGING_PROMPT: ${{ vars.NEXORA_STAGING_SEO_ACTION_PROMPT }}
+          NEXORA_STAGING_APPROVAL_TOOL: wordpress.posts.create
+          NEXORA_STAGING_EXPECT_TOOLS: wordpress.posts.create,nexora.tasks.create,nexora.tasks.verify
+          NEXORA_STAGING_REQUIRE_TASK_GRAPH: 'true'
+          NEXORA_STAGING_REQUIRE_VERIFIED_TASK: 'true'
+          NEXORA_STAGING_EXPECT_VERIFIED_ACTION_TOOL: wordpress.posts.create
+          NEXORA_STAGING_REQUIRE_RETRIEVAL: 'false'
+          NEXORA_STAGING_REQUIRE_OBSERVABILITY: 'true'
+          NEXORA_STAGING_ACCESS_TOKEN: ${{ secrets.NEXORA_STAGING_ACCESS_TOKEN }}
+          NEXORA_STAGING_METRICS_TOKEN: ${{ secrets.NEXORA_STAGING_METRICS_TOKEN }}
+        run: python scripts/staging_smoke.py
+
+      - name: Social approved reply and verification
+        env:
+          NEXORA_STAGING_API_URL: ${{ vars.NEXORA_STAGING_API_URL }}
+          NEXORA_STAGING_WORKER_ADMIN_URL: ${{ vars.NEXORA_STAGING_WORKER_ADMIN_URL }}
+          NEXORA_STAGING_WORKSPACE_ID: ${{ vars.NEXORA_STAGING_WORKSPACE_ID }}
+          NEXORA_STAGING_AGENT_ID: ${{ vars.NEXORA_STAGING_SOCIAL_AGENT_ID }}
+          NEXORA_STAGING_AGENT_KIND: standard
+          NEXORA_STAGING_PROMPT: ${{ vars.NEXORA_STAGING_SOCIAL_ACTION_PROMPT }}
+          NEXORA_STAGING_APPROVAL_TOOL: instagram.comments.reply
+          NEXORA_STAGING_EXPECT_TOOLS: instagram.comments.reply,nexora.tasks.create,nexora.tasks.verify
+          NEXORA_STAGING_REQUIRE_TASK_GRAPH: 'true'
+          NEXORA_STAGING_REQUIRE_VERIFIED_TASK: 'true'
+          NEXORA_STAGING_EXPECT_VERIFIED_ACTION_TOOL: instagram.comments.reply
+          NEXORA_STAGING_REQUIRE_RETRIEVAL: 'false'
+          NEXORA_STAGING_REQUIRE_OBSERVABILITY: 'true'
+          NEXORA_STAGING_ACCESS_TOKEN: ${{ secrets.NEXORA_STAGING_ACCESS_TOKEN }}
+          NEXORA_STAGING_METRICS_TOKEN: ${{ secrets.NEXORA_STAGING_METRICS_TOKEN }}
+        run: python scripts/staging_smoke.py
+
+      - name: Reporting creates follow-up without external mutation
+        env:
+          NEXORA_STAGING_API_URL: ${{ vars.NEXORA_STAGING_API_URL }}
+          NEXORA_STAGING_WORKER_ADMIN_URL: ${{ vars.NEXORA_STAGING_WORKER_ADMIN_URL }}
+          NEXORA_STAGING_WORKSPACE_ID: ${{ vars.NEXORA_STAGING_WORKSPACE_ID }}
+          NEXORA_STAGING_AGENT_ID: ${{ vars.NEXORA_STAGING_REPORTING_AGENT_ID }}
+          NEXORA_STAGING_AGENT_KIND: standard
+          NEXORA_STAGING_PROMPT: ${{ vars.NEXORA_STAGING_REPORTING_ACTION_PROMPT }}
+          NEXORA_STAGING_EXPECT_TOOLS: nexora.tasks.create
+          NEXORA_STAGING_REQUIRE_TASK_GRAPH: 'true'
+          NEXORA_STAGING_FORBID_EXTERNAL_MUTATIONS: 'true'
+          NEXORA_STAGING_REQUIRE_RETRIEVAL: 'false'
+          NEXORA_STAGING_REQUIRE_OBSERVABILITY: 'true'
+          NEXORA_STAGING_ACCESS_TOKEN: ${{ secrets.NEXORA_STAGING_ACCESS_TOKEN }}
+          NEXORA_STAGING_METRICS_TOKEN: ${{ secrets.NEXORA_STAGING_METRICS_TOKEN }}
+        run: python scripts/staging_smoke.py
+
+      - name: Browser inspection captures allowlisted page evidence
+        env:
+          NEXORA_STAGING_API_URL: ${{ vars.NEXORA_STAGING_API_URL }}
+          NEXORA_STAGING_WORKER_ADMIN_URL: ${{ vars.NEXORA_STAGING_WORKER_ADMIN_URL }}
+          NEXORA_STAGING_WORKSPACE_ID: ${{ vars.NEXORA_STAGING_WORKSPACE_ID }}
+          NEXORA_STAGING_AGENT_ID: ${{ vars.NEXORA_STAGING_BROWSER_AGENT_ID }}
+          NEXORA_STAGING_AGENT_KIND: standard
+          NEXORA_STAGING_PROMPT: ${{ vars.NEXORA_STAGING_BROWSER_PROMPT }}
+          NEXORA_STAGING_EXPECT_TEXT: ${{ vars.NEXORA_STAGING_BROWSER_EXPECT_TEXT }}
+          NEXORA_STAGING_EXPECT_TOOLS: browser.page.inspect
+          NEXORA_STAGING_REQUIRE_RETRIEVAL: 'false'
+          NEXORA_STAGING_REQUIRE_OBSERVABILITY: 'true'
+          NEXORA_STAGING_ACCESS_TOKEN: ${{ secrets.NEXORA_STAGING_ACCESS_TOKEN }}
+          NEXORA_STAGING_METRICS_TOKEN: ${{ secrets.NEXORA_STAGING_METRICS_TOKEN }}
+        run: python scripts/staging_smoke.py

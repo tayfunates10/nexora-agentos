@@ -78,6 +78,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --check infra/browser/server.mjs
+      - run: node --test infra/browser/policy.test.mjs
       - run: npm run typecheck && npm run test:web && npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e --workspace @nexora/web
@@ -122,6 +123,7 @@ jobs:
     env:
       POSTGRES_PASSWORD: ci-only-password
       NEXORA_METRICS_TOKEN: ci-only-metrics-token-0123456789
+      NEXORA_BROWSER_RUNTIME_TOKEN: ci-only-browser-runtime-token-0123456789
       NEXORA_GRAFANA_ADMIN_PASSWORD: ci-only-grafana-password-0123456789
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -190,6 +192,11 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8001/metrics)" = 401
           curl --fail -H "Authorization: Bearer $NEXORA_METRICS_TOKEN" \
             http://localhost:8001/metrics | grep -q '^nexora_slo_objective_ratio'
+      - name: Verify opt-in browser service
+        run: |
+          docker compose --profile browser up --build --wait --wait-timeout 180 browser
+          curl --fail --retry 10 --retry-delay 2 --retry-connrefused \
+            http://localhost:8082/health/live
       - name: Verify opt-in monitoring stack
         run: |
           python scripts/prepare_monitoring_secrets.py
@@ -198,4 +205,4 @@ jobs:
           python scripts/check_monitoring.py
       - name: Stop containers
         if: always()
-        run: docker compose -f compose.yaml -f compose.monitoring.yaml --profile worker down
+        run: docker compose -f compose.yaml -f compose.monitoring.yaml --profile worker --profile browser down

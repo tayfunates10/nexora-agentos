@@ -131,7 +131,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [knowledge console](docs/architecture/0041-knowledge-console.md), and
 [staging deployment](docs/architecture/0042-staging-deployment.md), and
 [console design system and localisation](docs/architecture/0043-console-design-system-and-localisation.md), and
-[standard agents and the integration vault](docs/architecture/0044-standard-agents-and-integration-vault.md).
+[standard agents and the integration vault](docs/architecture/0044-standard-agents-and-integration-vault.md), and
+[customer autonomy release acceptance](docs/architecture/0045-customer-autonomy-release-acceptance.md).
 
 ## Run locally with Docker Compose
 
