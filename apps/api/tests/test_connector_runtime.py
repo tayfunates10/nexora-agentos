@@ -1,8 +1,13 @@
 import json
 from pathlib import Path
+from uuid import UUID
 
+import pytest
+
+from nexora_api.connector_mcp import ConnectorMcpAdapter
 from nexora_api.connector_runtime import ConnectorRuntime
 from nexora_api.integration_manifest import define_integration, load_connector
+from nexora_api.mcp_gateway import McpAdapterError
 
 
 def mutation_endpoint(path="/repos/{owner}/{repo}/issues"):
@@ -141,3 +146,43 @@ def test_side_effecting_endpoint_cannot_use_safe_retry():
         assert "safe retries" in str(exc)
     else:
         raise AssertionError("unsafe mutation retry contract was accepted")
+
+
+
+def test_standard_connector_target_rejects_config_or_manual_credential_drift():
+    config = {"base_url": "https://erp.example.com", "company_code": "A"}
+    credential = UUID("00000000-0000-0000-0000-000000000001")
+    spec = {
+        "config_fingerprint": ConnectorMcpAdapter._config_fingerprint(config),
+        "credential_reference": str(credential),
+    }
+    row = {"credential_reference": credential}
+
+    ConnectorMcpAdapter._validate_standard_target(spec, row, config)
+
+    with pytest.raises(McpAdapterError) as changed_config:
+        ConnectorMcpAdapter._validate_standard_target(
+            spec,
+            row,
+            {"base_url": "https://other.example.com", "company_code": "A"},
+        )
+    assert changed_config.value.code == "connector_config_changed"
+
+    with pytest.raises(McpAdapterError) as changed_credential:
+        ConnectorMcpAdapter._validate_standard_target(
+            spec,
+            {"credential_reference": UUID("00000000-0000-0000-0000-000000000002")},
+            config,
+        )
+    assert changed_credential.value.code == "connector_credential_changed"
+
+
+def test_oauth_token_refresh_does_not_invalidate_a_pinned_connector_target():
+    config = {"account_id": "business-42"}
+    spec = {
+        "config_fingerprint": ConnectorMcpAdapter._config_fingerprint(config),
+        "credential_reference": None,
+    }
+    row = {"credential_reference": UUID("00000000-0000-0000-0000-000000000003")}
+
+    ConnectorMcpAdapter._validate_standard_target(spec, row, config)
