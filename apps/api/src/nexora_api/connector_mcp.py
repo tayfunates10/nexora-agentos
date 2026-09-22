@@ -149,7 +149,12 @@ class ConnectorToolProvisioner:
 
 
 class ConnectorMcpAdapter:
-    """Context-aware adapter for integrations stored in the tenant vault."""
+    """Context-aware adapter for integrations stored in the tenant vault.
+
+    Custom agents use the workspace connector target recorded in the governed tool.
+    Standard agents additionally prove that the run's immutable snapshot still matches
+    the tenant-agent binding before any network egress.
+    """
 
     def __init__(self, settings: Settings):
         # Local import avoids a cycle: integration_repository owns the Integration API
@@ -169,6 +174,25 @@ class ConnectorMcpAdapter:
             raise McpAdapterError("connector_target_invalid", retryable=False)
         return integration_id, capability
 
+    @staticmethod
+    def _standard_spec(context, integration_id: UUID, capability: str):
+        if getattr(context, "agent_kind", "custom") != "standard":
+            return None
+        snapshot = getattr(context, "agent_snapshot", None)
+        if not isinstance(snapshot, dict):
+            raise McpAdapterError("connector_snapshot_missing", retryable=False)
+        tools = snapshot.get("connector_tools")
+        if not isinstance(tools, dict):
+            raise McpAdapterError("connector_snapshot_missing", retryable=False)
+        for spec in tools.values():
+            if (
+                isinstance(spec, dict)
+                and spec.get("tenant_integration_id") == str(integration_id)
+                and spec.get("capability") == capability
+            ):
+                return spec
+        raise McpAdapterError("connector_tool_not_snapshotted", retryable=False)
+
     async def call_tool_for_context(
         self,
         context,
@@ -176,22 +200,56 @@ class ConnectorMcpAdapter:
         arguments: dict[str, object],
         timeout_seconds: float,
     ):
+        del timeout_seconds  # McpGateway owns the hard execution deadline.
         integration_id, capability = self._target(remote_name)
+        spec = self._standard_spec(context, integration_id, capability)
         try:
             async with self.repository.connection() as connection:
-                definition, document, config, _ = await self.repository.resolve(
+                if spec is not None:
+                    binding_key = spec.get("binding_key")
+                    if not isinstance(binding_key, str):
+                        raise McpAdapterError("connector_snapshot_invalid", retryable=False)
+                    bound = await connection.execute(
+                        """SELECT tenant_integration_id
+                           FROM agent_integration_bindings
+                           WHERE workspace_id=%s AND tenant_agent_id=%s AND binding_key=%s
+                           FOR SHARE""",
+                        (context.workspace_id, context.agent_id, binding_key),
+                    )
+                    binding = await bound.fetchone()
+                    if binding is None or binding["tenant_integration_id"] != integration_id:
+                        raise McpAdapterError("connector_binding_changed", retryable=False)
+
+                current_definition, document, config, row = await self.repository.resolve(
                     connection, context.workspace_id, integration_id
                 )
                 document = await self.repository._refresh_if_needed(
                     connection,
                     context.workspace_id,
                     integration_id,
-                    definition,
+                    current_definition,
                     document,
                 )
+
+                definition = current_definition
+                if spec is not None:
+                    definition_id = spec.get("definition_id")
+                    definition_document = spec.get("definition")
+                    if (
+                        not isinstance(definition_id, str)
+                        or not isinstance(definition_document, dict)
+                        or row["integration_definition_id"] != definition_id
+                    ):
+                        raise McpAdapterError("connector_snapshot_invalid", retryable=False)
+                    definition = load_connector(definition_document)
+                    if definition.id != definition_id or definition.endpoint_for(capability) is None:
+                        raise McpAdapterError("connector_snapshot_invalid", retryable=False)
+
                 result = await self.repository.runtime.invoke(
                     definition, capability, document, config, arguments
                 )
+        except McpAdapterError:
+            raise
         except HTTPException as exc:
             code = "connector_not_found" if exc.status_code == 404 else "connector_unavailable"
             raise McpAdapterError(code, retryable=False) from None
@@ -201,11 +259,14 @@ class ConnectorMcpAdapter:
 
         if not result.ok:
             code = "connector_" + (result.error_code or "provider_error")
-            retryable = result.error_code in {
+            endpoint = definition.endpoint_for(capability)
+            retry_contract = endpoint.retry if endpoint is not None else "never"
+            transient = result.error_code in {
                 "timeout",
                 "transport_error",
                 "rate_limited",
             } or (result.status_code is not None and result.status_code >= 500)
+            retryable = retry_contract in {"safe", "idempotent"} and transient
             raise McpAdapterError(code, retryable=retryable)
 
         if not result.body:
