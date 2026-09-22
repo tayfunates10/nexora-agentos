@@ -6,7 +6,6 @@ from uuid import UUID
 
 import psycopg
 import pytest
-from pydantic import SecretStr
 from catalog_support import (
     catalog_entry,
     connect_api_key,
@@ -19,11 +18,12 @@ from catalog_support import (
 )
 from conftest import PLATFORM_ADMIN
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from nexora_api.connector_mcp import ConnectorMcpAdapter
 from nexora_api.main import create_app
-from nexora_api.migrate import migrate
 from nexora_api.mcp_gateway import McpAdapterError
+from nexora_api.migrate import migrate
 
 pytestmark = [
     pytest.mark.integration,
