@@ -166,10 +166,7 @@ class IntegrationRepository:
             return "read"
         if method == "DELETE":
             return "destructive"
-        if any(
-            word in capability
-            for word in ("publish", "reply", "send", "deliver", "message")
-        ):
+        if any(word in capability for word in ("publish", "reply", "send", "deliver", "message")):
             return "external_communication"
         return "write"
 
@@ -188,9 +185,7 @@ class IntegrationRepository:
         )
         workspace_ids = [row["workspace_id"] for row in await workspaces.fetchall()]
         for endpoint in manifest.endpoints:
-            side_effect = self._managed_tool_side_effect(
-                endpoint.method, endpoint.capability
-            )
+            side_effect = self._managed_tool_side_effect(endpoint.method, endpoint.capability)
             schema = self._managed_tool_schema(endpoint.method)
             validate_registration_schema(schema, side_effect=side_effect)
             tool_name = f"{manifest.id}.{endpoint.capability}"
@@ -295,9 +290,7 @@ class IntegrationRepository:
                     Jsonb({"version": manifest.version, "status": manifest.status}),
                 ),
             )
-            await self._reconcile_existing_connector_tools(
-                connection, principal, manifest
-            )
+            await self._reconcile_existing_connector_tools(connection, principal, manifest)
             self._definitions[manifest.id] = manifest
             return self._definition_view(row)
 
