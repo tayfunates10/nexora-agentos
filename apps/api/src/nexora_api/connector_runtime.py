@@ -113,13 +113,33 @@ class ConnectorRuntime:
         capability: str,
         credential: dict[str, str],
         config: dict[str, object],
+        arguments: dict[str, object] | None = None,
     ) -> ConnectorResult:
-        """Perform one capability call. Returns the response; raises only on refusal to try."""
+        """Perform one capability call without allowing arguments to widen the destination.
+
+        GET/DELETE tools may supply a query object. POST tools may supply a payload
+        object. Mutations carry the governed idempotency key as an HTTP header, while the
+        key itself is never copied into the provider payload.
+        """
         endpoint = definition.endpoint_for(capability)
         if endpoint is None:
             raise ConnectorError("capability_not_executable")
         base = self.base_url(definition, config)
         headers, params, basic = self._authorize(definition, credential)
+        supplied = arguments or {}
+        query = supplied.get("query", {})
+        payload = supplied.get("payload")
+        idempotency_key = supplied.get("idempotency_key")
+        if not isinstance(query, dict):
+            raise ConnectorError("invalid_query_arguments")
+        if payload is not None and not isinstance(payload, dict):
+            raise ConnectorError("invalid_payload_arguments")
+        if endpoint.method != "GET":
+            if not isinstance(idempotency_key, str) or not idempotency_key:
+                raise ConnectorError("idempotency_key_missing")
+            headers["Idempotency-Key"] = idempotency_key
+        params.update({str(key): value for key, value in query.items()})
+
         url = base + endpoint.path
         parsed = urlsplit(url)
         await _resolvable_public_host(parsed.hostname or "", parsed.port or 443)
@@ -135,6 +155,7 @@ class ConnectorRuntime:
                     url,
                     headers={**headers, "Accept": "application/json"},
                     params=params,
+                    json=payload if endpoint.method == "POST" else None,
                 )
         except httpx.TimeoutException:
             return ConnectorResult(ok=False, status_code=None, error_code="timeout")
