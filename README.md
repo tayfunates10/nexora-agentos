@@ -36,24 +36,24 @@ Redis, the API and the web console for you. The worker and isolated Chromium bro
 opt-in services.
 
 If you run the application without Docker, use Node.js 22 or 24, Python 3.12+, PostgreSQL 16+
-with the \`vector\` extension, and Redis.
+with the `vector` extension, and Redis.
 
 ### Local installation
 
 Clone the repository and create the local environment file:
 
-\`\`\`bash
+```bash
 git clone https://github.com/tayfunates10/nexora-agentos.git
 cd nexora-agentos
 cp .env.example .env
-\`\`\`
+```
 
-Set a URL-safe \`POSTGRES_PASSWORD\` in \`.env\`, then start the base stack:
+Set a URL-safe `POSTGRES_PASSWORD` in `.env`, then start the base stack:
 
-\`\`\`bash
+```bash
 docker compose up --build -d
 docker compose ps
-\`\`\`
+```
 
 The local endpoints are:
 
@@ -71,78 +71,78 @@ authenticated features unavailable until an OIDC provider is supplied.
 Register Nexora as a confidential web client with your OIDC provider. Use authorization-code flow
 with S256 PKCE and register this exact local callback:
 
-\`\`\`text
+```text
 http://localhost:3000/auth/callback
-\`\`\`
+```
 
-Add the following values to \`.env\`:
+Add the following values to `.env`:
 
-\`\`\`dotenv
+```dotenv
 NEXORA_WEB_ORIGIN=http://localhost:3000
 NEXORA_AUTH_ISSUER=https://your-provider.example/realm
 NEXORA_AUTH_AUDIENCE=nexora-api
 NEXORA_OIDC_CLIENT_ID=your-web-client-id
 NEXORA_OIDC_CLIENT_SECRET=replace-locally-never-commit
-\`\`\`
+```
 
 Restart the application:
 
-\`\`\`bash
+```bash
 docker compose up -d
-\`\`\`
+```
 
 Open http://localhost:3000/login, sign in, create a workspace and copy the workspace UUID from the
 workspace URL. The first person who creates a workspace becomes its owner.
 
-Never commit \`.env\`, provider keys, vault keys or customer credentials.
+Never commit `.env`, provider keys, vault keys or customer credentials.
 
 ### Configure the worker and model provider
 
 Agent runs do not call a model unless the worker is explicitly enabled. Copy the runtime example:
 
-\`\`\`bash
+```bash
 cp infra/worker/runtime.example.json infra/worker/runtime.json
-\`\`\`
+```
 
-Edit \`infra/worker/runtime.json\` and replace the placeholder workspace UUID in the profile or
+Edit `infra/worker/runtime.json` and replace the placeholder workspace UUID in the profile or
 profiles you intend to use. Also select a model your provider account can call and review the
 accounting prices.
 
-Add these values to \`.env\`:
+Add these values to `.env`:
 
-\`\`\`dotenv
+```dotenv
 NEXORA_WORKER_RUNTIME_CONFIG=./infra/worker/runtime.json
 NEXORA_OPENAI_API_KEY=replace-locally-never-commit
-\`\`\`
+```
 
 Then start the worker:
 
-\`\`\`bash
+```bash
 docker compose --profile worker up --build -d
-\`\`\`
+```
 
 Worker readiness is available at http://localhost:8001/api/v1/health/ready.
 
-If a run stays \`queued\`, the worker is not running. If it fails with
-\`model_profile_not_authorized\`, the workspace UUID is not permitted by the selected runtime
+If a run stays `queued`, the worker is not running. If it fails with
+`model_profile_not_authorized`, the workspace UUID is not permitted by the selected runtime
 profile.
 
 ### Enable the browser runtime
 
 Standard agents can inspect an allowlisted site and can perform explicitly governed browser actions
-when the isolated Chromium service is enabled. Generate a strong runtime token, place it in \`.env\`,
+when the isolated Chromium service is enabled. Generate a strong runtime token, place it in `.env`,
 and point the worker at the Compose browser service:
 
-\`\`\`dotenv
+```dotenv
 NEXORA_BROWSER_RUNTIME_TOKEN=replace-with-a-strong-secret
 NEXORA_BROWSER_RUNTIME_URL=http://browser:8080
-\`\`\`
+```
 
 Start the browser profile together with the worker:
 
-\`\`\`bash
+```bash
 docker compose --profile worker --profile browser up --build -d
-\`\`\`
+```
 
 The host-side browser health endpoint is http://localhost:8082/health/live. Browser actions remain
 restricted by the agent's configured site origin and tool policy.
@@ -151,46 +151,46 @@ restricted by the agent's configured site origin and tool policy.
 
 Customer integration credentials are encrypted before they are stored. Generate a 256-bit vault key:
 
-\`\`\`bash
+```bash
 python -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())"
-\`\`\`
+```
 
-Add it to \`.env\`:
+Add it to `.env`:
 
-\`\`\`dotenv
+```dotenv
 NEXORA_SECRET_VAULT_KEYS={"local-1":"PASTE_BASE64_KEY_HERE"}
 NEXORA_SECRET_VAULT_ACTIVE_KEY=local-1
-\`\`\`
+```
 
 Restart the API and worker after changing vault settings:
 
-\`\`\`bash
+```bash
 docker compose --profile worker up -d
-\`\`\`
+```
 
 In the console, open **Settings → Integrations** and connect the accounts an agent is allowed to
 use. OAuth connectors additionally require an operator-side
-\`NEXORA_INTEGRATION_OAUTH_CLIENTS\` registration. Tenant secrets are not copied into prompts,
+`NEXORA_INTEGRATION_OAUTH_CLIENTS` registration. Tenant secrets are not copied into prompts,
 tool arguments or logs.
 
 ### Standard agents
 
-Nexora keeps standard agents and connectors as versioned manifests under \`agents/\` and
-\`connectors/\`. Validate the catalog before publishing:
+Nexora keeps standard agents and connectors as versioned manifests under `agents/` and
+`connectors/`. Validate the catalog before publishing:
 
-\`\`\`bash
+```bash
 python scripts/publish_catalog.py --check
-\`\`\`
+```
 
 A platform administrator can publish the catalog to a running environment with:
 
-\`\`\`bash
+```bash
 python scripts/publish_catalog.py --publish \
   --base-url http://localhost:8000 \
   --token "$NEXORA_PLATFORM_TOKEN"
-\`\`\`
+```
 
-The bearer token must belong to a subject listed in \`NEXORA_PLATFORM_ADMIN_SUBJECTS\`.
+The bearer token must belong to a subject listed in `NEXORA_PLATFORM_ADMIN_SUBJECTS`.
 
 Customers install published standard agents from **Agents → Catalog**. Bind each required
 integration, configure the agent settings, and leave write or external-communication actions behind
@@ -202,9 +202,9 @@ After the workspace, worker and agent are ready:
 
 1. Open the workspace's **Agents** page.
 2. Install a standard agent from the catalog or create a workspace-owned agent.
-3. Confirm its model profile is one allowed by \`infra/worker/runtime.json\`.
+3. Confirm its model profile is one allowed by `infra/worker/runtime.json`.
 4. Start a run.
-5. Follow the run page from \`queued\` to \`running\` and then \`succeeded\`.
+5. Follow the run page from `queued` to `running` and then `succeeded`.
 6. For an approval-gated action, open **Tool approvals**, approve it, and confirm the worker resumes
    the run.
 7. Review **Actions**, task verification evidence and the final report before treating an external
@@ -214,11 +214,11 @@ After the workspace, worker and agent are ready:
 
 Once the basic run works, you can enable these independently:
 
-- **Knowledge sources:** configure the \`retrieval\` block in the worker runtime and add content from
+- **Knowledge sources:** configure the `retrieval` block in the worker runtime and add content from
   **Knowledge sources**.
 - **Budgets:** set a monthly workspace limit and alert thresholds from **Spend and budget**.
-- **Monitoring:** configure \`NEXORA_METRICS_TOKEN\` and use the bundled
-  \`compose.monitoring.yaml\` stack if required.
+- **Monitoring:** configure `NEXORA_METRICS_TOKEN` and use the bundled
+  `compose.monitoring.yaml` stack if required.
 - **External MCP servers:** add only operator-approved HTTPS endpoints to the worker runtime.
 - **Spend alerts:** configure the worker webhook and signing secret only when alert delivery is
   required.
@@ -227,14 +227,14 @@ Once the basic run works, you can enable these independently:
 
 Run these checks locally:
 
-\`\`\`bash
+```bash
 curl -fsS http://localhost:8000/api/v1/health/live
 curl -fsS http://localhost:8000/api/v1/health/ready
 docker compose ps
-\`\`\`
+```
 
 After authentication and worker configuration, also confirm that a real agent run reaches
-\`succeeded\`, and that a connector-backed write is not considered complete until its read-back
+`succeeded`, and that a connector-backed write is not considered complete until its read-back
 verification evidence is recorded.
 
 ### Production installation
@@ -254,7 +254,7 @@ the items that cannot safely be committed to this repository:
 - first workspace, permissions, budgets and human approvals
 - legal, data-retention and provider-policy decisions
 
-The Kubernetes manifests live under \`infra/k8s\`. Production images are pinned by immutable digest;
+The Kubernetes manifests live under `infra/k8s`. Production images are pinned by immutable digest;
 the release pipeline publishes provenance and SBOM attestations and scans the image before
 promotion.
 
@@ -264,13 +264,13 @@ Common first-install symptoms:
 
 | Symptom | What to check |
 | --- | --- |
-| \`/login\` says sign-in is unavailable | OIDC variables are missing or the callback/client is not registered correctly. |
-| API readiness returns 503 | PostgreSQL, pgvector or Redis is not ready. Run \`docker compose ps\` and inspect service logs. |
-| Run stays \`queued\` | Start the worker with \`--profile worker\`. |
-| \`model_profile_not_authorized\` | Add the workspace UUID to the matching worker runtime profile. |
-| Integration cannot save credentials | Configure \`NEXORA_SECRET_VAULT_KEYS\` and \`NEXORA_SECRET_VAULT_ACTIVE_KEY\`. |
+| `/login` says sign-in is unavailable | OIDC variables are missing or the callback/client is not registered correctly. |
+| API readiness returns 503 | PostgreSQL, pgvector or Redis is not ready. Run `docker compose ps` and inspect service logs. |
+| Run stays `queued` | Start the worker with `--profile worker`. |
+| `model_profile_not_authorized` | Add the workspace UUID to the matching worker runtime profile. |
+| Integration cannot save credentials | Configure `NEXORA_SECRET_VAULT_KEYS` and `NEXORA_SECRET_VAULT_ACTIVE_KEY`. |
 | Standard agent is paused | One or more required integrations are missing, disconnected or unbound. |
-| Browser tool is unavailable | Configure the browser token/URL and start the \`browser\` Compose profile. |
+| Browser tool is unavailable | Configure the browser token/URL and start the `browser` Compose profile. |
 | Write action waits indefinitely | Open **Tool approvals** and decide the pending approval before it expires. |
 | Agent can read but cannot write | This is normally policy behavior; connector writes require approval unless explicitly governed otherwise. |
 
