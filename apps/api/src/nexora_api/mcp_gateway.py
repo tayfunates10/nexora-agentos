@@ -22,6 +22,18 @@ class McpToolAdapter(Protocol):
     ) -> Any: ...
 
 
+class ContextMcpToolAdapter(Protocol):
+    """A first-party adapter that needs the fenced run context at execution time."""
+
+    async def call_tool(
+        self,
+        context: ExecutionContext,
+        remote_name: str,
+        arguments: dict[str, Any],
+        timeout_seconds: float,
+    ) -> Any: ...
+
+
 @dataclass
 class McpAdapterError(Exception):
     code: str
@@ -60,12 +72,14 @@ class McpGateway:
         self,
         settings: Settings,
         adapters: Mapping[str, McpToolAdapter] | None = None,
+        context_adapters: Mapping[str, ContextMcpToolAdapter] | None = None,
         timeout_seconds: float = 15.0,
     ):
         if not 0.1 <= timeout_seconds <= 120:
             raise ValueError("timeout_seconds must be between 0.1 and 120")
         self.repository = ToolGovernanceRepository(settings)
         self.adapters = dict(adapters or {})
+        self.context_adapters = dict(context_adapters or {})
         self.timeout_seconds = timeout_seconds
 
     async def invoke(
@@ -91,7 +105,10 @@ class McpGateway:
 
     async def _invoke(self, context, call_key, tool_name, arguments, is_cancelled, active):
         started = time.perf_counter()
-        plan = await self.repository.prepare_call(context, call_key, tool_name, arguments)
+        governed_tool_name = (context.tool_aliases or {}).get(tool_name, tool_name)
+        plan = await self.repository.prepare_call(
+            context, call_key, governed_tool_name, arguments
+        )
         server_key = plan.tool.server_key
         record(
             active,
@@ -128,7 +145,8 @@ class McpGateway:
             raise McpGatewayError(exc.code, retryable=False) from exc
 
         adapter = self.adapters.get(execution.server_key)
-        if adapter is None:
+        context_adapter = self.context_adapters.get(execution.server_key)
+        if adapter is None and context_adapter is None:
             await self.repository.complete_failure(
                 execution.call_id, "mcp_server_unavailable", retryable=True, context=context
             )
@@ -137,14 +155,20 @@ class McpGateway:
             raise McpGatewayError("mcp_server_unavailable", retryable=True)
 
         try:
-            result = await asyncio.wait_for(
-                adapter.call_tool(
+            if context_adapter is not None:
+                call = context_adapter.call_tool(
+                    context,
                     execution.remote_name,
                     execution.arguments,
                     self.timeout_seconds,
-                ),
-                timeout=self.timeout_seconds,
-            )
+                )
+            else:
+                call = adapter.call_tool(
+                    execution.remote_name,
+                    execution.arguments,
+                    self.timeout_seconds,
+                )
+            result = await asyncio.wait_for(call, timeout=self.timeout_seconds)
         except McpAdapterError as exc:
             await self.repository.complete_failure(
                 execution.call_id, exc.code, retryable=exc.retryable, context=context
