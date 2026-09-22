@@ -4,6 +4,7 @@ import os
 
 import psycopg
 import pytest
+from pydantic import SecretStr
 from catalog_support import (
     catalog_entry,
     connect_api_key,
@@ -225,6 +226,74 @@ def test_standard_agent_runs_directly_with_an_immutable_execution_snapshot(
         assert snapshot["instructions"] == "Version one instructions."
         assert snapshot["model_profile"] == "balanced-v1"
 
+
+
+def test_standard_agent_browser_tools_freeze_origin_and_gate_ui_mutation(
+    client, admin, keys, platform_settings
+):
+    browser_settings = platform_settings.model_copy(
+        update={
+            "browser_runtime_url": "http://browser.internal:8080",
+            "browser_runtime_token": SecretStr("x" * 32),
+        }
+    )
+    client.app.state.tenant_agents.settings = browser_settings
+
+    owner = headers(keys, "owner-browser-standard-run")
+    space = workspace(client, owner, "Browser standard run")
+    slug = unique_slug("browser-standard-agent")
+    standard_agent(
+        client,
+        admin,
+        slug,
+        required_integrations=[],
+        optional_integrations=[],
+        required_tools=["browser.page.inspect"],
+        optional_tools=["browser.page.action"],
+        settings_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"site_url": {"type": "string", "maxLength": 200}},
+            "required": ["site_url"],
+        },
+    )
+    instance = install(
+        client,
+        owner,
+        space,
+        slug,
+        settings={"site_url": "https://example.com/start"},
+    ).json()
+    created = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Inspect the configured site and prepare a bounded change."},
+        headers={**owner, "Idempotency-Key": "browser-standard-run-0001"},
+    )
+    assert created.status_code == 201, created.text
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        snapshot = connection.execute(
+            "SELECT agent_snapshot FROM agent_runs WHERE id=%s", (created.json()["id"],)
+        ).fetchone()[0]
+        assert snapshot["browser"] == {"allowed_origin": "https://example.com"}
+        assert set(snapshot["allowed_tools"]) == {
+            "browser.page.inspect",
+            "browser.page.action",
+        }
+        inspect_name = snapshot["tool_aliases"]["browser.page.inspect"]
+        action_name = snapshot["tool_aliases"]["browser.page.action"]
+        rows = connection.execute(
+            """SELECT d.name,d.remote_name,d.side_effect,p.decision
+               FROM tool_definitions d
+               JOIN tool_policies p ON p.workspace_id=d.workspace_id AND p.tool_id=d.id
+               WHERE d.workspace_id=%s AND d.name=ANY(%s::text[])
+               ORDER BY d.remote_name""",
+            (space, [inspect_name, action_name]),
+        ).fetchall()
+        assert rows == [
+            (action_name, "page.action", "write", "require_approval"),
+            (inspect_name, "page.inspect", "read", "allow"),
+        ]
 
 def test_paused_standard_agent_cannot_queue_a_run(client, admin, keys):
     owner = headers(keys, "owner-paused-run")
