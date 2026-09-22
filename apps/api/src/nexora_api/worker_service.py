@@ -16,6 +16,7 @@ import httpx
 from redis.asyncio import Redis
 
 from nexora_api.config import Settings
+from nexora_api.connector_tool_adapter import ConnectorToolAdapter
 from nexora_api.embeddings import OpenAIEmbeddingsAdapter
 from nexora_api.evaluation_judge_worker import EvaluationJudgeWorker
 from nexora_api.executor import DurableAgentExecutor
@@ -266,7 +267,11 @@ def build_worker(
         store=ExecutorStore(settings, spend=config.spend_policy()),
         router=ModelRouter(config.candidates()),
         adapters=adapters if adapters is not None else build_provider_adapters(settings, config),
-        gateway=McpGateway(settings, adapters=mcp_adapters),
+        gateway=McpGateway(
+            settings,
+            adapters=mcp_adapters,
+            context_adapters={"connector": ConnectorToolAdapter(settings)},
+        ),
         profiles=config.execution_profiles(),
         retriever=retriever,
     )
