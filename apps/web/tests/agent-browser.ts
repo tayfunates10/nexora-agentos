@@ -134,7 +134,8 @@ export async function checkAgentRuns(
   await expect(page.getByRole("heading", { name: t("runDetail.plan.title") })).toBeVisible();
   await expect(page.getByText("Prepare verified summary")).toBeVisible();
   await expect(page.getByText("The final summary matches the fresh read.")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "1", exact: true })).toBeVisible();
+  const verifiedTaskRow = page.getByRole("row").filter({ hasText: "Prepare verified summary" });
+  await expect(verifiedTaskRow.getByRole("cell", { name: "1", exact: true })).toBeVisible();
   await expect(page.getByText(t("runDetail.plan.verification.verified")).first()).toBeVisible();
   await expect(page.getByText(t("runDetail.result.selectionNotice", { tools: "search_incidents" }))).toBeVisible();
 
