@@ -300,9 +300,7 @@ async def run_tenant_agent(
     principal: Identity,
     request: Request,
     response: Response,
-    idempotency_key: Annotated[
-        str, Header(alias="Idempotency-Key", min_length=8, max_length=128)
-    ],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
 ):
     run, created = await repository(request).create_run(
         principal,
