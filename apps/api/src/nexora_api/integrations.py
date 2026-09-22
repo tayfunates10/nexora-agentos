@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from nexora_api.auth import Principal, authenticated
+from nexora_api.connector_mcp import ConnectorToolProvisioner
 from nexora_api.integration_manifest import SLUG, ConnectorManifest
 from nexora_api.platform_admin import PlatformIdentity
 
@@ -226,9 +227,13 @@ async def list_integrations(
 async def connect_integration(
     workspace_id: UUID, body: ConnectInput, principal: Identity, request: Request
 ):
-    return await repository(request).connect(
+    integration = await repository(request).connect(
         principal, workspace_id, body, request.state.request_id
     )
+    await ConnectorToolProvisioner(request.app.state.settings).sync(
+        principal, integration, request.state.request_id
+    )
+    return integration
 
 
 @router.get(
@@ -279,6 +284,9 @@ async def disconnect_integration(
     await repository(request).disconnect(
         principal, workspace_id, integration_id, request.state.request_id
     )
+    await ConnectorToolProvisioner(request.app.state.settings).disable(
+        workspace_id, integration_id
+    )
 
 
 @router.post(
@@ -321,6 +329,10 @@ async def start_oauth(
 async def complete_oauth(
     workspace_id: UUID, body: OAuthCompleteInput, principal: Identity, request: Request
 ):
-    return await repository(request).complete_oauth(
+    integration = await repository(request).complete_oauth(
         principal, workspace_id, body, request.state.request_id
     )
+    await ConnectorToolProvisioner(request.app.state.settings).sync(
+        principal, integration, request.state.request_id
+    )
+    return integration
