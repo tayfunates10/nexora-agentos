@@ -37,6 +37,11 @@
       "capability": "request.read",
       "method": "GET",
       "path": "/"
+    },
+    {
+      "capability": "request.write",
+      "method": "POST",
+      "path": "/"
     }
   ]
 }
