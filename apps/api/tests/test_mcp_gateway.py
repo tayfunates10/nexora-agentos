@@ -98,6 +98,7 @@ class ContextAdapter:
         self.calls.append((execution_context, remote_name, arguments, timeout_seconds))
         return {"ok": True}
 
+
 def test_context_aware_adapter_receives_the_governed_workspace_context():
     adapter = ContextAdapter()
     gateway = McpGateway(Settings(), adapters={"remote": adapter})
