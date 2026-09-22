@@ -132,7 +132,9 @@ class ConnectorRuntime:
         return supplied
 
     @staticmethod
-    def _mapped_request(endpoint, arguments: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _mapped_request(
+        endpoint, arguments: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         query = {
             provider_name: arguments[input_name]
             for provider_name, input_name in endpoint.query_map.items()
