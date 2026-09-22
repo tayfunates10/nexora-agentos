@@ -15,6 +15,31 @@ export type SideEffect = z.infer<typeof sideEffectSchema>;
 export type PolicyDecision = z.infer<typeof policyDecisionSchema>;
 export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
 
+export const runActionStatusSchema = z.enum([
+  "planned", "pending_approval", "approved", "running",
+  "succeeded", "failed", "denied", "cancelled",
+]);
+export type RunActionStatus = z.infer<typeof runActionStatusSchema>;
+
+export const runActionSchema = z.object({
+  id: z.uuid(), workspace_id: z.uuid(), run_id: z.uuid(),
+  action_name: z.string().min(1).max(128),
+  side_effect: sideEffectSchema,
+  status: runActionStatusSchema,
+  policy_decision: policyDecisionSchema,
+  attempt_count: z.number().int().nonnegative(),
+  error_code: z.string().max(100).nullable(),
+  approval_id: z.uuid().nullable(),
+  approval_status: approvalStatusSchema.nullable(),
+  created_at: timestamp, updated_at: timestamp,
+  started_at: timestamp.nullable(), finished_at: timestamp.nullable(),
+});
+export const runActionPageSchema = z.object({
+  items: z.array(runActionSchema), next_cursor: z.uuid().nullable(),
+});
+export type RunAction = z.infer<typeof runActionSchema>;
+
+
 export const toolSchema = z.object({
   id: z.uuid(), workspace_id: z.uuid(), name: z.string().min(1).max(64),
   server_key: z.string().min(2).max(64), remote_name: z.string().min(1).max(128),
@@ -79,6 +104,10 @@ export const POLICY_TONES: Record<PolicyDecision, Tone> = {
   deny: "down",
   require_approval: "warn",
 };
+
+export function runActionStatusKey(status: RunActionStatus): MessageKey {
+  return `runDetail.actions.status.${status}`;
+}
 
 export function approvalStatusKey(status: ApprovalStatus): MessageKey {
   return `approvals.status.${status}`;
