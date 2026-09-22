@@ -66,8 +66,6 @@ def install(client, caller, space, slug, **body):
     )
 
 
-
-
 def test_connector_upgrade_provisions_new_tools_for_existing_customer_connections(
     client, admin, keys, platform_settings
 ):
@@ -120,7 +118,6 @@ def test_connector_upgrade_provisions_new_tools_for_existing_customer_connection
             (space,),
         ).fetchone()
         assert after == ("write", "require_approval")
-
 
 
 def test_installed_standard_agent_is_runnable_and_provisions_governed_write_tool(
