@@ -111,7 +111,8 @@ export const KNOWN_RUN_EVENTS = [
   "run.succeeded", "run.failed", "model.completed", "retrieval.completed",
   "tool.call_planned", "tool.approval_requested", "tool.approved", "tool.denied",
   "tool.rejected", "tool.started", "tool.succeeded", "tool.failed",
-  "tool.retry_scheduled", "tool.contract_changed", "spend.denied",
+  "tool.retry_scheduled", "tool.contract_changed",
+  "task.created", "task.verified", "task.verification_failed", "spend.denied",
 ] as const;
 
 export type KnownRunEvent = (typeof KNOWN_RUN_EVENTS)[number];
