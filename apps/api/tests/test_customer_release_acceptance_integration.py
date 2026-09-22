@@ -92,9 +92,7 @@ class DemoBrowserAdapter:
     def __init__(self):
         self.calls = []
 
-    async def call_tool_for_context(
-        self, context, remote_name, arguments, timeout_seconds
-    ):
+    async def call_tool_for_context(self, context, remote_name, arguments, timeout_seconds):
         del timeout_seconds
         assert remote_name == "page.inspect"
         assert context.agent_snapshot["browser"]["allowed_origin"] == "https://demo.example"
