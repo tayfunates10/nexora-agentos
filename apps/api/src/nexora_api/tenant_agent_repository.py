@@ -714,9 +714,7 @@ class TenantAgentRepository:
                     WHERE id=%s AND workspace_id=%s""",
                 (*changes.values(), agent_id, workspace_id),
             )
-            await self._sync_runtime_definition(
-                connection, workspace_id, agent_id, manifest
-            )
+            await self._sync_runtime_definition(connection, workspace_id, agent_id, manifest)
             await self.workspaces.audit(
                 connection, principal, workspace_id, "agent.settings_changed", request_id
             )
