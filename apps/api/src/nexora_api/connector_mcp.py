@@ -11,78 +11,121 @@ from uuid import UUID
 import psycopg
 from fastapi import HTTPException
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.connector_runtime import ConnectorError
 from nexora_api.integration_manifest import load_connector
 from nexora_api.mcp_gateway import McpAdapterError
-from nexora_api.tool_repository import ToolGovernanceRepository
-from nexora_api.tooling import PolicyDecision, ToolPolicyInput, ToolUpsertInput
+from nexora_api.workspace_repository import WorkspaceRepository
 
 CONNECTOR_SERVER_KEY = "connector"
 
 
 class ConnectorToolProvisioner:
-    """Materialize executable connector endpoints as governed workspace tools."""
+    """Materialize executable endpoints as safe workspace tools.
+
+    This is a consequence of an already-authorized integration connect operation, not a
+    second user-managed tool registration. Existing DENY decisions are never loosened;
+    a connector endpoint that becomes mutating is always upgraded to approval-required.
+    """
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.tools = ToolGovernanceRepository(settings)
+        self.workspaces = WorkspaceRepository(settings)
 
-    async def _manifest(self, definition_id: str):
+    async def sync(self, principal: Principal, integration, request_id: str) -> list[str]:
         async with await psycopg.AsyncConnection.connect(
             self.settings.database_url.get_secret_value(),
             connect_timeout=3,
             row_factory=dict_row,
             options="-c statement_timeout=5000 -c lock_timeout=3000",
         ) as connection:
-            result = await connection.execute(
+            definition_result = await connection.execute(
                 "SELECT manifest FROM integration_definitions WHERE id=%s",
-                (definition_id,),
+                (integration.integration_definition_id,),
             )
-            row = await result.fetchone()
+            row = await definition_result.fetchone()
             if row is None:
                 raise HTTPException(404, "Unknown integration")
-            return load_connector(row["manifest"])
-
-    async def sync(self, principal: Principal, integration, request_id: str) -> list[str]:
-        manifest = await self._manifest(integration.integration_definition_id)
-        names: list[str] = []
-        for endpoint in manifest.endpoints:
-            name = f"{manifest.id}.{endpoint.capability}"
-            await self.tools.upsert_tool(
+            manifest = load_connector(row["manifest"])
+            names: list[str] = []
+            for endpoint in manifest.endpoints:
+                name = f"{manifest.id}.{endpoint.capability}"
+                tool = await connection.execute(
+                    """INSERT INTO tool_definitions
+                       (id,workspace_id,name,server_key,remote_name,description,input_schema,
+                        output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
+                       VALUES (gen_random_uuid(),%s,%s,%s,%s,%s,%s,%s,%s,true,%s,%s)
+                       ON CONFLICT (workspace_id,name) DO UPDATE SET
+                         server_key=EXCLUDED.server_key,
+                         remote_name=EXCLUDED.remote_name,
+                         description=EXCLUDED.description,
+                         input_schema=EXCLUDED.input_schema,
+                         output_schema=EXCLUDED.output_schema,
+                         side_effect=EXCLUDED.side_effect,
+                         enabled=true,
+                         updated_at=now()
+                       RETURNING id""",
+                    (
+                        integration.workspace_id,
+                        name,
+                        CONNECTOR_SERVER_KEY,
+                        f"{integration.id}:{endpoint.capability}",
+                        endpoint.description,
+                        Jsonb(endpoint.input_schema),
+                        Jsonb(endpoint.output_schema) if endpoint.output_schema is not None else None,
+                        endpoint.side_effect,
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                tool_id = (await tool.fetchone())["id"]
+                default_decision = "allow" if endpoint.side_effect == "read" else "require_approval"
+                default_reason = (
+                    "Connector read is allowed"
+                    if endpoint.side_effect == "read"
+                    else "Connector mutation requires human approval"
+                )
+                await connection.execute(
+                    """INSERT INTO tool_policies
+                       (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
+                       VALUES (%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (workspace_id,tool_id) DO UPDATE SET
+                         decision=CASE
+                           WHEN tool_policies.decision='deny' THEN 'deny'
+                           WHEN EXCLUDED.decision='require_approval' THEN 'require_approval'
+                           ELSE tool_policies.decision
+                         END,
+                         reason=CASE
+                           WHEN tool_policies.decision='deny' THEN tool_policies.reason
+                           WHEN EXCLUDED.decision='require_approval' THEN EXCLUDED.reason
+                           ELSE tool_policies.reason
+                         END,
+                         updated_at=CASE
+                           WHEN EXCLUDED.decision='require_approval' THEN now()
+                           ELSE tool_policies.updated_at
+                         END""",
+                    (
+                        integration.workspace_id,
+                        tool_id,
+                        default_decision,
+                        default_reason,
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                names.append(name)
+            await self.workspaces.audit(
+                connection,
                 principal,
                 integration.workspace_id,
-                name,
-                ToolUpsertInput(
-                    server_key=CONNECTOR_SERVER_KEY,
-                    remote_name=f"{integration.id}:{endpoint.capability}",
-                    description=endpoint.description,
-                    input_schema=endpoint.input_schema,
-                    output_schema=endpoint.output_schema,
-                    side_effect=endpoint.side_effect,
-                    enabled=True,
-                ),
+                "integration.tools_synced",
                 request_id,
+                str(integration.id),
             )
-            decision = (
-                PolicyDecision.ALLOW
-                if endpoint.side_effect == "read"
-                else PolicyDecision.REQUIRE_APPROVAL
-            )
-            await self.tools.set_policy(
-                principal,
-                integration.workspace_id,
-                name,
-                ToolPolicyInput(
-                    decision=decision,
-                    reason=("Connector read is allowed" if endpoint.side_effect == "read" else "Connector mutation requires human approval"),
-                ),
-                request_id,
-            )
-            names.append(name)
-        return names
+            return names
 
     async def disable(self, workspace_id: UUID, integration_id: UUID) -> None:
         """Hide tools whose target connection has been removed."""
@@ -99,7 +142,6 @@ class ConnectorToolProvisioner:
                    WHERE workspace_id=%s AND server_key=%s AND remote_name LIKE %s""",
                 (workspace_id, CONNECTOR_SERVER_KEY, prefix),
             )
-
 
 class ConnectorMcpAdapter:
     """Context-aware adapter for integrations stored in the tenant vault."""
@@ -154,7 +196,7 @@ class ConnectorMcpAdapter:
 
         if not result.ok:
             code = "connector_" + (result.error_code or "provider_error")
-            retryable = result.error_code in {"timeout", "transport_error", "rate_limited", "provider_error"}
+            retryable = result.error_code in {"timeout", "transport_error", "rate_limited"} or (result.status_code is not None and result.status_code >= 500)
             raise McpAdapterError(code, retryable=retryable)
 
         if not result.body:
