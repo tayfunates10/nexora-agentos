@@ -284,9 +284,7 @@ async def disconnect_integration(
     await repository(request).disconnect(
         principal, workspace_id, integration_id, request.state.request_id
     )
-    await ConnectorToolProvisioner(request.app.state.settings).disable(
-        workspace_id, integration_id
-    )
+    await ConnectorToolProvisioner(request.app.state.settings).disable(workspace_id, integration_id)
 
 
 @router.post(
