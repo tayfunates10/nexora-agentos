@@ -44,6 +44,62 @@
       "capability": "templates.read",
       "method": "GET",
       "path": "/v21.0/me"
+    },
+    {
+      "capability": "messages.send",
+      "method": "POST",
+      "path": "/v21.0/{phone_number_id}/messages",
+      "description": "Send one WhatsApp text message from the connected business number.",
+      "side_effect": "external_communication",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "messaging_product": {
+            "type": "string",
+            "enum": [
+              "whatsapp"
+            ]
+          },
+          "to": {
+            "type": "string",
+            "minLength": 6,
+            "maxLength": 32
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "text"
+            ]
+          },
+          "text": {
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": [
+              "body"
+            ],
+            "additionalProperties": false
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "messaging_product",
+          "to",
+          "type",
+          "text",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
     }
   ]
 }
