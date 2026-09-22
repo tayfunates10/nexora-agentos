@@ -4,7 +4,7 @@
   "category": "engineering",
   "icon": "code",
   "description": "GitHub REST API with a fine-grained token: issues, pull requests and repository activity for the repositories the token can reach.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "available",
   "auth": "bearer_token",
   "capabilities": [
