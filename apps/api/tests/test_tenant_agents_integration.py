@@ -46,16 +46,16 @@ def admin(client, keys):
 def standard_agent(client, admin, slug, version="1.0.0", **manifest):
     """A catalog agent whose required integration is one a test can actually connect."""
     create_catalog_agent(client, admin, "social-media", slug)
+    manifest.setdefault("required_integrations", ["mikro"])
+    manifest.setdefault("optional_integrations", ["erp"])
+    manifest.setdefault("required_tools", [])
+    manifest.setdefault("optional_tools", [])
     return publish_version(
         client,
         admin,
         "social-media",
         slug,
         version,
-        required_integrations=["mikro"],
-        optional_integrations=["erp"],
-        required_tools=[],
-        optional_tools=[],
         **manifest,
     )
 
@@ -120,6 +120,7 @@ def test_standard_agent_runs_directly_with_an_immutable_execution_snapshot(
         "1.0.0",
         system_instructions="Version one instructions.",
         model_policy={"primary": "balanced-v1"},
+        required_tools=["mikro.stock.read"],
     )
     integration = connect_api_key(client, owner, space, "mikro", SECRET).json()
     instance = install(
@@ -162,7 +163,25 @@ def test_standard_agent_runs_directly_with_an_immutable_execution_snapshot(
         assert snapshot["instructions"] == "Version one instructions."
         assert snapshot["model_profile"] == "balanced-v1"
         assert snapshot["bindings"]["mikro"]["tenant_integration_id"] == integration["id"]
+        assert snapshot["allowed_tools"] == ["mikro.stock.read"]
+        internal_name = snapshot["tool_aliases"]["mikro.stock.read"]
+        assert internal_name.startswith("connector.")
+        connector_tool = snapshot["connector_tools"]["mikro.stock.read"]
+        assert connector_tool["binding_key"] == "mikro"
+        assert connector_tool["tenant_integration_id"] == integration["id"]
+        assert connector_tool["definition_id"] == "mikro"
+        assert connector_tool["capability"] == "stock.read"
         assert SECRET not in json.dumps(snapshot)
+
+        governed = connection.execute(
+            """SELECT d.server_key,d.remote_name,d.side_effect,d.enabled,p.decision
+               FROM tool_definitions d
+               LEFT JOIN tool_policies p
+                 ON p.workspace_id=d.workspace_id AND p.tool_id=d.id
+               WHERE d.workspace_id=%s AND d.name=%s""",
+            (space, internal_name),
+        ).fetchone()
+        assert governed == ("connector", "mikro.stock.read", "read", True, "allow")
 
         payload = connection.execute(
             "SELECT payload FROM job_outbox WHERE run_id=%s", (run["id"],)
