@@ -22,11 +22,11 @@ from psycopg.types.json import Jsonb
 from nexora_api.agent_catalog import Channel
 from nexora_api.agent_catalog_repository import offered_version
 from nexora_api.agent_manifest import AgentManifest, Version
-from nexora_api.integration_manifest import ConnectorManifest
-from nexora_api.tool_contracts import validate_registration_schema
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
+from nexora_api.integration_manifest import ConnectorManifest
 from nexora_api.integrations import IntegrationStatus
+from nexora_api.tool_contracts import validate_registration_schema
 from nexora_api.tenant_agents import (
     AgentBinding,
     CatalogEntry,
