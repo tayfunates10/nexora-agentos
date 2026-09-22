@@ -29,7 +29,8 @@
       "timeout_seconds": 60,
       "max_context_chars": 100000,
       "allowed_server_keys": [
-        "connector"
+        "connector",
+        "browser"
       ]
     },
     "economical": {
@@ -46,7 +47,8 @@
       "timeout_seconds": 60,
       "max_context_chars": 100000,
       "allowed_server_keys": [
-        "connector"
+        "connector",
+        "browser"
       ]
     },
     "advanced": {
@@ -63,7 +65,8 @@
       "timeout_seconds": 90,
       "max_context_chars": 160000,
       "allowed_server_keys": [
-        "connector"
+        "connector",
+        "browser"
       ]
     }
   },
