@@ -337,6 +337,99 @@ def _list_events(api: Client, workspace_id: str, run_id: str) -> list[dict[str, 
     raise SmokeError("run event pagination exceeded safety bound")
 
 
+def _list_run_actions(api: Client, workspace_id: str, run_id: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    cursor: str | None = None
+    for _ in range(20):
+        query = "?limit=100" + (f"&cursor={cursor}" if cursor else "")
+        _, page = api.request_json(
+            "GET", f"/api/v1/workspaces/{workspace_id}/runs/{run_id}/actions{query}"
+        )
+        items.extend(page.get("items", []))
+        cursor = page.get("next_cursor")
+        if not cursor:
+            return items
+    raise SmokeError("run action pagination exceeded safety bound")
+
+
+def _list_run_tasks(api: Client, workspace_id: str, run_id: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    cursor: str | None = None
+    for _ in range(20):
+        query = "?limit=100" + (f"&cursor={cursor}" if cursor else "")
+        _, page = api.request_json(
+            "GET", f"/api/v1/workspaces/{workspace_id}/runs/{run_id}/tasks{query}"
+        )
+        items.extend(page.get("items", []))
+        cursor = page.get("next_cursor")
+        if not cursor:
+            return items
+    raise SmokeError("run task pagination exceeded safety bound")
+
+
+def validate_release_evidence(
+    actions: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    *,
+    expected_tools: tuple[str, ...],
+    require_task_graph: bool,
+    require_verified_task: bool,
+    expected_verified_action_tool: str | None,
+    forbid_external_mutations: bool,
+) -> dict[str, int]:
+    succeeded_tools = {
+        str(action.get("action_name"))
+        for action in actions
+        if action.get("status") == "succeeded"
+    }
+    missing_tools = sorted(set(expected_tools) - succeeded_tools)
+    if missing_tools:
+        raise SmokeError(
+            "expected tools did not complete successfully: " + ", ".join(missing_tools)
+        )
+
+    if forbid_external_mutations:
+        unsafe = [
+            str(action.get("action_name"))
+            for action in actions
+            if action.get("status") == "succeeded"
+            and action.get("side_effect") != "read"
+            and not str(action.get("action_name", "")).startswith("nexora.tasks.")
+        ]
+        if unsafe:
+            raise SmokeError(
+                "read-only release scenario performed external mutations: "
+                + ", ".join(sorted(unsafe))
+            )
+
+    follow_ups = [task for task in tasks if task.get("kind") == "follow_up"]
+    if require_task_graph and not follow_ups:
+        raise SmokeError("release scenario persisted no follow-up task")
+
+    verified = [
+        task
+        for task in follow_ups
+        if task.get("status") == "succeeded"
+        and task.get("verification_state") == "verified"
+        and any(evidence.get("satisfied") is True for evidence in task.get("evidence", []))
+    ]
+    if expected_verified_action_tool:
+        verified = [
+            task
+            for task in verified
+            if task.get("action_tool_name") == expected_verified_action_tool
+        ]
+    if require_verified_task and not verified:
+        raise SmokeError("release scenario persisted no verified completed follow-up task")
+
+    return {
+        "action_count": len(actions),
+        "task_count": len(tasks),
+        "follow_up_count": len(follow_ups),
+        "verified_task_count": len(verified),
+    }
+
+
 def _find_pending_approval(
     api: Client, workspace_id: str, run_id: str, approval_tool: str
 ) -> dict[str, Any] | None:
