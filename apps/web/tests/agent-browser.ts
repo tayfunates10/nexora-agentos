@@ -89,7 +89,9 @@ export async function checkAgentRuns(
   await expect(page.getByText("Two incidents were recorded this week.")).toBeVisible();
   await expect(page.getByText(t("runEvent.model.completed"))).toBeVisible();
   await expect(page.getByRole("heading", { name: t("runDetail.actions.title") })).toBeVisible();
-  await expect(\n    page.getByRole("cell", { name: t("runDetail.actions.status.succeeded"), exact: true }),\n  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: t("runDetail.actions.status.succeeded"), exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("search_incidents").first()).toBeVisible();
   await expect(page.getByText(t("runDetail.result.selectionNotice", { tools: "search_incidents" }))).toBeVisible();
 
