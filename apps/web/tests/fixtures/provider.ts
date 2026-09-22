@@ -5,7 +5,7 @@ import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
 import type { AddressInfo } from "node:net";
 import type { Agent, RunEvent, RunResult } from "../../lib/agent-contracts.ts";
 import type { Ingestion, KnowledgeSource } from "../../lib/knowledge-contracts.ts";
-import type { Tool, ToolApproval } from "../../lib/tool-contracts.ts";
+import type { RunAction, Tool, ToolApproval } from "../../lib/tool-contracts.ts";
 import type { EvalJudgeRun, EvalRun, EvalSuite } from "../../lib/evaluation-contracts.ts";
 import type { SpendRecord } from "../../lib/spend-contracts.ts";
 import type { IntegrationDefinition, TenantIntegration } from "../../lib/integration-contracts.ts";
@@ -27,6 +27,7 @@ export async function startProvider() {
   }>();
   const runEvents = new Map<string, RunEvent[]>();
   const runResults = new Map<string, RunResult>();
+  const runActions = new Map<string, RunAction[]>();
   const runIdempotency = new Map<string, string>();
   const sources = new Map<string, KnowledgeSource & { workspace_id: string }>();
   const ingestions = new Map<string, Ingestion>();
@@ -435,7 +436,7 @@ export async function startProvider() {
       }
 
       const runRoute = url.pathname.match(
-        /^\/api\/v1\/workspaces\/([^/]+)\/runs(?:\/([^/]+))?(\/events|\/result|\/cancel)?$/,
+        /^\/api\/v1\/workspaces\/([^/]+)\/runs(?:\/([^/]+))?(\/events|\/actions|\/result|\/cancel)?$/,
       );
       if (runRoute) {
         const [, workspaceId, runId, resource] = runRoute;
@@ -491,6 +492,9 @@ export async function startProvider() {
         if (!run || run.workspace_id !== workspaceId) return send({}, 404);
         if (resource === "/events") {
           return send({ items: runEvents.get(runId) ?? [], next_cursor: null });
+        }
+        if (resource === "/actions") {
+          return send({ items: runActions.get(runId) ?? [], next_cursor: null });
         }
         if (resource === "/result") {
           // Workspace admin never overrides the original requester on raw output.
@@ -814,7 +818,7 @@ export async function startProvider() {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  return { issuer, workspaces, agents, runs, runEvents, runResults, tools, approvals,
+  return { issuer, workspaces, agents, runs, runEvents, runResults, runActions, tools, approvals,
     integrations, connectors, catalogAgents, tenantAgents, agentHistory,
     sources, ingestions,
     evalSuites, evalRuns, evalJudgeRuns, spendRecords, budgets,
