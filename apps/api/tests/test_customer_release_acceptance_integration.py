@@ -5,10 +5,6 @@ from uuid import UUID
 
 import psycopg
 import pytest
-from fastapi.testclient import TestClient
-from pydantic import SecretStr
-from redis.asyncio import Redis
-
 from catalog_support import (
     create_catalog_agent,
     headers,
@@ -18,6 +14,9 @@ from catalog_support import (
     workspace,
 )
 from conftest import PLATFORM_ADMIN
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
+from redis.asyncio import Redis
 from test_executor import Adapter
 from test_tool_governance_integration import clear_unpublished_outbox
 
