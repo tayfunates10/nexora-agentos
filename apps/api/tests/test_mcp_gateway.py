@@ -88,7 +88,9 @@ class ContextAdapter:
     def __init__(self):
         self.calls = []
 
-    async def call_tool_for_context(self, execution_context, remote_name, arguments, timeout_seconds):
+    async def call_tool_for_context(
+        self, execution_context, remote_name, arguments, timeout_seconds
+    ):
         self.calls.append((execution_context, remote_name, arguments, timeout_seconds))
         return {"ok": True}
 
