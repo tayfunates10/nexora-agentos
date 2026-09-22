@@ -16,8 +16,8 @@ from fastapi import APIRouter, Depends, Header, Path, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nexora_api.agent_catalog import AgentStatus, Channel
-from nexora_api.agents import AgentRun
 from nexora_api.agent_manifest import SEMVER, SLUG, AgentManifest
+from nexora_api.agents import AgentRun
 from nexora_api.auth import Principal, authenticated
 from nexora_api.integrations import IntegrationStatus
 
