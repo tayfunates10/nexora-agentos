@@ -54,6 +54,7 @@ from nexora_api.integrations import (
     OAuthStartInput,
     TenantIntegration,
 )
+from nexora_api.tool_contracts import validate_registration_schema
 from nexora_api.secret_vault import (
     SealedSecret,
     SecretUnreadable,
@@ -132,6 +133,113 @@ class IntegrationRepository:
             credential_fields=[CredentialFieldView(**field) for field in row["credential_fields"]],
         )
 
+    @staticmethod
+    def _managed_tool_schema(method: str) -> dict:
+        properties: dict[str, object] = {
+            "query": {"type": "object", "additionalProperties": True},
+        }
+        if method == "GET":
+            return {
+                "type": "object",
+                "properties": properties,
+                "additionalProperties": False,
+            }
+        properties["idempotency_key"] = {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+        }
+        required = ["idempotency_key"]
+        if method == "POST":
+            properties["payload"] = {"type": "object", "additionalProperties": True}
+            required.append("payload")
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": False,
+        }
+
+    @staticmethod
+    def _managed_tool_side_effect(method: str, capability: str) -> str:
+        if method == "GET":
+            return "read"
+        if method == "DELETE":
+            return "destructive"
+        if any(
+            word in capability
+            for word in ("publish", "reply", "send", "deliver", "message")
+        ):
+            return "external_communication"
+        return "write"
+
+    async def _reconcile_existing_connector_tools(
+        self,
+        connection,
+        principal: Principal,
+        manifest: ConnectorManifest,
+    ) -> None:
+        """Expose newly executable endpoints to workspaces already using this connector."""
+        workspaces = await connection.execute(
+            """SELECT DISTINCT workspace_id
+               FROM tenant_integrations
+               WHERE integration_definition_id=%s AND status<>'disabled'""",
+            (manifest.id,),
+        )
+        workspace_ids = [row["workspace_id"] for row in await workspaces.fetchall()]
+        for endpoint in manifest.endpoints:
+            side_effect = self._managed_tool_side_effect(
+                endpoint.method, endpoint.capability
+            )
+            schema = self._managed_tool_schema(endpoint.method)
+            validate_registration_schema(schema, side_effect=side_effect)
+            tool_name = f"{manifest.id}.{endpoint.capability}"
+            for workspace_id in workspace_ids:
+                tool_result = await connection.execute(
+                    """INSERT INTO tool_definitions
+                       (id,workspace_id,name,server_key,remote_name,description,input_schema,
+                        output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
+                       VALUES (%s,%s,%s,'nexora-integrations',%s,%s,%s,NULL,%s,true,%s,%s)
+                       ON CONFLICT (workspace_id,name) DO UPDATE SET
+                         server_key='nexora-integrations',
+                         remote_name=EXCLUDED.remote_name,
+                         description=EXCLUDED.description,
+                         input_schema=EXCLUDED.input_schema,
+                         output_schema=NULL,
+                         side_effect=EXCLUDED.side_effect,
+                         enabled=true,
+                         updated_at=now()
+                       RETURNING id""",
+                    (
+                        uuid4(),
+                        workspace_id,
+                        tool_name,
+                        tool_name,
+                        f"Managed {manifest.name} capability: {endpoint.capability}",
+                        Jsonb(schema),
+                        side_effect,
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+                tool_id = (await tool_result.fetchone())["id"]
+                decision = "allow" if side_effect == "read" else "require_approval"
+                await connection.execute(
+                    """INSERT INTO tool_policies
+                       (workspace_id,tool_id,decision,reason,
+                        updated_by_issuer,updated_by_subject)
+                       VALUES (%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (workspace_id,tool_id) DO NOTHING""",
+                    (
+                        workspace_id,
+                        tool_id,
+                        decision,
+                        "Managed connector default policy",
+                        principal.issuer,
+                        principal.subject,
+                    ),
+                )
+
     async def publish_definition(
         self,
         principal: Principal,
@@ -186,6 +294,9 @@ class IntegrationRepository:
                     manifest.id,
                     Jsonb({"version": manifest.version, "status": manifest.status}),
                 ),
+            )
+            await self._reconcile_existing_connector_tools(
+                connection, principal, manifest
             )
             self._definitions[manifest.id] = manifest
             return self._definition_view(row)
