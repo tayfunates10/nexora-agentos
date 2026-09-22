@@ -31,6 +31,7 @@ from nexora_api.rag_pipeline import RagEmbeddingPipeline
 from nexora_api.rag_repository import RagRepository
 from nexora_api.runtime_config import RuntimeConfig, RuntimeConfigError, load_runtime_config
 from nexora_api.spend_alert_worker import SpendAlertNotifier, SpendAlertWebhook
+from nexora_api.tenant_agent_repository import TenantAgentRepository
 from nexora_api.worker import AgentWorker
 
 MAX_ERROR_BACKOFF_SECONDS = 30.0
@@ -210,6 +211,47 @@ def build_spend_alert_notifier(
     )
 
 
+class TenantAgentUpdateScheduler:
+    """Periodically advances instances that explicitly opted into automatic updates."""
+
+    def __init__(
+        self,
+        repository: TenantAgentRepository,
+        *,
+        interval_seconds: float = 60.0,
+        batch_size: int = 50,
+        clock=time.monotonic,
+    ):
+        if not 1.0 <= interval_seconds <= 3600.0:
+            raise ValueError("interval_seconds must be between 1 and 3600")
+        if not 1 <= batch_size <= 200:
+            raise ValueError("batch_size must be between 1 and 200")
+        self.repository = repository
+        self.interval_seconds = interval_seconds
+        self.batch_size = batch_size
+        self.clock = clock
+        self.cursor = None
+        self._next_run = 0.0
+
+    async def process_once(self) -> bool:
+        now = self.clock()
+        if now < self._next_run:
+            return False
+        updated, cursor = await self.repository.apply_automatic_updates(
+            limit=self.batch_size,
+            cursor=self.cursor,
+        )
+        self.cursor = cursor
+        # Drain the next page without an artificial minute between batches. Once a full
+        # sweep ends, wait before scanning from the beginning again.
+        self._next_run = now if cursor is not None else now + self.interval_seconds
+        return updated > 0 or cursor is not None
+
+
+def build_agent_update_scheduler(settings: Settings) -> TenantAgentUpdateScheduler:
+    return TenantAgentUpdateScheduler(TenantAgentRepository(settings))
+
+
 def build_worker(
     settings: Settings,
     config: RuntimeConfig,
@@ -300,6 +342,7 @@ class WorkerRuntime:
         knowledge_worker: KnowledgeIngestionWorker | None = None,
         evaluation_judge_worker: EvaluationJudgeWorker | None = None,
         spend_alert_notifier: SpendAlertNotifier | None = None,
+        agent_update_scheduler: TenantAgentUpdateScheduler | None = None,
         backoff_base_seconds: float = 2.0,
     ):
         if not 0 < backoff_base_seconds <= 60:
@@ -308,6 +351,7 @@ class WorkerRuntime:
         self.knowledge_worker = knowledge_worker
         self.evaluation_judge_worker = evaluation_judge_worker
         self.spend_alert_notifier = spend_alert_notifier
+        self.agent_update_scheduler = agent_update_scheduler
         self.settings = settings
         self._stop = asyncio.Event()
         self._idle = settings.worker_idle_sleep_seconds
@@ -348,6 +392,9 @@ class WorkerRuntime:
                 if self.spend_alert_notifier is not None:
                     alert_handled = await self.spend_alert_notifier.process_once()
                     handled = alert_handled or handled
+                if self.agent_update_scheduler is not None:
+                    update_handled = await self.agent_update_scheduler.process_once()
+                    handled = update_handled or handled
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

@@ -6,7 +6,11 @@ from test_health import StubProbe
 
 from nexora_api.config import Settings
 from nexora_api.worker_main import create_admin_app
-from nexora_api.worker_service import WorkerRuntime, close_provider_adapters
+from nexora_api.worker_service import (
+    TenantAgentUpdateScheduler,
+    WorkerRuntime,
+    close_provider_adapters,
+)
 
 TOKEN = "worker-scrape-token-long-enough-01"
 
@@ -53,6 +57,37 @@ class FakeAuxWorker:
         return self.result
 
 
+class FakeUpdateRepository:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+
+    async def apply_automatic_updates(self, *, limit, cursor):
+        self.calls.append((limit, cursor))
+        return self.results.pop(0)
+
+
+def test_automatic_agent_update_scheduler_drains_pages_then_waits():
+    clock = [10.0]
+    first_cursor = object()
+    repository = FakeUpdateRepository([(0, first_cursor), (1, None), (0, None)])
+    scheduler = TenantAgentUpdateScheduler(
+        repository, interval_seconds=60, batch_size=25, clock=lambda: clock[0]
+    )
+
+    assert asyncio.run(scheduler.process_once()) is True
+    # A remaining cursor is drained immediately rather than one page per minute.
+    assert asyncio.run(scheduler.process_once()) is True
+    assert repository.calls == [(25, None), (25, first_cursor)]
+
+    clock[0] = 69.0
+    assert asyncio.run(scheduler.process_once()) is False
+    assert len(repository.calls) == 2
+    clock[0] = 70.0
+    assert asyncio.run(scheduler.process_once()) is False
+    assert repository.calls[-1] == (25, None)
+
+
 def test_loop_services_evaluation_judge_jobs_between_agent_iterations():
     worker = FakeWorker([False])
     judge = FakeAuxWorker()
@@ -63,6 +98,17 @@ def test_loop_services_evaluation_judge_jobs_between_agent_iterations():
     assert iterations == 1
     assert worker.calls == 1
     assert judge.calls == 1
+
+
+def test_loop_services_automatic_agent_updates_between_agent_iterations():
+    worker = FakeWorker([False])
+    updater = FakeAuxWorker()
+    runtime = WorkerRuntime(worker, settings(), agent_update_scheduler=updater)
+
+    iterations = asyncio.run(runtime.run(max_iterations=1))
+
+    assert iterations == 1
+    assert updater.calls == 1
 
 
 def test_stop_request_ends_the_loop_between_jobs():

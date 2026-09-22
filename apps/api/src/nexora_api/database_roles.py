@@ -107,6 +107,7 @@ API_WRITES: Mapping[str, frozenset[str]] = {
 }
 
 WORKER_WRITES: Mapping[str, frozenset[str]] = {
+    "security_events": frozenset({"INSERT"}),
     "agent_runs": frozenset({"UPDATE"}),
     "agent_run_events": frozenset({"INSERT"}),
     "job_outbox": frozenset({"INSERT", "UPDATE"}),
@@ -126,6 +127,11 @@ WORKER_WRITES: Mapping[str, frozenset[str]] = {
     "workspace_spend_records": frozenset({"INSERT"}),
     "workspace_spend_alerts": frozenset({"INSERT"}),
     "workspace_spend_alert_outbox": frozenset({"INSERT", "UPDATE"}),
+    # Automatic agent updates are a worker-owned system workflow. It may move only the
+    # tenant pin and append its immutable version event; catalog, policy and credentials
+    # remain read-only to the worker identity.
+    "tenant_agents": frozenset({"UPDATE"}),
+    "tenant_agent_version_events": frozenset({"INSERT"}),
 }
 
 WRITE_PRIVILEGES = frozenset({"INSERT", "UPDATE", "DELETE"})
