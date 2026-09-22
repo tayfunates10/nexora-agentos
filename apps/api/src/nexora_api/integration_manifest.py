@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from nexora_api.tool_contracts import ToolContractError, validate_registration_schema
+
 SEMVER = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 SLUG = r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
 LABEL = r"^[a-z][a-z0-9_-]{1,39}$"
@@ -93,14 +95,38 @@ class CredentialPlacement(BaseModel):
         return self
 
 
+ConnectorSideEffect = Literal["read", "write", "destructive", "external_communication"]
+ConnectorRetryMode = Literal["safe", "idempotent", "never"]
+PARAMETER = r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$"
+
+
 class ConnectorEndpoint(BaseModel):
-    """One capability, expressed as a request the runtime knows how to make."""
+    """One capability, expressed as a bounded request the runtime knows how to make.
+
+    The model never chooses an arbitrary URL, query key or JSON field. The connector
+    maps a validated agent-facing input schema onto a fixed provider request. Mutating
+    calls must state their side-effect and retry semantics explicitly so governance can
+    make a deterministic approval/retry decision before network egress.
+    """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     capability: str = Field(max_length=100)
-    method: Literal["GET", "POST", "DELETE"] = "GET"
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
     path: str = Field(min_length=1, max_length=300)
+    side_effect: ConnectorSideEffect = "read"
+    retry: ConnectorRetryMode = "safe"
+    input_schema: dict[str, object] = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+    )
+    # provider parameter/body field -> agent-facing input property
+    query_map: dict[str, str] = Field(default_factory=dict, max_length=50)
+    body_map: dict[str, str] = Field(default_factory=dict, max_length=50)
+    idempotency_header: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9-]{0,63}$")
 
     @model_validator(mode="after")
     def _contained_path(self) -> Self:
@@ -109,6 +135,34 @@ class ConnectorEndpoint(BaseModel):
         # A path never escapes the connector's base URL, so no scheme, host or traversal.
         if not self.path.startswith("/") or "://" in self.path or ".." in self.path:
             raise ValueError("An endpoint path must be an absolute path under the base URL")
+        try:
+            validate_registration_schema(self.input_schema, side_effect=self.side_effect)
+        except ToolContractError as exc:
+            raise ValueError(f"invalid endpoint input_schema: {exc.code}") from None
+        properties = self.input_schema.get("properties", {})
+
+        mapped_inputs: list[str] = []
+        for mapping_name, mapping in (("query_map", self.query_map), ("body_map", self.body_map)):
+            for provider_name, input_name in mapping.items():
+                if not re.fullmatch(PARAMETER, provider_name):
+                    raise ValueError(f"{mapping_name} contains an invalid provider field")
+                if input_name not in properties:
+                    raise ValueError(f"{mapping_name} references unknown input field: {input_name}")
+                mapped_inputs.append(input_name)
+        if len(mapped_inputs) != len(set(mapped_inputs)):
+            raise ValueError("an endpoint input field may be mapped only once")
+        if self.method == "GET" and self.body_map:
+            raise ValueError("GET endpoints cannot declare a JSON body mapping")
+        if self.method != "GET" and "side_effect" not in self.model_fields_set:
+            raise ValueError("mutating HTTP methods must declare side_effect explicitly")
+        if self.side_effect == "read" and self.retry != "safe":
+            raise ValueError("read endpoints must use safe retry semantics")
+        if self.side_effect != "read" and self.retry == "safe":
+            raise ValueError("side-effecting endpoints cannot use safe retry semantics")
+        if self.retry == "idempotent" and not self.idempotency_header:
+            raise ValueError("idempotent retry requires idempotency_header")
+        if self.retry != "idempotent" and self.idempotency_header is not None:
+            raise ValueError("idempotency_header is only valid for idempotent retry")
         return self
 
 
