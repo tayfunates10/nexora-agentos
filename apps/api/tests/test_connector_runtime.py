@@ -1,7 +1,8 @@
 import json
+from pathlib import Path
 
 from nexora_api.connector_runtime import ConnectorRuntime
-from nexora_api.integration_manifest import define_integration
+from nexora_api.integration_manifest import define_integration, load_connector
 
 
 def mutation_endpoint(path="/repos/{owner}/{repo}/issues"):
@@ -80,9 +81,6 @@ def test_connector_config_resolves_path_without_exposing_config_to_body():
 
 
 def test_shipped_write_connectors_require_idempotency_and_are_not_read_effects():
-    from pathlib import Path
-    from nexora_api.integration_manifest import load_connector
-
     repository = Path(__file__).resolve().parents[3]
     expected = {
         "github": "issues.write",
