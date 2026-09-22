@@ -159,8 +159,17 @@ class ConnectorMcpAdapter:
 
         if not result.body:
             return {"ok": True, "status_code": result.status_code}
+        body = result.body
+        truncated = len(body.encode("utf-8")) > 48_000
+        if truncated:
+            body = body[:48_000]
         try:
-            data = json.loads(result.body)
+            data = body if truncated else json.loads(body)
         except json.JSONDecodeError:
-            data = result.body
-        return {"ok": True, "status_code": result.status_code, "data": data}
+            data = body
+        return {
+            "ok": True,
+            "status_code": result.status_code,
+            "data": data,
+            "truncated": truncated,
+        }
