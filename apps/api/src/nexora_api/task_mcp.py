@@ -1,4 +1,5 @@
 """Run-scoped internal task tools. They never perform an external customer action."""
+
 from typing import Any
 
 from nexora_api.config import Settings
@@ -12,9 +13,9 @@ class TaskMcpAdapter:
     def __init__(self, settings: Settings, repository: RunTaskRepository | None = None):
         self.repository = repository or RunTaskRepository(settings)
 
-    async def call_tool_for_context(self, context, remote_name: str,
-                                    arguments: dict[str, object],
-                                    timeout_seconds: float) -> Any:
+    async def call_tool_for_context(
+        self, context, remote_name: str, arguments: dict[str, object], timeout_seconds: float
+    ) -> Any:
         del timeout_seconds
         if context.agent_kind != "standard":
             raise McpAdapterError("task_standard_run_required", retryable=False)
