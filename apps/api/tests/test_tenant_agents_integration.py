@@ -171,6 +171,8 @@ def test_standard_agent_runs_directly_with_an_immutable_execution_snapshot(
         assert connector_tool["tenant_integration_id"] == integration["id"]
         assert connector_tool["definition_id"] == "mikro"
         assert connector_tool["capability"] == "stock.read"
+        assert len(connector_tool["config_fingerprint"]) == 64
+        assert connector_tool["credential_reference"] is not None
         assert SECRET not in json.dumps(snapshot)
 
         governed = connection.execute(
