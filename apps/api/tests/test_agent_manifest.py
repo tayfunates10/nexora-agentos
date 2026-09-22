@@ -306,3 +306,104 @@ def test_widening_a_rollout_never_drops_a_tenant_already_inside():
         for percentage in (5, 25, 50, 100)
     }
     assert reached[5] <= reached[25] <= reached[50] <= reached[100] == set(workspaces)
+
+
+
+def test_mutating_connector_endpoint_must_declare_its_side_effect():
+    with pytest.raises(ValueError, match="side_effect"):
+        define_integration(
+            id="writer",
+            name="Writer",
+            description="Writes records.",
+            category="custom",
+            icon="plug",
+            version="1.0.0",
+            auth="bearer_token",
+            capabilities=["records.create"],
+            credential_fields=[
+                {"key": "access_token", "label": "Token", "secret": True, "required": True}
+            ],
+            base_url="https://api.example.com",
+            credential_placement={"kind": "bearer_header", "value_field": "access_token"},
+            endpoints=[{"capability": "records.create", "method": "POST", "path": "/records"}],
+        )
+
+
+def test_side_effecting_connector_endpoint_requires_an_idempotency_argument():
+    with pytest.raises(ValueError, match="mutation_requires_idempotency_key"):
+        define_integration(
+            id="writer",
+            name="Writer",
+            description="Writes records.",
+            category="custom",
+            icon="plug",
+            version="1.0.0",
+            auth="bearer_token",
+            capabilities=["records.create"],
+            credential_fields=[
+                {"key": "access_token", "label": "Token", "secret": True, "required": True}
+            ],
+            base_url="https://api.example.com",
+            credential_placement={"kind": "bearer_header", "value_field": "access_token"},
+            endpoints=[
+                {
+                    "capability": "records.create",
+                    "method": "POST",
+                    "path": "/records",
+                    "side_effect": "write",
+                    "retry": "never",
+                    "input_schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "body_map": {"name": "name"},
+                }
+            ],
+        )
+
+
+def test_connector_request_mapping_can_only_use_declared_agent_inputs():
+    with pytest.raises(ValueError, match="unknown input field"):
+        define_integration(
+            id="reader",
+            name="Reader",
+            description="Reads records.",
+            category="custom",
+            icon="plug",
+            version="1.0.0",
+            auth="bearer_token",
+            capabilities=["records.read"],
+            credential_fields=[
+                {"key": "access_token", "label": "Token", "secret": True, "required": True}
+            ],
+            base_url="https://api.example.com",
+            credential_placement={"kind": "bearer_header", "value_field": "access_token"},
+            endpoints=[
+                {
+                    "capability": "records.read",
+                    "method": "GET",
+                    "path": "/records",
+                    "input_schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {"limit": {"type": "integer", "minimum": 1}},
+                    },
+                    "query_map": {"pageSize": "missing"},
+                }
+            ],
+        )
+
+
+def test_wordpress_create_is_an_explicit_governed_external_action():
+    connector = load_connector(
+        json.loads((REPOSITORY / "connectors/wordpress/connector.json").read_text())
+    )
+    endpoint = connector.endpoint_for("posts.create")
+    assert endpoint is not None
+    assert endpoint.method == "POST"
+    assert endpoint.side_effect == "external_communication"
+    assert endpoint.retry == "never"
+    assert "idempotency_key" in endpoint.input_schema["required"]
+    assert endpoint.body_map == {"title": "title", "content": "content", "status": "status"}
