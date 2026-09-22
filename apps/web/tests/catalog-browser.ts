@@ -160,7 +160,7 @@ export async function checkCatalogAndIntegrations(
   await expect(page.getByText(t("integrations.status.disabled"))).toBeVisible();
   // An agent is never left claiming it can run against a switched-off connection.
   await page.goto(`${detailUrl}/catalog/${instance.id}`);
-  await expect(page.getByText(t("catalog.notReady", { count: "1" }))).toBeVisible();
+  await expect(page.getByText(t("catalog.notReady", { count: "1" })).first()).toBeVisible();
   await expect(page.getByText(t("catalog.instanceStatus.paused"))).toBeVisible();
 
   await page.goto(detailUrl + "/integrations");
