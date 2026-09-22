@@ -78,6 +78,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --check infra/browser/server.mjs
+      - run: node --test infra/browser/policy.test.mjs
       - run: npm run typecheck && npm run test:web && npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e --workspace @nexora/web
