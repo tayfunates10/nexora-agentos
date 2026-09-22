@@ -50,18 +50,20 @@ class Repository:
         return True
 
 
-def context():
-    return ExecutionContext(
-        job_id=uuid4(),
-        workspace_id=uuid4(),
-        run_id=uuid4(),
-        agent_id=uuid4(),
-        trace_id=uuid4(),
-        input_text="search",
-        instructions="use governed tools",
-        model_profile="default",
-        attempt_count=1,
-    )
+def context(**overrides):
+    fields = {
+        "job_id": uuid4(),
+        "workspace_id": uuid4(),
+        "run_id": uuid4(),
+        "agent_id": uuid4(),
+        "trace_id": uuid4(),
+        "input_text": "search",
+        "instructions": "use governed tools",
+        "model_profile": "default",
+        "attempt_count": 1,
+    }
+    fields.update(overrides)
+    return ExecutionContext(**fields)
 
 
 @pytest.mark.parametrize("retryable", [False, True])
@@ -97,11 +99,10 @@ class ContextAdapter:
 
 
 def test_standard_agent_alias_is_governed_then_executed_with_run_context():
-    execution_context = context()
-    execution_context.agent_kind = "standard"
-    execution_context.tool_aliases = {
-        "mikro.stock.read": "connector.0123456789abcdef",
-    }
+    execution_context = context(
+        agent_kind="standard",
+        tool_aliases={"mikro.stock.read": "connector.0123456789abcdef"},
+    )
     adapter = ContextAdapter()
     gateway = McpGateway(Settings(), context_adapters={"connector": adapter})
     repository = Repository(server_key="connector", remote_name="mikro.stock.read")
