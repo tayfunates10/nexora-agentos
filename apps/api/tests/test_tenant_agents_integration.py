@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from types import SimpleNamespace
+from uuid import UUID
 
 import psycopg
 import pytest
@@ -289,8 +290,8 @@ def test_rebinding_after_queue_fails_closed_before_connector_egress(
         ).fetchone()[0]
 
     context = SimpleNamespace(
-        workspace_id=space,
-        agent_id=instance["id"],
+        workspace_id=UUID(space),
+        agent_id=UUID(instance["id"]),
         agent_kind="standard",
         agent_snapshot=snapshot,
     )
