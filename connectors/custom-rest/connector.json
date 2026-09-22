@@ -63,7 +63,8 @@
           "idempotency_key"
         ],
         "additionalProperties": false
-      }
+      },
+      "retry": "never"
     }
   ]
 }
