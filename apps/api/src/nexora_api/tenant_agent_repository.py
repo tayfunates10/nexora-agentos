@@ -22,6 +22,8 @@ from psycopg.types.json import Jsonb
 from nexora_api.agent_catalog import Channel
 from nexora_api.agent_catalog_repository import offered_version
 from nexora_api.agent_manifest import AgentManifest, Version
+from nexora_api.integration_manifest import ConnectorManifest
+from nexora_api.tool_contracts import validate_registration_schema
 from nexora_api.auth import Principal
 from nexora_api.config import Settings
 from nexora_api.integrations import IntegrationStatus
@@ -262,6 +264,161 @@ class TenantAgentRepository:
                 )
             return summaries
 
+    @staticmethod
+    def _connector_tool_schema(method: str) -> dict:
+        common = {
+            "query": {"type": "object", "additionalProperties": True},
+        }
+        if method == "GET":
+            return {
+                "type": "object",
+                "properties": common,
+                "additionalProperties": False,
+            }
+        properties = {
+            **common,
+            "idempotency_key": {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 128,
+            },
+        }
+        required = ["idempotency_key"]
+        if method == "POST":
+            properties["payload"] = {"type": "object", "additionalProperties": True}
+            required.append("payload")
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": False,
+        }
+
+    async def _provision_binding_tools(
+        self,
+        connection,
+        principal: Principal,
+        workspace_id: UUID,
+        agent_id: UUID,
+        manifest: AgentManifest,
+        binding_key: str,
+    ) -> None:
+        """Materialize published connector capabilities as governed workspace tools."""
+        definition_result = await connection.execute(
+            "SELECT manifest FROM integration_definitions WHERE id=%s",
+            (binding_key,),
+        )
+        definition_row = await definition_result.fetchone()
+        if definition_row is None:
+            return
+        connector = ConnectorManifest.model_validate(definition_row["manifest"])
+        declared = [*manifest.required_tools, *manifest.optional_tools]
+        prefix = binding_key + "."
+        for tool_name in declared:
+            if not tool_name.startswith(prefix):
+                continue
+            capability = tool_name[len(prefix) :]
+            endpoint = connector.endpoint_for(capability)
+            if endpoint is None:
+                continue
+            side_effect = (
+                "read"
+                if endpoint.method == "GET"
+                else "destructive"
+                if endpoint.method == "DELETE"
+                else "external_communication"
+                if any(
+                    word in capability
+                    for word in ("publish", "reply", "send", "deliver", "message")
+                )
+                else "write"
+            )
+            schema = self._connector_tool_schema(endpoint.method)
+            validate_registration_schema(schema, side_effect=side_effect)
+            tool_result = await connection.execute(
+                """INSERT INTO tool_definitions
+                   (id,workspace_id,name,server_key,remote_name,description,input_schema,
+                    output_schema,side_effect,enabled,created_by_issuer,created_by_subject)
+                   VALUES (%s,%s,%s,'nexora-integrations',%s,%s,%s,NULL,%s,true,%s,%s)
+                   ON CONFLICT (workspace_id,name) DO UPDATE SET
+                     server_key='nexora-integrations',
+                     remote_name=EXCLUDED.remote_name,
+                     description=EXCLUDED.description,
+                     input_schema=EXCLUDED.input_schema,
+                     output_schema=NULL,
+                     side_effect=EXCLUDED.side_effect,
+                     enabled=true,
+                     updated_at=now()
+                   RETURNING id""",
+                (
+                    uuid4(),
+                    workspace_id,
+                    tool_name,
+                    tool_name,
+                    f"Managed {connector.name} capability: {capability}",
+                    Jsonb(schema),
+                    side_effect,
+                    principal.issuer,
+                    principal.subject,
+                ),
+            )
+            tool_id = (await tool_result.fetchone())["id"]
+            decision = "allow" if side_effect == "read" else "require_approval"
+            reason = (
+                "Published standard-agent read capability"
+                if side_effect == "read"
+                else "Published standard-agent mutation requires human approval"
+            )
+            await connection.execute(
+                """INSERT INTO tool_policies
+                   (workspace_id,tool_id,decision,reason,updated_by_issuer,updated_by_subject)
+                   VALUES (%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (workspace_id,tool_id) DO UPDATE SET
+                     decision=EXCLUDED.decision,
+                     reason=EXCLUDED.reason,
+                     updated_by_issuer=EXCLUDED.updated_by_issuer,
+                     updated_by_subject=EXCLUDED.updated_by_subject,
+                     updated_at=now()""",
+                (
+                    workspace_id,
+                    tool_id,
+                    decision,
+                    reason,
+                    principal.issuer,
+                    principal.subject,
+                ),
+            )
+
+    async def _sync_runtime_definition(
+        self,
+        connection,
+        workspace_id: UUID,
+        agent_id: UUID,
+        manifest: AgentManifest,
+    ) -> None:
+        """Keep the durable executor projection aligned with the installed catalog version."""
+        state = await connection.execute(
+            """SELECT display_name,instructions_override,catalog_agent_id,version_id
+               FROM tenant_agents WHERE id=%s AND workspace_id=%s""",
+            (agent_id, workspace_id),
+        )
+        row = await state.fetchone()
+        if row is None:
+            return
+        await connection.execute(
+            """UPDATE agent_definitions
+               SET name=%s,instructions=%s,origin_version_id=%s,manifest=%s
+               WHERE id=%s AND workspace_id=%s""",
+            (
+                row["display_name"],
+                row["instructions_override"] or manifest.system_instructions,
+                row["version_id"],
+                Jsonb(manifest.model_dump(mode="json")),
+                agent_id,
+                workspace_id,
+            ),
+        )
+
     # ------------------------------------------------------------------- installing
     async def _entitled_agent(self, connection, workspace_id: UUID, slug: str):
         result = await connection.execute(
@@ -320,9 +477,30 @@ class TenantAgentRepository:
                     409, "This workspace already has an instance with that name"
                 ) from None
 
+            await connection.execute(
+                """INSERT INTO agent_definitions
+                   (id,workspace_id,name,instructions,model_profile,created_by_issuer,
+                    created_by_subject,origin_catalog_agent_id,origin_version_id,manifest)
+                   VALUES (%s,%s,%s,%s,'default',%s,%s,%s,%s,%s)""",
+                (
+                    agent_id,
+                    workspace_id,
+                    body.display_name or agent["name"],
+                    manifest.system_instructions,
+                    principal.issuer,
+                    principal.subject,
+                    agent["id"],
+                    version_id,
+                    Jsonb(manifest.model_dump(mode="json")),
+                ),
+            )
+
             for key, integration_id in body.bindings.items():
                 await self._write_binding(
                     connection, workspace_id, agent_id, manifest, key, integration_id
+                )
+                await self._provision_binding_tools(
+                    connection, principal, workspace_id, agent_id, manifest, key
                 )
             if body.bindings:
                 await self.workspaces.audit(
@@ -469,6 +647,9 @@ class TenantAgentRepository:
             await self._write_binding(
                 connection, workspace_id, agent_id, manifest, binding_key, integration_id
             )
+            await self._provision_binding_tools(
+                connection, principal, workspace_id, agent_id, manifest, binding_key
+            )
             await self._settle_status(connection, workspace_id, agent_id, manifest)
             await self.workspaces.audit(
                 connection, principal, workspace_id, "agent.binding_changed", request_id
@@ -537,6 +718,9 @@ class TenantAgentRepository:
                 f"""UPDATE tenant_agents SET {assignments},updated_at=now()
                     WHERE id=%s AND workspace_id=%s""",
                 (*changes.values(), agent_id, workspace_id),
+            )
+            await self._sync_runtime_definition(
+                connection, workspace_id, agent_id, manifest
             )
             await self.workspaces.audit(
                 connection, principal, workspace_id, "agent.settings_changed", request_id
@@ -690,6 +874,8 @@ class TenantAgentRepository:
                WHERE id=%s AND workspace_id=%s""",
             (to_version_id, agent_id, workspace_id),
         )
+        manifest = await self._manifest(connection, to_version_id)
+        await self._sync_runtime_definition(connection, workspace_id, agent_id, manifest)
         await self._record_version(
             connection,
             principal,
