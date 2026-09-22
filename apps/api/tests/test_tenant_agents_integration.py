@@ -338,13 +338,16 @@ def test_standard_agent_browser_tools_freeze_origin_and_gate_ui_mutation(
             "required": ["site_url"],
         },
     )
-    instance = install(
-        client,
-        owner,
-        space,
-        slug,
-        settings={"site_url": "https://example.com/start"},
-    ).json()
+    installed = install(client, owner, space, slug)
+    assert installed.status_code == 201, installed.text
+    instance = installed.json()
+    configured = client.patch(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}",
+        json={"settings": {"site_url": "https://example.com/start"}},
+        headers=owner,
+    )
+    assert configured.status_code == 200, configured.text
+
     created = client.post(
         f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
         json={"input": "Inspect the configured site and prepare a bounded change."},
