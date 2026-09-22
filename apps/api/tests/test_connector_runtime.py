@@ -26,6 +26,7 @@ def mutation_endpoint(path="/repos/{owner}/{repo}/issues"):
                 "method": "POST",
                 "path": path,
                 "side_effect": "write",
+                "retry": "never",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -96,4 +97,48 @@ def test_shipped_write_connectors_require_idempotency_and_are_not_read_effects()
         endpoint = load_connector(document).endpoint_for(capability)
         assert endpoint is not None
         assert endpoint.side_effect != "read"
+        assert endpoint.retry == "never"
         assert "idempotency_key" in endpoint.input_schema["required"]
+
+
+
+def test_side_effecting_endpoint_cannot_use_safe_retry():
+    document = {
+        "id": "writer",
+        "name": "Writer",
+        "description": "Writer connector.",
+        "category": "custom",
+        "icon": "plug",
+        "version": "1.0.0",
+        "auth": "bearer_token",
+        "capabilities": ["records.write"],
+        "credential_fields": [
+            {"key": "access_token", "label": "Token", "secret": True, "required": True}
+        ],
+        "base_url": "https://api.example.com",
+        "credential_placement": {"kind": "bearer_header", "value_field": "access_token"},
+        "endpoints": [
+            {
+                "capability": "records.write",
+                "method": "POST",
+                "path": "/records",
+                "side_effect": "write",
+                "retry": "safe",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "idempotency_key": {"type": "string", "minLength": 8},
+                    },
+                    "required": ["idempotency_key"],
+                    "additionalProperties": False,
+                },
+            }
+        ],
+    }
+
+    try:
+        load_connector(document)
+    except ValueError as exc:
+        assert "safe retries" in str(exc)
+    else:
+        raise AssertionError("unsafe mutation retry contract was accepted")
