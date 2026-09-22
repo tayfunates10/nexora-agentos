@@ -16,6 +16,9 @@ import { currentSession } from "../../../../../lib/server/session";
 import { consoleChrome } from "../../../../../lib/server/chrome";
 import { workspaceSchema } from "../../../../../lib/workspace-contracts";
 import {
+  approvalStatusKey, runActionPageSchema, runActionStatusKey, sideEffectKey,
+} from "../../../../../lib/tool-contracts";
+import {
   formatDuration, formatNumber, formatTimestamp,
 } from "../../../../../lib/i18n/format.ts";
 import { ConsoleBreadcrumb, ConsoleShell } from "../../../../../components/shell/ConsoleShell.tsx";
@@ -63,6 +66,7 @@ export default async function RunDetail({ params, searchParams }: {
     const { ui } = chrome;
     const run = await api(session, base, runSchema);
     const events = await api(session, base + "/events?limit=100", runEventPageSchema);
+    const actions = await api(session, base + "/actions?limit=100", runActionPageSchema);
     const terminal = TERMINAL_STATUSES.includes(run.status);
 
     let result: ResultState = { kind: "pending" };
@@ -147,6 +151,44 @@ export default async function RunDetail({ params, searchParams }: {
         {!terminal && run.cancel_requested_at !== null
           && <Hint>{ui.t("runDetail.cancelPending")}</Hint>}
       </Panel>
+
+      <SectionHead title={ui.t("runDetail.actions.title")}/>
+      {actions.items.length === 0
+        ? <EmptyState title={ui.t("runDetail.actions.emptyTitle")}>
+          <p>{ui.t("runDetail.actions.emptyBody")}</p>
+        </EmptyState>
+        : <div className="table-scroll">
+          <table className="table">
+            <thead><tr>
+              <th scope="col">{ui.t("runDetail.actions.name")}</th>
+              <th scope="col">{ui.t("runDetail.actions.status")}</th>
+              <th scope="col">{ui.t("runDetail.actions.effect")}</th>
+              <th scope="col">{ui.t("runDetail.actions.attempts")}</th>
+              <th scope="col">{ui.t("runDetail.actions.approval")}</th>
+              <th scope="col">{ui.t("runDetail.actions.error")}</th>
+            </tr></thead>
+            <tbody>{actions.items.map(action => <tr key={action.id}>
+              <td data-label={ui.t("runDetail.actions.name")}><code>{action.action_name}</code></td>
+              <td data-label={ui.t("runDetail.actions.status")}>
+                {ui.t(runActionStatusKey(action.status))}
+              </td>
+              <td data-label={ui.t("runDetail.actions.effect")}>
+                {ui.t(sideEffectKey(action.side_effect))}
+              </td>
+              <td data-label={ui.t("runDetail.actions.attempts")}>
+                {formatNumber(action.attempt_count, ui.locale)}
+              </td>
+              <td data-label={ui.t("runDetail.actions.approval")}>
+                {action.approval_status
+                  ? ui.t(approvalStatusKey(action.approval_status))
+                  : ui.t("common.empty")}
+              </td>
+              <td data-label={ui.t("runDetail.actions.error")}>
+                {action.error_code ? <code>{action.error_code}</code> : ui.t("common.empty")}
+              </td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
 
       <SectionHead id="run-result-title" title={ui.t("runDetail.resultTitle")}/>
       {result.kind !== "result" && <EmptyState title={ui.t(
