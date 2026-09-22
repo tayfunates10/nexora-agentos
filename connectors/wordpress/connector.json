@@ -4,7 +4,7 @@
   "category": "content",
   "icon": "document",
   "description": "WordPress REST API with application passwords: read, draft and publish posts and pages on a self-hosted or managed site.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "available",
   "auth": "basic",
   "capabilities": [
@@ -54,6 +54,52 @@
       "capability": "pages.read",
       "method": "GET",
       "path": "/wp-json/wp/v2/pages"
+    },
+    {
+      "capability": "posts.create",
+      "method": "POST",
+      "path": "/wp-json/wp/v2/posts",
+      "side_effect": "external_communication",
+      "retry": "never",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "publish"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "title",
+          "content",
+          "status",
+          "idempotency_key"
+        ]
+      },
+      "body_map": {
+        "title": "title",
+        "content": "content",
+        "status": "status"
+      }
     }
   ]
 }
