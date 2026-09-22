@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -18,8 +19,10 @@ from catalog_support import (
 from conftest import PLATFORM_ADMIN
 from fastapi.testclient import TestClient
 
+from nexora_api.connector_mcp import ConnectorMcpAdapter
 from nexora_api.main import create_app
 from nexora_api.migrate import migrate
+from nexora_api.mcp_gateway import McpAdapterError
 
 pytestmark = [
     pytest.mark.integration,
@@ -227,6 +230,84 @@ def test_standard_agent_runs_directly_with_an_immutable_execution_snapshot(
         assert snapshot["model_profile"] == "balanced-v1"
 
 
+
+
+def test_rebinding_after_queue_fails_closed_before_connector_egress(
+    client, admin, keys, platform_settings
+):
+    owner = headers(keys, "owner-stale-binding")
+    space = workspace(client, owner, "Stale binding")
+    slug = unique_slug("stale-binding-agent")
+    standard_agent(
+        client,
+        admin,
+        slug,
+        required_tools=["mikro.stock.read"],
+    )
+    first = connect_api_key(
+        client,
+        owner,
+        space,
+        "mikro",
+        "stale-binding-key-0001",
+        display_name="Original account",
+        account_identifier="original",
+    ).json()
+    second = connect_api_key(
+        client,
+        owner,
+        space,
+        "mikro",
+        "stale-binding-key-0002",
+        display_name="Replacement account",
+        account_identifier="replacement",
+    ).json()
+    instance = install(
+        client,
+        owner,
+        space,
+        slug,
+        bindings={"mikro": first["id"]},
+    ).json()
+    created = client.post(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/runs",
+        json={"input": "Read the original account."},
+        headers={**owner, "Idempotency-Key": "stale-binding-run-0001"},
+    )
+    assert created.status_code == 201, created.text
+
+    rebound = client.put(
+        f"/api/v1/workspaces/{space}/tenant-agents/{instance['id']}/bindings/mikro",
+        json={"tenant_integration_id": second["id"]},
+        headers=owner,
+    )
+    assert rebound.status_code == 200, rebound.text
+
+    with psycopg.connect(platform_settings.database_url.get_secret_value()) as connection:
+        snapshot = connection.execute(
+            "SELECT agent_snapshot FROM agent_runs WHERE id=%s", (created.json()["id"],)
+        ).fetchone()[0]
+
+    context = SimpleNamespace(
+        workspace_id=space,
+        agent_id=instance["id"],
+        agent_kind="standard",
+        agent_snapshot=snapshot,
+    )
+    adapter = ConnectorMcpAdapter(platform_settings)
+
+    async def exercise():
+        await adapter.call_tool_for_context(
+            context,
+            f"{first['id']}:stock.read",
+            {},
+            5.0,
+        )
+
+    with pytest.raises(McpAdapterError) as raised:
+        asyncio.run(exercise())
+    assert raised.value.code == "connector_binding_changed"
+    assert raised.value.retryable is False
 
 def test_standard_agent_browser_tools_freeze_origin_and_gate_ui_mutation(
     client, admin, keys, platform_settings
