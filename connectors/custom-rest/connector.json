@@ -37,6 +37,33 @@
       "capability": "request.read",
       "method": "GET",
       "path": "/"
+    },
+    {
+      "capability": "request.write",
+      "method": "POST",
+      "path": "/",
+      "description": "POST a validated JSON payload to the connected custom REST service.",
+      "side_effect": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "payload",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      }
     }
   ]
 }
