@@ -75,7 +75,11 @@ class ConnectorToolProvisioner:
                         f"{integration.id}:{endpoint.capability}",
                         endpoint.description,
                         Jsonb(endpoint.input_schema),
-                        Jsonb(endpoint.output_schema) if endpoint.output_schema is not None else None,
+                        (
+                            Jsonb(endpoint.output_schema)
+                            if endpoint.output_schema is not None
+                            else None
+                        ),
                         endpoint.side_effect,
                         principal.issuer,
                         principal.subject,
@@ -196,7 +200,11 @@ class ConnectorMcpAdapter:
 
         if not result.ok:
             code = "connector_" + (result.error_code or "provider_error")
-            retryable = result.error_code in {"timeout", "transport_error", "rate_limited"} or (result.status_code is not None and result.status_code >= 500)
+            retryable = result.error_code in {
+                "timeout",
+                "transport_error",
+                "rate_limited",
+            } or (result.status_code is not None and result.status_code >= 500)
             raise McpAdapterError(code, retryable=retryable)
 
         if not result.body:
