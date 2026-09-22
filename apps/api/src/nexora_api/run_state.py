@@ -206,11 +206,33 @@ class RunStateStore:
                 {"attempt": state["attempt_count"], "job_id": str(job.job_id)},
             )
             manifest = run["manifest"] if isinstance(run["manifest"], dict) else {}
+            integration_keys = {
+                key
+                for field in ("required_integrations", "optional_integrations")
+                for key in manifest.get(field, [])
+                if isinstance(key, str)
+            }
+            bound_keys: set[str] = set()
+            if integration_keys:
+                bindings = await connection.execute(
+                    """SELECT b.binding_key
+                       FROM agent_integration_bindings b
+                       JOIN tenant_integrations i
+                         ON i.id=b.tenant_integration_id AND i.workspace_id=b.workspace_id
+                       WHERE b.workspace_id=%s AND b.tenant_agent_id=%s
+                         AND i.status='connected'""",
+                    (run["workspace_id"], run["agent_id"]),
+                )
+                bound_keys = {row["binding_key"] for row in await bindings.fetchall()}
             declared_tools = frozenset(
                 tool
                 for key in ("required_tools", "optional_tools")
                 for tool in manifest.get(key, [])
                 if isinstance(tool, str)
+                and (
+                    tool.split(".", 1)[0] not in integration_keys
+                    or tool.split(".", 1)[0] in bound_keys
+                )
             )
             context = ExecutionContext(
                 job_id=job.job_id,
