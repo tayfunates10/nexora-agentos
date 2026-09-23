@@ -61,6 +61,7 @@ def test_operator_configuration_builds_routing_and_profiles(tmp_path):
     assert profile.allowed_tools == frozenset({"lookup"})
     assert profile.allowed_server_keys == frozenset()
     assert profile.max_steps == 4
+    assert profile.answer_cache_ttl_seconds == 0
     assert config.providers == frozenset({"openai"})
     assert config.model_capabilities("openai")["operator-model"] == candidate.capabilities
 
@@ -102,12 +103,30 @@ def test_operator_configuration_builds_routing_and_profiles(tmp_path):
                 }
             }
         },
+        {
+            "profiles": {
+                "default": {
+                    "allowed_workspaces": [WORKSPACE],
+                    "allowed_providers": ["openai"],
+                    "answer_cache_ttl_seconds": 2_592_001,
+                }
+            }
+        },
         {"model_candidates": [{"provider": "openai", "model": "m", "capabilities": []}]},
     ],
 )
 def test_unusable_configuration_is_refused(tmp_path, mutation):
     with pytest.raises(RuntimeConfigError):
         load_runtime_config(write(tmp_path, document(**mutation)))
+
+
+def test_answer_cache_ttl_is_operator_controlled(tmp_path):
+    configured = document()
+    configured["profiles"]["default"]["answer_cache_ttl_seconds"] = 86_400
+
+    config = load_runtime_config(write(tmp_path, configured))
+
+    assert config.execution_profiles()["default"].answer_cache_ttl_seconds == 86_400
 
 
 def test_credentials_cannot_be_declared_in_the_config_file(tmp_path):
