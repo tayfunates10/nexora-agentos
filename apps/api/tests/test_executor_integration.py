@@ -29,14 +29,10 @@ pytestmark = [
 ]
 
 
-def test_workspace_answer_cache_reuses_answer_without_second_provider_call(
-    keys, auth_settings
-):
+def test_workspace_answer_cache_reuses_answer_without_second_provider_call(keys, auth_settings):
     migrate(auth_settings)
     clear_unpublished_outbox(auth_settings)
-    client, headers, workspace_id, first_run_id = make_runtime(
-        keys, auth_settings, "answer-cache"
-    )
+    client, headers, workspace_id, first_run_id = make_runtime(keys, auth_settings, "answer-cache")
     base = f"/api/v1/workspaces/{workspace_id}"
     first_run = client.get(base + f"/runs/{first_run_id}", headers=headers()).json()
     second = client.post(
@@ -53,9 +49,7 @@ def test_workspace_answer_cache_reuses_answer_without_second_provider_call(
     provider = Adapter([response("Reusable workspace answer")])
     executor = DurableAgentExecutor(
         store=ExecutorStore(auth_settings),
-        router=ModelRouter(
-            [ModelCandidate("test", "test-model", frozenset(ModelCapability))]
-        ),
+        router=ModelRouter([ModelCandidate("test", "test-model", frozenset(ModelCapability))]),
         adapters={"test": provider},
         gateway=McpGateway(auth_settings),
         profiles={
@@ -81,12 +75,8 @@ def test_workspace_answer_cache_reuses_answer_without_second_provider_call(
         asyncio.run(execute())
         assert len(provider.requests) == 1
 
-        first_result = client.get(
-            base + f"/runs/{first_run_id}/result", headers=headers()
-        ).json()
-        second_result = client.get(
-            base + f"/runs/{second_run_id}/result", headers=headers()
-        ).json()
+        first_result = client.get(base + f"/runs/{first_run_id}/result", headers=headers()).json()
+        second_result = client.get(base + f"/runs/{second_run_id}/result", headers=headers()).json()
         assert first_result["output_text"] == "Reusable workspace answer"
         assert first_result["recorded_input_tokens"] == 10
         assert first_result["recorded_output_tokens"] == 1
