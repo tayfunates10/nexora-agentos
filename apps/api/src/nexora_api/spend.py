@@ -158,6 +158,10 @@ def run_retrieval_source_key(run_id: UUID) -> str:
     return f"agent-run:{run_id}:retrieval"
 
 
+def answer_cache_embedding_source_key(run_id: UUID) -> str:
+    return f"agent-run:{run_id}:answer-cache-embedding"
+
+
 def adhoc_retrieval_source_key(reference: UUID) -> str:
     """A retrieval that belongs to no durable run still has to be charged somewhere."""
     return f"retrieval:{reference}"

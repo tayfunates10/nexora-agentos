@@ -1,4 +1,5 @@
 import asyncio
+import math
 from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4
@@ -6,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from nexora_api import metrics
+from nexora_api.answer_cache import SemanticEmbedding
 from nexora_api.executor import DurableAgentExecutor, ExecutionProfile
 from nexora_api.executor_store import RunRetrievalSnapshot
 from nexora_api.mcp_gateway import ApprovalRequired
@@ -34,12 +36,24 @@ class Store:
         self.budget_allows = budget_allows
         self.budget_checks = 0
         self.answer_cache = {}
+        self.semantic_rows = []
         self.cache_lookups = 0
+        self.semantic_cache_lookups = 0
+        self.semantic_budget_checks = 0
+        self.semantic_spend_records = 0
 
     async def authorize_spend(self, context):
         self.budget_checks += 1
         if not self.budget_allows:
             raise ToolContractError("workspace_budget_exhausted")
+
+    async def authorize_semantic_cache_spend(self, context, spend):
+        self.semantic_budget_checks += 1
+        if not self.budget_allows:
+            raise SpendLimitExceeded()
+
+    async def record_semantic_cache_embedding(self, context, spend, input_tokens):
+        self.semantic_spend_records += 1
 
     async def check(self, context):
         self.checks += 1
@@ -67,6 +81,44 @@ class Store:
         self.steps[step] = cached
         return cached
 
+    async def restore_semantic_answer_cache(
+        self,
+        context,
+        step,
+        decision,
+        *,
+        scope_key,
+        embedding_model,
+        embedding_dimensions,
+        query_embedding,
+        similarity_threshold,
+    ):
+        self.semantic_cache_lookups += 1
+        best = None
+        best_similarity = -1.0
+        for row in self.semantic_rows:
+            if (
+                row["workspace_id"] != context.workspace_id
+                or row["agent_id"] != context.agent_id
+                or row["scope_key"] != scope_key
+                or row["provider"] != decision.candidate.provider
+                or row["model"] != decision.candidate.model
+                or row["embedding_model"] != embedding_model
+                or row["embedding_dimensions"] != embedding_dimensions
+            ):
+                continue
+            dot = sum(a * b for a, b in zip(row["embedding"], query_embedding, strict=True))
+            left = math.sqrt(sum(a * a for a in row["embedding"]))
+            right = math.sqrt(sum(b * b for b in query_embedding))
+            similarity = dot / (left * right)
+            if similarity > best_similarity:
+                best, best_similarity = row, similarity
+        if best is None or best_similarity < similarity_threshold:
+            return None
+        assert step not in self.steps
+        self.steps[step] = best["response"]
+        return best["response"]
+
     async def save(
         self,
         context,
@@ -76,6 +128,11 @@ class Store:
         *,
         cache_key=None,
         cache_ttl_seconds=0,
+        cache_scope_key=None,
+        normalized_question=None,
+        cache_embedding=None,
+        cache_embedding_model=None,
+        cache_embedding_dimensions=None,
     ):
         assert step not in self.steps
         self.steps[step] = response
@@ -83,6 +140,21 @@ class Store:
             self.answer_cache[(context.workspace_id, context.agent_id, cache_key)] = replace(
                 response, usage=ProviderUsage(0, 0)
             )
+            if cache_embedding is not None:
+                self.semantic_rows.append(
+                    {
+                        "workspace_id": context.workspace_id,
+                        "agent_id": context.agent_id,
+                        "scope_key": cache_scope_key,
+                        "provider": decision.candidate.provider,
+                        "model": decision.candidate.model,
+                        "embedding_model": cache_embedding_model,
+                        "embedding_dimensions": cache_embedding_dimensions,
+                        "embedding": cache_embedding,
+                        "response": replace(response, usage=ProviderUsage(0, 0)),
+                        "question": normalized_question,
+                    }
+                )
 
 
 class Adapter:
@@ -111,6 +183,26 @@ class Retriever:
         if self.error is not None:
             raise self.error
         return self.result
+
+
+class SemanticCache:
+    def __init__(self, vectors, error=None):
+        self.vectors = vectors
+        self.error = error
+        self.calls = []
+        self.config = SimpleNamespace(
+            model="semantic-model",
+            dimensions=3,
+            similarity_threshold=0.94,
+            timeout_seconds=5,
+            spend=None,
+        )
+
+    async def embed(self, text, *, request_id):
+        self.calls.append((text, request_id))
+        if self.error is not None:
+            raise self.error
+        return SemanticEmbedding(self.vectors[text], 3)
 
 
 class Gateway:
@@ -212,8 +304,8 @@ def test_workspace_answer_cache_reuses_normalized_question_without_provider_cost
     assert sample("nexora_answer_cache_events_total", outcome="stored") == stored_before + 2
 
 
-def test_answer_cache_is_not_used_when_tools_or_retrieval_can_change_the_answer():
-    executor, context, store, gateway, adapter = setup(
+def test_answer_cache_is_not_used_when_tools_can_change_the_answer():
+    executor, context, store, _, adapter = setup(
         [response("First"), response("Second")],
         answer_cache_ttl_seconds=3600,
     )
@@ -225,15 +317,105 @@ def test_answer_cache_is_not_used_when_tools_or_retrieval_can_change_the_answer(
     assert len(adapter.requests) == 2
     assert store.cache_lookups == 0
 
+
+def test_retrieval_cache_is_scoped_to_fresh_evidence():
     executor, context, store, gateway, adapter = setup(
-        [response("Retrieved")],
+        [response("From v1"), response("From v2")],
         answer_cache_ttl_seconds=3600,
     )
     gateway.tools = []
-    executor.retriever = Retriever(RagSearchResult((), 3))
+    first = RetrievedChunk(
+        id=uuid4(),
+        source_id=uuid4(),
+        source_key="handbook",
+        source_version="v1",
+        title="Handbook",
+        chunk_index=0,
+        start_offset=0,
+        end_offset=2,
+        content="v1",
+        metadata={},
+        score=0.9,
+    )
+    second = replace(first, id=uuid4(), source_version="v2", content="v2")
+    retriever = Retriever(RagSearchResult((first,), 3))
+    executor.retriever = retriever
+
     asyncio.run(executor.execute(context, not_cancelled))
-    assert store.answer_cache == {}
-    assert store.cache_lookups == 0
+    assert len(adapter.requests) == 1
+
+    store.steps.clear()
+    store.retrieval = None
+    retriever.result = RagSearchResult((second,), 3)
+    asyncio.run(executor.execute(replace(context, run_id=uuid4()), not_cancelled))
+
+    assert len(adapter.requests) == 2
+    assert store.steps[0].text == "From v2"
+
+
+def test_semantic_cache_reuses_paraphrase_and_remains_tenant_scoped():
+    executor, context, store, gateway, adapter = setup(
+        [response("Delivery takes two days."), response("Tenant two answer.")],
+        answer_cache_ttl_seconds=3600,
+    )
+    gateway.tools = []
+    context = replace(context, input_text="Kargo kaç günde gelir?")
+    cache = SemanticCache(
+        {
+            "kargo kaç günde gelir?": (1.0, 0.0, 0.0),
+            "sipariş teslim süresi nedir?": (0.99, 0.1, 0.0),
+        }
+    )
+    executor.semantic_cache = cache
+
+    asyncio.run(executor.execute(context, not_cancelled))
+    assert len(adapter.requests) == 1
+    assert len(store.semantic_rows) == 1
+
+    store.steps.clear()
+    paraphrase = replace(
+        context,
+        run_id=uuid4(),
+        input_text="Sipariş teslim süresi nedir?",
+    )
+    asyncio.run(executor.execute(paraphrase, not_cancelled))
+
+    assert len(adapter.requests) == 1
+    assert store.steps[0].text == "Delivery takes two days."
+    assert store.steps[0].usage == ProviderUsage(0, 0)
+    assert store.semantic_cache_lookups == 2
+    assert store.semantic_budget_checks == 2
+    assert store.semantic_spend_records == 2
+
+    other_workspace = uuid4()
+    executor.profiles["default"] = replace(
+        executor.profiles["default"],
+        allowed_workspaces=frozenset({context.workspace_id, other_workspace}),
+    )
+    store.steps.clear()
+    other_tenant = replace(paraphrase, workspace_id=other_workspace, run_id=uuid4())
+    asyncio.run(executor.execute(other_tenant, not_cancelled))
+
+    assert len(adapter.requests) == 2
+    assert store.steps[0].text == "Tenant two answer."
+
+
+def test_semantic_cache_provider_error_falls_back_to_model():
+    executor, context, store, gateway, adapter = setup(
+        [response("Fresh model answer")],
+        answer_cache_ttl_seconds=3600,
+    )
+    gateway.tools = []
+    executor.semantic_cache = SemanticCache(
+        {"input": (1.0, 0.0, 0.0)},
+        error=ProviderError("embedding_unavailable", retryable=True),
+    )
+
+    asyncio.run(executor.execute(context, not_cancelled))
+
+    assert len(adapter.requests) == 1
+    assert store.steps[0].text == "Fresh model answer"
+    assert len(store.answer_cache) == 1
 
 
 def test_retrieval_snapshot_is_reused_without_second_embedding_or_search():

@@ -77,6 +77,14 @@
     }
   },
   "mcp_servers": {},
+  "answer_cache_semantic": {
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "dimensions": 256,
+    "similarity_threshold": 0.94,
+    "timeout_seconds": 10,
+    "input_micros_per_million_tokens": 20000
+  },
   "retrieval": {
     "provider": "openai",
     "model": "text-embedding-3-small",

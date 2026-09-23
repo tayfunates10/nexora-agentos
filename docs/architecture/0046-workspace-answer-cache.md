@@ -1,6 +1,6 @@
 # ADR 0046: Tenant-scoped exact answer cache
 
-Status: implemented.
+Status: implemented. Extended by ADR 0047 for semantic matching and retrieval-context scoping.
 
 ## Context
 
@@ -24,13 +24,14 @@ up to 30 days.
 The executor only consults this cache for step zero when:
 
 - the selected profile enables caching;
-- retrieval is disabled for the worker;
 - the run has no advertised tools;
+- when retrieval is configured, its fresh evidence hash is included in the key;
 - the prior answer finished with `stop`, has non-empty text, has no tool calls, and has no
   structured output.
 
-This means browser, connector, task, MCP and RAG-backed runs always re-read their dynamic context.
-The cache is an optimization, never an authorization source.
+This means browser, connector, task and MCP runs remain uncached. RAG-backed runs always re-read
+their current evidence before any cached answer can be reused. The cache is an optimization, never
+an authorization source.
 
 On a cache hit Nexora writes a normal immutable `agent_model_steps` journal row so the run-result
 contract remains unchanged. That cached step records zero provider input/output tokens, no spend
@@ -61,8 +62,8 @@ existing durable-run guarantees.
 
 ## Verification
 
-Unit tests cover normalized repeat questions, zero-token cache hits, workspace separation and the
-rule that tool/retrieval-capable runs bypass the cache. PostgreSQL/Redis integration coverage proves
+Unit tests cover normalized repeat questions, zero-token cache hits, workspace separation, tool
+exclusion and retrieval-evidence invalidation. PostgreSQL/Redis integration coverage proves
 that a second durable run reuses the cached answer, records zero provider tokens and increments the
 tenant cache hit counter.
 

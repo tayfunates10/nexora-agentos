@@ -11,6 +11,8 @@ from test_executor import Adapter, response
 from test_tool_governance_integration import clear_unpublished_outbox
 from test_worker_integration import make_runtime
 
+from nexora_api.answer_cache import SemanticAnswerCache, SemanticAnswerCacheConfig
+from nexora_api.embeddings import EmbeddingBatch
 from nexora_api.execution_fence import executable_run
 from nexora_api.executor import DurableAgentExecutor, ExecutionProfile
 from nexora_api.executor_store import ExecutorStore
@@ -18,6 +20,7 @@ from nexora_api.mcp_gateway import McpGateway
 from nexora_api.migrate import migrate
 from nexora_api.model_routing import ModelCandidate, ModelCapability, ModelRouter
 from nexora_api.outbox import QUEUE_STREAM
+from nexora_api.spend import EmbeddingSpend, ModelPrice, answer_cache_embedding_source_key
 from nexora_api.tool_contracts import ToolContractError
 from nexora_api.worker import AgentWorker
 
@@ -27,6 +30,29 @@ pytestmark = [
         os.getenv("NEXORA_INTEGRATION") != "1", reason="Requires PostgreSQL and Redis"
     ),
 ]
+
+
+class SemanticEmbeddingAdapter:
+    name = "test-embeddings"
+
+    def __init__(self):
+        self.calls = []
+
+    async def embed(self, *, request_id, texts, model, dimensions, timeout_seconds):
+        self.calls.append((request_id, texts, model, dimensions, timeout_seconds))
+        vectors = {
+            "perform the durable test task.": (1.0, 0.0, 0.0),
+            "complete the same durable task for me.": (0.99, 0.1, 0.0),
+        }
+        return EmbeddingBatch(
+            vectors=tuple(vectors[text] for text in texts),
+            model=model,
+            dimensions=dimensions,
+            input_tokens=4,
+        )
+
+    async def cancel(self, request_id):
+        return None
 
 
 def test_workspace_answer_cache_reuses_answer_without_second_provider_call(keys, auth_settings):
@@ -105,6 +131,124 @@ def test_workspace_answer_cache_reuses_answer_without_second_provider_call(keys,
                 "input_tokens": 0,
                 "output_tokens": 0,
             }
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_semantic_answer_cache_reuses_paraphrase_with_pgvector(keys, auth_settings):
+    migrate(auth_settings)
+    clear_unpublished_outbox(auth_settings)
+    client, headers, workspace_id, first_run_id = make_runtime(
+        keys, auth_settings, "semantic-answer-cache"
+    )
+    base = f"/api/v1/workspaces/{workspace_id}"
+    first_run = client.get(base + f"/runs/{first_run_id}", headers=headers()).json()
+    second = client.post(
+        base + "/runs",
+        json={
+            "agent_id": first_run["agent_id"],
+            "input": "Complete the same durable task for me.",
+        },
+        headers=headers("semantic-answer-cache-second"),
+    )
+    assert second.status_code == 201, second.text
+    second_run_id = second.json()["id"]
+
+    provider = Adapter([response("Semantic reusable answer")])
+    embedding_adapter = SemanticEmbeddingAdapter()
+    semantic_cache = SemanticAnswerCache(
+        embedding_adapter,
+        SemanticAnswerCacheConfig(
+            model="semantic-test-model",
+            dimensions=3,
+            similarity_threshold=0.94,
+            timeout_seconds=5,
+            spend=EmbeddingSpend(
+                provider="test-embeddings",
+                model="semantic-test-model",
+                price=ModelPrice(
+                    input_micros_per_million_tokens=1_000_000,
+                    output_micros_per_million_tokens=0,
+                ),
+            ),
+        ),
+    )
+    executor = DurableAgentExecutor(
+        store=ExecutorStore(auth_settings),
+        router=ModelRouter([ModelCandidate("test", "test-model", frozenset(ModelCapability))]),
+        adapters={"test": provider},
+        gateway=McpGateway(auth_settings),
+        profiles={
+            "default": ExecutionProfile(
+                frozenset({UUID(workspace_id)}),
+                frozenset({"test"}),
+                answer_cache_ttl_seconds=3600,
+            )
+        },
+        semantic_cache=semantic_cache,
+    )
+
+    async def execute():
+        redis = Redis.from_url(auth_settings.redis_url.get_secret_value())
+        try:
+            await redis.delete(QUEUE_STREAM)
+            worker = AgentWorker(auth_settings, redis, executor)
+            assert await worker.process_once()
+            assert await worker.process_once()
+        finally:
+            await redis.aclose()
+
+    try:
+        asyncio.run(execute())
+        assert len(provider.requests) == 1
+        assert len(embedding_adapter.calls) == 2
+
+        second_result = client.get(base + f"/runs/{second_run_id}/result", headers=headers()).json()
+        assert second_result["output_text"] == "Semantic reusable answer"
+        assert second_result["recorded_input_tokens"] == 0
+        assert second_result["recorded_output_tokens"] == 0
+
+        with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+            cache = connection.execute(
+                """SELECT scope_key,normalized_question,embedding_model,
+                          embedding_dimensions,embedding IS NOT NULL,hit_count
+                   FROM workspace_answer_cache
+                   WHERE workspace_id=%s""",
+                (workspace_id,),
+            ).fetchone()
+            assert cache[0] is not None
+            assert cache[1] == "perform the durable test task."
+            assert cache[2] == "semantic-test-model"
+            assert cache[3] == 3
+            assert cache[4] is True
+            assert cache[5] == 1
+
+            cached_step = connection.execute(
+                """SELECT routing_reason,response
+                   FROM agent_model_steps WHERE run_id=%s AND step_no=0""",
+                (second_run_id,),
+            ).fetchone()
+            assert cached_step[0] == "workspace_semantic_answer_cache"
+            assert cached_step[1]["usage"] == {
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
+            spends = connection.execute(
+                """SELECT source_key,category,provider,model,input_tokens,cost_micros
+                   FROM workspace_spend_records
+                   WHERE workspace_id=%s AND category='embedding'
+                   ORDER BY occurred_at""",
+                (workspace_id,),
+            ).fetchall()
+            assert [row[0] for row in spends] == [
+                answer_cache_embedding_source_key(UUID(first_run_id)),
+                answer_cache_embedding_source_key(UUID(second_run_id)),
+            ]
+            assert all(row[1] == "embedding" for row in spends)
+            assert all(row[2] == "test-embeddings" for row in spends)
+            assert all(row[3] == "semantic-test-model" for row in spends)
+            assert all(row[4] == 4 for row in spends)
+            assert all(row[5] == 4 for row in spends)
     finally:
         client.__exit__(None, None, None)
 

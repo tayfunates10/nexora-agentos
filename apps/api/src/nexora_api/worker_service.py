@@ -15,6 +15,7 @@ import time
 import httpx
 from redis.asyncio import Redis
 
+from nexora_api.answer_cache import SemanticAnswerCache, SemanticAnswerCacheConfig
 from nexora_api.browser_mcp import BROWSER_SERVER_KEY, BrowserMcpAdapter
 from nexora_api.config import Settings
 from nexora_api.connector_mcp import CONNECTOR_SERVER_KEY, ConnectorMcpAdapter
@@ -131,6 +132,36 @@ def build_retriever(
         ann_enabled=retrieval.ann is not None,
         hnsw_ef_search=retrieval.ann.ef_search if retrieval.ann is not None else 100,
         spend=config.embedding_spend(),
+    )
+
+
+def build_semantic_answer_cache(
+    settings: Settings,
+    config: RuntimeConfig,
+    client: httpx.AsyncClient | None = None,
+) -> SemanticAnswerCache | None:
+    """Build semantic matching only when the operator explicitly configures it."""
+    semantic = config.answer_cache_semantic
+    if semantic is None:
+        return None
+    if settings.openai_api_key is None or not settings.openai_api_key.get_secret_value():
+        raise RuntimeConfigError(
+            "NEXORA_OPENAI_API_KEY is required by configured semantic answer cache"
+        )
+    adapter = OpenAIEmbeddingsAdapter(
+        api_key=settings.openai_api_key,
+        model_dimensions={semantic.model: frozenset({semantic.dimensions})},
+        client=client,
+    )
+    return SemanticAnswerCache(
+        adapter,
+        SemanticAnswerCacheConfig(
+            model=semantic.model,
+            dimensions=semantic.dimensions,
+            similarity_threshold=semantic.similarity_threshold,
+            timeout_seconds=semantic.timeout_seconds,
+            spend=config.semantic_cache_spend(),
+        ),
     )
 
 
@@ -263,6 +294,7 @@ def build_worker(
     adapters: dict[str, ProviderAdapter] | None = None,
     mcp_adapters: dict[str, McpToolAdapter] | None = None,
     retriever: RagEmbeddingPipeline | None = None,
+    semantic_cache: SemanticAnswerCache | None = None,
     worker_id: str | None = None,
 ) -> AgentWorker:
     resolved_mcp_adapters = dict(
@@ -281,6 +313,7 @@ def build_worker(
         gateway=McpGateway(settings, adapters=resolved_mcp_adapters),
         profiles=config.execution_profiles(),
         retriever=retriever,
+        semantic_cache=semantic_cache,
     )
     return AgentWorker(
         settings,
@@ -303,6 +336,18 @@ async def close_mcp_adapters(adapters: dict[str, McpToolAdapter]) -> None:
                 "MCP adapter close failed",
                 extra=log_context(server_key=server_key, outcome="ignored"),
             )
+
+
+async def close_semantic_answer_cache(cache: SemanticAnswerCache | None) -> None:
+    if cache is None:
+        return
+    try:
+        await cache.aclose()
+    except Exception:
+        service_log.warning(
+            "semantic answer cache close failed",
+            extra=log_context(outcome="ignored"),
+        )
 
 
 async def close_retriever(retriever: RagEmbeddingPipeline | None) -> None:

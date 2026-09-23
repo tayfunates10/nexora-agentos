@@ -170,6 +170,34 @@ class RetrievalConfig(BaseModel):
         )
 
 
+class AnswerCacheSemanticConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    provider: Literal["openai"] = "openai"
+    model: str = Field(min_length=1, max_length=128)
+    dimensions: int = Field(default=256, ge=1, le=4096)
+    similarity_threshold: float = Field(default=0.94, ge=0.80, le=0.999)
+    timeout_seconds: float = Field(default=10.0, ge=0.1, le=120)
+    # Embeddings are billed on input tokens only.
+    input_micros_per_million_tokens: int | None = Field(default=None, ge=0, le=MAX_PRICE_MICROS)
+
+    @property
+    def priced(self) -> bool:
+        return self.input_micros_per_million_tokens is not None
+
+    def spend(self) -> EmbeddingSpend | None:
+        if not self.priced:
+            return None
+        return EmbeddingSpend(
+            provider=self.provider,
+            model=self.model,
+            price=ModelPrice(
+                input_micros_per_million_tokens=self.input_micros_per_million_tokens,
+                output_micros_per_million_tokens=0,
+            ),
+        )
+
+
 class EvaluationJudgeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -272,6 +300,7 @@ class RuntimeConfig(BaseModel):
     model_candidates: list[ModelCandidateConfig] = Field(min_length=1, max_length=32)
     profiles: dict[str, ExecutionProfileConfig] = Field(min_length=1, max_length=16)
     retrieval: RetrievalConfig | None = None
+    answer_cache_semantic: AnswerCacheSemanticConfig | None = None
     evaluation_judge: EvaluationJudgeConfig | None = None
     spend_alert_webhook: SpendAlertWebhookConfig | None = None
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict, max_length=32)
@@ -302,6 +331,12 @@ class RuntimeConfig(BaseModel):
         # unpriced under a priced deployment would exempt them from every budget.
         if self.retrieval is not None and self.retrieval.priced != (True in priced):
             raise ValueError("retrieval embeddings must be priced exactly when models are priced")
+        if self.answer_cache_semantic is not None and self.answer_cache_semantic.priced != (
+            True in priced
+        ):
+            raise ValueError(
+                "semantic cache embeddings must be priced exactly when models are priced"
+            )
 
         configured = {candidate.provider for candidate in self.model_candidates}
         if self.evaluation_judge is not None:
@@ -341,6 +376,12 @@ class RuntimeConfig(BaseModel):
     def embedding_spend(self) -> EmbeddingSpend | None:
         """Pricing for configured retrieval embeddings, or None when accounting is off."""
         return self.retrieval.spend() if self.retrieval is not None else None
+
+    def semantic_cache_spend(self) -> EmbeddingSpend | None:
+        """Pricing for semantic-cache embeddings, or None when semantic caching is off."""
+        return (
+            self.answer_cache_semantic.spend() if self.answer_cache_semantic is not None else None
+        )
 
     def spend_policy(self) -> SpendPolicy | None:
         """Pricing for every configured model, or None when accounting is not enabled."""
