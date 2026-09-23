@@ -331,9 +331,8 @@ class RuntimeConfig(BaseModel):
         # unpriced under a priced deployment would exempt them from every budget.
         if self.retrieval is not None and self.retrieval.priced != (True in priced):
             raise ValueError("retrieval embeddings must be priced exactly when models are priced")
-        if (
-            self.answer_cache_semantic is not None
-            and self.answer_cache_semantic.priced != (True in priced)
+        if self.answer_cache_semantic is not None and self.answer_cache_semantic.priced != (
+            True in priced
         ):
             raise ValueError(
                 "semantic cache embeddings must be priced exactly when models are priced"
@@ -381,9 +380,7 @@ class RuntimeConfig(BaseModel):
     def semantic_cache_spend(self) -> EmbeddingSpend | None:
         """Pricing for semantic-cache embeddings, or None when semantic caching is off."""
         return (
-            self.answer_cache_semantic.spend()
-            if self.answer_cache_semantic is not None
-            else None
+            self.answer_cache_semantic.spend() if self.answer_cache_semantic is not None else None
         )
 
     def spend_policy(self) -> SpendPolicy | None:
