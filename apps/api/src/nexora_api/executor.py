@@ -1,6 +1,8 @@
 import asyncio
+import hashlib
 import json
 import time
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import UUID
@@ -35,6 +37,8 @@ class ExecutionProfile:
     max_total_tokens: int = 32000
     timeout_seconds: float = 60
     max_context_chars: int = 100000
+    # Exact-answer caching is opt-in per operator profile. Zero disables it.
+    answer_cache_ttl_seconds: int = 0
 
     def __post_init__(self):
         if not 1 <= self.max_steps <= 32:
@@ -47,6 +51,36 @@ class ExecutionProfile:
             raise ValueError("invalid timeout_seconds")
         if not 1000 <= self.max_context_chars <= 200000:
             raise ValueError("invalid max_context_chars")
+        if not 0 <= self.answer_cache_ttl_seconds <= 2_592_000:
+            raise ValueError("answer_cache_ttl_seconds must be between 0 and 2592000")
+
+
+def _answer_cache_key(context, decision) -> str:
+    # NFKC + whitespace folding + casefold treats harmless formatting/case changes
+    # as the same question without attempting semantic/paraphrase matching.
+    question = " ".join(unicodedata.normalize("NFKC", context.input_text).split()).casefold()
+    payload = {
+        "version": 1,
+        "workspace_id": str(context.workspace_id),
+        "agent_id": str(context.agent_id),
+        "agent_kind": context.agent_kind,
+        "model_profile": context.model_profile,
+        "provider": decision.candidate.provider,
+        "model": decision.candidate.model,
+        "instructions_sha256": hashlib.sha256(context.instructions.encode("utf-8")).hexdigest(),
+        "question": question,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _cacheable_response(response) -> bool:
+    return (
+        response.finish_reason == "stop"
+        and bool(response.text)
+        and not response.tool_calls
+        and response.structured_output is None
+    )
 
 
 class DurableAgentExecutor:
@@ -112,6 +146,11 @@ class DurableAgentExecutor:
         if len(tools) > 100 or len(advertised) > 32:
             raise TerminalExecutionError("tool_limit_exceeded")
         allowed_names = {tool.name for tool in advertised}
+        # Cached answers are deliberately conservative: no retrieval and no advertised
+        # tools. Dynamic knowledge and external systems must be read again on every run.
+        answer_cache_enabled = (
+            profile.answer_cache_ttl_seconds > 0 and self.retriever is None and not advertised
+        )
         messages = [
             ProviderMessage("system", context.instructions),
             ProviderMessage("user", context.input_text),
@@ -143,24 +182,50 @@ class DurableAgentExecutor:
                         allowed_providers=profile.allowed_providers,
                     )
                 )
-                adapter = self.adapters.get(decision.candidate.provider)
-                if adapter is None:
-                    raise TerminalExecutionError("provider_not_configured")
-                request = ProviderRequest(
-                    request_id=f"{context.run_id}:{step}:{context.attempt_count}",
-                    messages=tuple(messages),
-                    tools=advertised,
-                    max_output_tokens=min(
-                        profile.max_output_tokens, profile.max_total_tokens - total_tokens
-                    ),
-                )
-                # Budget is checked before egress, not after billing arrives.
-                await self.store.authorize_spend(context)
-                response = await self._observed_generate(
-                    adapter, decision, request, profile.timeout_seconds, context, step, is_cancelled
-                )
-                self._validate(response)
-                await self.store.save(context, step, decision, response)
+                cache_key = None
+                if step == 0 and answer_cache_enabled:
+                    cache_key = _answer_cache_key(context, decision)
+                    response = await self.store.restore_answer_cache(
+                        context, step, decision, cache_key
+                    )
+                    metrics.observe_answer_cache("hit" if response is not None else "miss")
+                if response is None:
+                    adapter = self.adapters.get(decision.candidate.provider)
+                    if adapter is None:
+                        raise TerminalExecutionError("provider_not_configured")
+                    request = ProviderRequest(
+                        request_id=f"{context.run_id}:{step}:{context.attempt_count}",
+                        messages=tuple(messages),
+                        tools=advertised,
+                        max_output_tokens=min(
+                            profile.max_output_tokens, profile.max_total_tokens - total_tokens
+                        ),
+                    )
+                    # Budget is checked before egress, not after billing arrives.
+                    await self.store.authorize_spend(context)
+                    response = await self._observed_generate(
+                        adapter,
+                        decision,
+                        request,
+                        profile.timeout_seconds,
+                        context,
+                        step,
+                        is_cancelled,
+                    )
+                    self._validate(response)
+                    cache_this_response = cache_key is not None and _cacheable_response(response)
+                    await self.store.save(
+                        context,
+                        step,
+                        decision,
+                        response,
+                        cache_key=cache_key if cache_this_response else None,
+                        cache_ttl_seconds=(
+                            profile.answer_cache_ttl_seconds if cache_this_response else 0
+                        ),
+                    )
+                    if cache_this_response:
+                        metrics.observe_answer_cache("stored")
             self._validate(response)
             total_tokens += response.usage.input_tokens + response.usage.output_tokens
             if total_tokens > profile.max_total_tokens:
