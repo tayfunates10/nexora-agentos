@@ -36,7 +36,9 @@ _JUDGE_CALL_OUTCOMES = frozenset({"success", "provider_error", "timeout", "inval
 _JUDGE_JOB_OUTCOMES = frozenset({"succeeded", "failed"})
 _SPEND_CATEGORIES = frozenset({"agent_run", "evaluation_judge", "embedding"})
 _ALERT_DELIVERY_OUTCOMES = frozenset({"delivered", "retry", "abandoned"})
-_ANSWER_CACHE_OUTCOMES = frozenset({"hit", "miss", "stored"})
+_ANSWER_CACHE_OUTCOMES = frozenset(
+    {"hit", "miss", "stored", "semantic_hit", "semantic_miss", "semantic_error"}
+)
 
 _LATENCY_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
 _RUN_BUCKETS = (0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0)
