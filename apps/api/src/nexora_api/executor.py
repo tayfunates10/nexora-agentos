@@ -211,9 +211,7 @@ class DurableAgentExecutor:
                 normalized_question = None
                 semantic_embedding = None
                 if step == 0 and answer_cache_enabled:
-                    cache_key = _answer_cache_key(
-                        context, decision, retrieval_context_hash
-                    )
+                    cache_key = _answer_cache_key(context, decision, retrieval_context_hash)
                     cache_scope_key = _answer_cache_scope_key(
                         context, decision, retrieval_context_hash
                     )
