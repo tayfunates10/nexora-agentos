@@ -36,6 +36,7 @@ _JUDGE_CALL_OUTCOMES = frozenset({"success", "provider_error", "timeout", "inval
 _JUDGE_JOB_OUTCOMES = frozenset({"succeeded", "failed"})
 _SPEND_CATEGORIES = frozenset({"agent_run", "evaluation_judge", "embedding"})
 _ALERT_DELIVERY_OUTCOMES = frozenset({"delivered", "retry", "abandoned"})
+_ANSWER_CACHE_OUTCOMES = frozenset({"hit", "miss", "stored"})
 
 _LATENCY_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
 _RUN_BUCKETS = (0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0)
@@ -125,6 +126,12 @@ model_tokens_total = Counter(
     "nexora_model_tokens_total",
     "Tokens reported by providers.",
     ("provider", "kind"),
+    registry=REGISTRY,
+)
+answer_cache_events_total = Counter(
+    "nexora_answer_cache_events_total",
+    "Tenant-scoped exact answer cache events.",
+    ("outcome",),
     registry=REGISTRY,
 )
 tool_calls_total = Counter(
@@ -273,6 +280,10 @@ def observe_model_call(
         model_tokens_total.labels(value, "input").inc(input_tokens)
     if output_tokens > 0:
         model_tokens_total.labels(value, "output").inc(output_tokens)
+
+
+def observe_answer_cache(outcome: str) -> None:
+    answer_cache_events_total.labels(_bounded(outcome, _ANSWER_CACHE_OUTCOMES)).inc()
 
 
 def observe_evaluation_judge_call(
