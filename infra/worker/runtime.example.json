@@ -28,6 +28,7 @@
       "max_total_tokens": 32000,
       "timeout_seconds": 60,
       "max_context_chars": 100000,
+      "answer_cache_ttl_seconds": 2592000,
       "allowed_server_keys": [
         "connector",
         "browser",
@@ -47,6 +48,7 @@
       "max_total_tokens": 64000,
       "timeout_seconds": 60,
       "max_context_chars": 100000,
+      "answer_cache_ttl_seconds": 2592000,
       "allowed_server_keys": [
         "connector",
         "browser",
@@ -66,6 +68,7 @@
       "max_total_tokens": 128000,
       "timeout_seconds": 90,
       "max_context_chars": 160000,
+      "answer_cache_ttl_seconds": 2592000,
       "allowed_server_keys": [
         "connector",
         "browser",
