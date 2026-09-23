@@ -32,11 +32,13 @@ from nexora_api.worker_service import (
     build_mcp_adapters,
     build_provider_adapters,
     build_retriever,
+    build_semantic_answer_cache,
     build_spend_alert_notifier,
     build_worker,
     close_mcp_adapters,
     close_provider_adapters,
     close_retriever,
+    close_semantic_answer_cache,
     close_spend_alert_notifier,
     load_worker_config,
 )
@@ -99,6 +101,7 @@ async def serve(settings: Settings) -> None:
     adapters = build_provider_adapters(settings, config)
     mcp_adapters = build_mcp_adapters(config)
     retriever = build_retriever(settings, config)
+    semantic_cache = build_semantic_answer_cache(settings, config)
     worker = build_worker(
         settings,
         config,
@@ -106,6 +109,7 @@ async def serve(settings: Settings) -> None:
         adapters=adapters,
         mcp_adapters=mcp_adapters,
         retriever=retriever,
+        semantic_cache=semantic_cache,
     )
     knowledge_worker = build_knowledge_worker(
         settings,
@@ -160,6 +164,7 @@ async def serve(settings: Settings) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait_for(admin_task, timeout=settings.worker_shutdown_grace_seconds)
         await close_retriever(retriever)
+        await close_semantic_answer_cache(semantic_cache)
         await close_spend_alert_notifier(spend_alert_notifier)
         await close_mcp_adapters(mcp_adapters)
         await close_provider_adapters(adapters)
