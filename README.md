@@ -108,6 +108,9 @@ Edit `infra/worker/runtime.json` and replace the placeholder workspace UUID in t
 profiles you intend to use. Also select a model your provider account can call and review the
 accounting prices.
 
+The example profiles also set `answer_cache_ttl_seconds` to 30 days. Set it to `0` to disable
+repeated-question caching for a profile.
+
 Add these values to `.env`:
 
 ```dotenv
@@ -304,6 +307,11 @@ generation and embeddings alike. Budget thresholds record an append-only alert t
 period reaches them, and a transactional outbox delivers each one to an operator-declared,
 signed webhook. The web console reports that spend per period and lets owners and admins set
 the cap and its thresholds.
+Safe repeated-question caching can now be enabled per worker profile with
+`answer_cache_ttl_seconds`. Cache entries are isolated by workspace and agent, and the key also
+tracks the current instructions, profile, provider and model. Only tool-free, retrieval-free
+terminal text answers are reusable; connector, browser, task, MCP and RAG-backed runs always read
+fresh context. A cache hit writes a normal run step with zero provider tokens and no model spend.
 The browser console now covers the operating workflow end to end: agents and durable runs with
 their event timeline and requester-scoped results, held tool calls decided by a human, tool
 contracts with their default-deny policy, and versioned knowledge sources with their access scope.
@@ -358,7 +366,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [staging deployment](docs/architecture/0042-staging-deployment.md), and
 [console design system and localisation](docs/architecture/0043-console-design-system-and-localisation.md), and
 [standard agents and the integration vault](docs/architecture/0044-standard-agents-and-integration-vault.md), and
-[customer autonomy release acceptance](docs/architecture/0045-customer-autonomy-release-acceptance.md).
+[customer autonomy release acceptance](docs/architecture/0045-customer-autonomy-release-acceptance.md), and
+[tenant-scoped answer cache](docs/architecture/0046-workspace-answer-cache.md).
 
 ## Run locally with Docker Compose
 
