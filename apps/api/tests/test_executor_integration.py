@@ -131,22 +131,6 @@ def test_workspace_answer_cache_reuses_answer_without_second_provider_call(keys,
                 "input_tokens": 0,
                 "output_tokens": 0,
             }
-            spends = connection.execute(
-                """SELECT source_key,category,provider,model,input_tokens,cost_micros
-                   FROM workspace_spend_records
-                   WHERE workspace_id=%s AND category='embedding'
-                   ORDER BY occurred_at""",
-                (workspace_id,),
-            ).fetchall()
-            assert [row[0] for row in spends] == [
-                answer_cache_embedding_source_key(UUID(first_run_id)),
-                answer_cache_embedding_source_key(UUID(second_run_id)),
-            ]
-            assert all(row[1] == "embedding" for row in spends)
-            assert all(row[2] == "test-embeddings" for row in spends)
-            assert all(row[3] == "semantic-test-model" for row in spends)
-            assert all(row[4] == 4 for row in spends)
-            assert all(row[5] == 4 for row in spends)
     finally:
         client.__exit__(None, None, None)
 
@@ -249,6 +233,22 @@ def test_semantic_answer_cache_reuses_paraphrase_with_pgvector(keys, auth_settin
                 "input_tokens": 0,
                 "output_tokens": 0,
             }
+            spends = connection.execute(
+                """SELECT source_key,category,provider,model,input_tokens,cost_micros
+                   FROM workspace_spend_records
+                   WHERE workspace_id=%s AND category='embedding'
+                   ORDER BY occurred_at""",
+                (workspace_id,),
+            ).fetchall()
+            assert [row[0] for row in spends] == [
+                answer_cache_embedding_source_key(UUID(first_run_id)),
+                answer_cache_embedding_source_key(UUID(second_run_id)),
+            ]
+            assert all(row[1] == "embedding" for row in spends)
+            assert all(row[2] == "test-embeddings" for row in spends)
+            assert all(row[3] == "semantic-test-model" for row in spends)
+            assert all(row[4] == 4 for row in spends)
+            assert all(row[5] == 4 for row in spends)
     finally:
         client.__exit__(None, None, None)
 
