@@ -33,6 +33,8 @@ class Store:
         self.retrieval = None
         self.budget_allows = budget_allows
         self.budget_checks = 0
+        self.answer_cache = {}
+        self.cache_lookups = 0
 
     async def authorize_spend(self, context):
         self.budget_checks += 1
@@ -56,9 +58,31 @@ class Store:
     async def load(self, context, step):
         return self.steps.get(step)
 
-    async def save(self, context, step, decision, response):
+    async def restore_answer_cache(self, context, step, decision, cache_key):
+        self.cache_lookups += 1
+        cached = self.answer_cache.get((context.workspace_id, context.agent_id, cache_key))
+        if cached is None:
+            return None
+        assert step not in self.steps
+        self.steps[step] = cached
+        return cached
+
+    async def save(
+        self,
+        context,
+        step,
+        decision,
+        response,
+        *,
+        cache_key=None,
+        cache_ttl_seconds=0,
+    ):
         assert step not in self.steps
         self.steps[step] = response
+        if cache_key is not None and cache_ttl_seconds > 0:
+            self.answer_cache[(context.workspace_id, context.agent_id, cache_key)] = replace(
+                response, usage=ProviderUsage(0, 0)
+            )
 
 
 class Adapter:
@@ -96,9 +120,12 @@ class Gateway:
         self.keys = []
         self.executions = 0
         self.results = {}
+        self.tools = [
+            SimpleNamespace(name="lookup", description="Lookup", input_schema={}, enabled=True)
+        ]
 
     async def list_tools(self, *args):
-        return [SimpleNamespace(name="lookup", description="Lookup", input_schema={}, enabled=True)]
+        return self.tools
 
     async def invoke(self, context, key, name, args, cancelled):
         self.keys.append(key)
@@ -142,6 +169,71 @@ def test_text_response_is_persisted_and_replayed():
     asyncio.run(executor.execute(context, not_cancelled))
     assert len(adapter.requests) == 1
     assert store.steps[0].text == "Done"
+
+
+def test_workspace_answer_cache_reuses_normalized_question_without_provider_cost():
+    executor, context, store, gateway, adapter = setup(
+        [response("Cached answer"), response("Other tenant answer")],
+        answer_cache_ttl_seconds=3600,
+    )
+    gateway.tools = []
+    misses_before = sample("nexora_answer_cache_events_total", outcome="miss")
+    hits_before = sample("nexora_answer_cache_events_total", outcome="hit")
+    stored_before = sample("nexora_answer_cache_events_total", outcome="stored")
+
+    asyncio.run(executor.execute(context, not_cancelled))
+    assert len(adapter.requests) == 1
+    assert store.budget_checks == 1
+    assert len(store.answer_cache) == 1
+
+    store.steps.clear()
+    repeated = replace(context, run_id=uuid4(), input_text="  INPUT   ")
+    asyncio.run(executor.execute(repeated, not_cancelled))
+    assert len(adapter.requests) == 1
+    assert store.budget_checks == 1
+    assert store.steps[0].text == "Cached answer"
+    assert store.steps[0].usage == ProviderUsage(0, 0)
+
+    other_workspace = uuid4()
+    profile = executor.profiles["default"]
+    executor.profiles["default"] = replace(
+        profile,
+        allowed_workspaces=frozenset({context.workspace_id, other_workspace}),
+    )
+    store.steps.clear()
+    other_tenant = replace(context, workspace_id=other_workspace, run_id=uuid4())
+    asyncio.run(executor.execute(other_tenant, not_cancelled))
+    assert len(adapter.requests) == 2
+    assert adapter.requests[-1].messages[-1].content == "Input"
+    assert store.steps[0].text == "Other tenant answer"
+
+    assert sample("nexora_answer_cache_events_total", outcome="miss") == misses_before + 2
+    assert sample("nexora_answer_cache_events_total", outcome="hit") == hits_before + 1
+    assert sample("nexora_answer_cache_events_total", outcome="stored") == stored_before + 2
+
+
+def test_answer_cache_is_not_used_when_tools_or_retrieval_can_change_the_answer():
+    executor, context, store, gateway, adapter = setup(
+        [response("First"), response("Second")],
+        answer_cache_ttl_seconds=3600,
+    )
+    asyncio.run(executor.execute(context, not_cancelled))
+    assert store.answer_cache == {}
+
+    store.steps.clear()
+    asyncio.run(executor.execute(replace(context, run_id=uuid4()), not_cancelled))
+    assert len(adapter.requests) == 2
+    assert store.cache_lookups == 0
+
+    executor, context, store, gateway, adapter = setup(
+        [response("Retrieved")],
+        answer_cache_ttl_seconds=3600,
+    )
+    gateway.tools = []
+    executor.retriever = Retriever(RagSearchResult((), 3))
+    asyncio.run(executor.execute(context, not_cancelled))
+    assert store.answer_cache == {}
+    assert store.cache_lookups == 0
 
 
 def test_retrieval_snapshot_is_reused_without_second_embedding_or_search():

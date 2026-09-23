@@ -29,6 +29,86 @@ pytestmark = [
 ]
 
 
+def test_workspace_answer_cache_reuses_answer_without_second_provider_call(keys, auth_settings):
+    migrate(auth_settings)
+    clear_unpublished_outbox(auth_settings)
+    client, headers, workspace_id, first_run_id = make_runtime(keys, auth_settings, "answer-cache")
+    base = f"/api/v1/workspaces/{workspace_id}"
+    first_run = client.get(base + f"/runs/{first_run_id}", headers=headers()).json()
+    second = client.post(
+        base + "/runs",
+        json={
+            "agent_id": first_run["agent_id"],
+            "input": "  PERFORM   THE DURABLE TEST TASK.  ",
+        },
+        headers=headers("answer-cache-second"),
+    )
+    assert second.status_code == 201, second.text
+    second_run_id = second.json()["id"]
+
+    provider = Adapter([response("Reusable workspace answer")])
+    executor = DurableAgentExecutor(
+        store=ExecutorStore(auth_settings),
+        router=ModelRouter([ModelCandidate("test", "test-model", frozenset(ModelCapability))]),
+        adapters={"test": provider},
+        gateway=McpGateway(auth_settings),
+        profiles={
+            "default": ExecutionProfile(
+                frozenset({UUID(workspace_id)}),
+                frozenset({"test"}),
+                answer_cache_ttl_seconds=3600,
+            )
+        },
+    )
+
+    async def execute():
+        redis = Redis.from_url(auth_settings.redis_url.get_secret_value())
+        try:
+            await redis.delete(QUEUE_STREAM)
+            worker = AgentWorker(auth_settings, redis, executor)
+            assert await worker.process_once()
+            assert await worker.process_once()
+        finally:
+            await redis.aclose()
+
+    try:
+        asyncio.run(execute())
+        assert len(provider.requests) == 1
+
+        first_result = client.get(base + f"/runs/{first_run_id}/result", headers=headers()).json()
+        second_result = client.get(base + f"/runs/{second_run_id}/result", headers=headers()).json()
+        assert first_result["output_text"] == "Reusable workspace answer"
+        assert first_result["recorded_input_tokens"] == 10
+        assert first_result["recorded_output_tokens"] == 1
+        assert second_result["output_text"] == "Reusable workspace answer"
+        assert second_result["recorded_input_tokens"] == 0
+        assert second_result["recorded_output_tokens"] == 0
+
+        with psycopg.connect(auth_settings.database_url.get_secret_value()) as connection:
+            cache = connection.execute(
+                """SELECT workspace_id,agent_id,hit_count,response
+                   FROM workspace_answer_cache
+                   WHERE workspace_id=%s""",
+                (workspace_id,),
+            ).fetchone()
+            assert str(cache[0]) == workspace_id
+            assert str(cache[1]) == first_run["agent_id"]
+            assert cache[2] == 1
+            assert cache[3]["usage"] == {"input_tokens": 0, "output_tokens": 0}
+            cached_step = connection.execute(
+                """SELECT routing_reason,response
+                   FROM agent_model_steps WHERE run_id=%s AND step_no=0""",
+                (second_run_id,),
+            ).fetchone()
+            assert cached_step[0] == "workspace_answer_cache"
+            assert cached_step[1]["usage"] == {
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
+    finally:
+        client.__exit__(None, None, None)
+
+
 def test_durable_executor_worker_and_attempt_fence(keys, auth_settings):
     migrate(auth_settings)
     clear_unpublished_outbox(auth_settings)

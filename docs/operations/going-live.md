@@ -88,6 +88,10 @@ This file is the operator's control surface; a workspace can never change it. De
 - **Model profiles**: which workspaces may run, which providers and models they may use, which
   tools they may call, and the step limit. A run whose workspace is not listed fails before any
   provider call.
+- **Repeated-question cache**: set `answer_cache_ttl_seconds` per profile. `0` disables it;
+  the maximum is 30 days. Cache entries stay inside one workspace and agent and are used only for
+  tool-free, retrieval-free terminal text answers. Dynamic connector/browser/RAG answers are never
+  reused from this cache.
 - **Retrieval**: leave it out to keep retrieval off. When on, choose the embedding model,
   dimensions, strategy (`hybrid` or `vector`), result limit and embedding price. If you configure
   the `ann` block, provision the matching HNSW index first with the migration credential.
