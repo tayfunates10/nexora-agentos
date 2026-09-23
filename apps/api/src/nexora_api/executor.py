@@ -55,10 +55,11 @@ class ExecutionProfile:
             raise ValueError("answer_cache_ttl_seconds must be between 0 and 2592000")
 
 
-def _answer_cache_key(context, decision) -> str:
-    # NFKC + whitespace folding + casefold treats harmless formatting/case changes
-    # as the same question without attempting semantic/paraphrase matching.
-    question = " ".join(unicodedata.normalize("NFKC", context.input_text).split()).casefold()
+def _normalize_cache_question(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
+
+
+def _answer_cache_scope_key(context, decision) -> str:
     payload = {
         "version": 1,
         "workspace_id": str(context.workspace_id),
@@ -68,7 +69,24 @@ def _answer_cache_key(context, decision) -> str:
         "provider": decision.candidate.provider,
         "model": decision.candidate.model,
         "instructions_sha256": hashlib.sha256(context.instructions.encode("utf-8")).hexdigest(),
-        "question": question,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _answer_cache_key(context, decision) -> str:
+    # Keep the existing exact-key shape stable so cache rows written before semantic
+    # matching remain reusable until their normal TTL expires.
+    payload = {
+        "version": 1,
+        "workspace_id": str(context.workspace_id),
+        "agent_id": str(context.agent_id),
+        "agent_kind": context.agent_kind,
+        "model_profile": context.model_profile,
+        "provider": decision.candidate.provider,
+        "model": decision.candidate.model,
+        "instructions_sha256": hashlib.sha256(context.instructions.encode("utf-8")).hexdigest(),
+        "question": _normalize_cache_question(context.input_text),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -93,6 +111,7 @@ class DurableAgentExecutor:
         gateway,
         profiles: Mapping[str, ExecutionProfile],
         retriever=None,
+        semantic_cache=None,
     ):
         self.store = store
         self.router = router
@@ -100,6 +119,7 @@ class DurableAgentExecutor:
         self.gateway = gateway
         self.profiles = dict(profiles)
         self.retriever = retriever
+        self.semantic_cache = semantic_cache
 
     async def execute(self, context, is_cancelled):
         try:
@@ -183,12 +203,51 @@ class DurableAgentExecutor:
                     )
                 )
                 cache_key = None
+                cache_scope_key = None
+                normalized_question = None
+                semantic_embedding = None
                 if step == 0 and answer_cache_enabled:
                     cache_key = _answer_cache_key(context, decision)
+                    cache_scope_key = _answer_cache_scope_key(context, decision)
+                    normalized_question = _normalize_cache_question(context.input_text)
                     response = await self.store.restore_answer_cache(
                         context, step, decision, cache_key
                     )
                     metrics.observe_answer_cache("hit" if response is not None else "miss")
+                    if response is None and self.semantic_cache is not None:
+                        try:
+                            await self.store.authorize_semantic_cache_spend(
+                                context, self.semantic_cache.config.spend
+                            )
+                            semantic_embedding = await self.semantic_cache.embed(
+                                normalized_question,
+                                request_id=f"{context.run_id}:answer-cache",
+                            )
+                            await self.store.record_semantic_cache_embedding(
+                                context,
+                                self.semantic_cache.config.spend,
+                                semantic_embedding.input_tokens,
+                            )
+                            response = await self.store.restore_semantic_answer_cache(
+                                context,
+                                step,
+                                decision,
+                                scope_key=cache_scope_key,
+                                embedding_model=self.semantic_cache.config.model,
+                                embedding_dimensions=self.semantic_cache.config.dimensions,
+                                query_embedding=semantic_embedding.vector,
+                                similarity_threshold=(
+                                    self.semantic_cache.config.similarity_threshold
+                                ),
+                            )
+                            metrics.observe_answer_cache(
+                                "semantic_hit" if response is not None else "semantic_miss"
+                            )
+                        except ProviderError:
+                            # Semantic matching is a cost optimization, not a dependency
+                            # required to answer the customer's question.
+                            semantic_embedding = None
+                            metrics.observe_answer_cache("semantic_error")
                 if response is None:
                     adapter = self.adapters.get(decision.candidate.provider)
                     if adapter is None:
@@ -222,6 +281,33 @@ class DurableAgentExecutor:
                         cache_key=cache_key if cache_this_response else None,
                         cache_ttl_seconds=(
                             profile.answer_cache_ttl_seconds if cache_this_response else 0
+                        ),
+                        cache_scope_key=(
+                            cache_scope_key if cache_this_response and semantic_embedding else None
+                        ),
+                        normalized_question=(
+                            normalized_question
+                            if cache_this_response and semantic_embedding
+                            else None
+                        ),
+                        cache_embedding=(
+                            semantic_embedding.vector
+                            if cache_this_response and semantic_embedding
+                            else None
+                        ),
+                        cache_embedding_model=(
+                            self.semantic_cache.config.model
+                            if cache_this_response
+                            and semantic_embedding
+                            and self.semantic_cache is not None
+                            else None
+                        ),
+                        cache_embedding_dimensions=(
+                            self.semantic_cache.config.dimensions
+                            if cache_this_response
+                            and semantic_embedding
+                            and self.semantic_cache is not None
+                            else None
                         ),
                     )
                     if cache_this_response:
