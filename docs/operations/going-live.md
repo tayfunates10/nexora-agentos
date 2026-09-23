@@ -70,10 +70,11 @@ Check: `GET /api/v1/health/ready` returns 200; it requires PostgreSQL, pgvector 
 1. Choose the provider account and model. Only the OpenAI Responses adapter ships today; the
    worker refuses a provider it does not have an adapter for.
 2. Put the key in the worker environment only.
-3. Decide the accounting prices for **every** candidate model and, if retrieval or semantic answer
-   caching is on, each embedding model: `input_micros_per_million_tokens` and
-   `output_micros_per_million_tokens`
-   in the worker runtime file. A half-priced configuration stops the worker from starting, and an
+3. Decide the accounting prices for **every** candidate model
+   (`input_micros_per_million_tokens` and `output_micros_per_million_tokens`) and, if retrieval
+   or semantic answer caching is on, the input-token price for each embedding model
+   (`input_micros_per_million_tokens`) in the worker runtime file. A half-priced configuration
+   stops the worker from starting, and an
    unpriced but routed model fails the run rather than running unmetered. These are your accounting
    rates, not an invoice from the provider — keep them updated when the provider's pricing changes.
 4. Review the provider's data-processing terms against what your tenants will send. Nexora
