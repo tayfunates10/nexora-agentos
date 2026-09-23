@@ -268,7 +268,76 @@ class ExecutorStore(RunStateStore):
             row = await result.fetchone()
             return decode_response(row["response"]) if row else None
 
-    async def save(self, context, step_no, decision, response):
+    async def restore_answer_cache(self, context, step_no, decision, cache_key):
+        """Restore a tenant-scoped cached terminal answer into this run's immutable journal."""
+        async with self.connection() as connection:
+            await executable_run(connection, context)
+            result = await connection.execute(
+                """SELECT response
+                   FROM workspace_answer_cache
+                   WHERE workspace_id=%s AND agent_id=%s AND cache_key=%s
+                     AND provider=%s AND model=%s AND expires_at > now()
+                   FOR UPDATE""",
+                (
+                    context.workspace_id,
+                    context.agent_id,
+                    cache_key,
+                    decision.candidate.provider,
+                    decision.candidate.model,
+                ),
+            )
+            row = await result.fetchone()
+            if row is None:
+                return None
+            response = decode_response(row["response"])
+            await connection.execute(
+                """INSERT INTO agent_model_steps
+                   (workspace_id,run_id,step_no,provider,model,routing_reason,response)
+                   VALUES (%s,%s,%s,%s,%s,'workspace_answer_cache',%s)""",
+                (
+                    context.workspace_id,
+                    context.run_id,
+                    step_no,
+                    decision.candidate.provider,
+                    decision.candidate.model,
+                    Jsonb(asdict(response)),
+                ),
+            )
+            await connection.execute(
+                """UPDATE workspace_answer_cache
+                   SET hit_count=hit_count+1,last_used_at=now()
+                   WHERE workspace_id=%s AND agent_id=%s AND cache_key=%s""",
+                (context.workspace_id, context.agent_id, cache_key),
+            )
+            await append_run_event(
+                connection,
+                context.workspace_id,
+                context.run_id,
+                "model.completed",
+                {
+                    "step": step_no,
+                    "provider": decision.candidate.provider,
+                    "model": decision.candidate.model,
+                    "routing_reason": "workspace_answer_cache",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "finish_reason": response.finish_reason,
+                    "cost_micros": 0,
+                    "cache_hit": True,
+                },
+            )
+            return response
+
+    async def save(
+        self,
+        context,
+        step_no,
+        decision,
+        response,
+        *,
+        cache_key=None,
+        cache_ttl_seconds=0,
+    ):
         cost_micros = None
         if self.spend is not None:
             try:
@@ -310,6 +379,31 @@ class ExecutorStore(RunStateStore):
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
                     cost_micros=cost_micros,
+                )
+            if cache_key is not None and cache_ttl_seconds > 0:
+                cached_response = {
+                    **asdict(response),
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                }
+                await connection.execute(
+                    """INSERT INTO workspace_answer_cache
+                       (workspace_id,agent_id,cache_key,provider,model,response,expires_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,now()+(%s * interval '1 second'))
+                       ON CONFLICT (workspace_id,agent_id,cache_key) DO UPDATE SET
+                         provider=EXCLUDED.provider,
+                         model=EXCLUDED.model,
+                         response=EXCLUDED.response,
+                         last_used_at=now(),
+                         expires_at=EXCLUDED.expires_at""",
+                    (
+                        context.workspace_id,
+                        context.agent_id,
+                        cache_key,
+                        decision.candidate.provider,
+                        decision.candidate.model,
+                        Jsonb(cached_response),
+                        cache_ttl_seconds,
+                    ),
                 )
             await append_run_event(
                 connection,
