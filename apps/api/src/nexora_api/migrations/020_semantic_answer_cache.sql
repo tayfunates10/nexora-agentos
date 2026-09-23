@@ -13,6 +13,11 @@ ALTER TABLE workspace_answer_cache
             normalized_question IS NULL
             OR length(normalized_question) BETWEEN 1 AND 12000
         ),
+    ADD CONSTRAINT workspace_answer_cache_embedding_model_length
+        CHECK (
+            embedding_model IS NULL
+            OR length(embedding_model) BETWEEN 1 AND 255
+        ),
     ADD CONSTRAINT workspace_answer_cache_embedding_dimensions
         CHECK (
             embedding_dimensions IS NULL
