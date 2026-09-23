@@ -14,6 +14,7 @@ from nexora_api.runtime_events import append_run_event
 from nexora_api.spend import (
     EmbeddingSpend,
     SpendCategory,
+    SpendLimitExceeded,
     SpendPolicy,
     SpendPricingError,
     agent_step_source_key,
