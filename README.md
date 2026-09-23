@@ -109,7 +109,9 @@ profiles you intend to use. Also select a model your provider account can call a
 accounting prices.
 
 The example profiles also set `answer_cache_ttl_seconds` to 30 days. Set it to `0` to disable
-repeated-question caching for a profile.
+repeated-question caching for a profile. The optional `answer_cache_semantic` block enables
+paraphrase matching after an exact miss; the example uses a conservative 0.94 cosine-similarity
+threshold and a small embedding vector.
 
 Add these values to `.env`:
 
@@ -308,10 +310,12 @@ period reaches them, and a transactional outbox delivers each one to an operator
 signed webhook. The web console reports that spend per period and lets owners and admins set
 the cap and its thresholds.
 Safe repeated-question caching can now be enabled per worker profile with
-`answer_cache_ttl_seconds`. Cache entries are isolated by workspace and agent, and the key also
-tracks the current instructions, profile, provider and model. Only tool-free, retrieval-free
-terminal text answers are reusable; connector, browser, task, MCP and RAG-backed runs always read
-fresh context. A cache hit writes a normal run step with zero provider tokens and no model spend.
+`answer_cache_ttl_seconds`. Cache entries are isolated by workspace and agent, and the scope also
+tracks current instructions, profile, provider and model. Optional semantic matching can reuse a
+high-confidence paraphrase after an exact miss. External-tool runs remain uncached. RAG is refreshed
+before every lookup and its exact evidence hash is part of the cache scope, so changed knowledge
+invalidates the cached answer. A cache hit writes a normal run step with zero model tokens and no
+new model-generation spend.
 The browser console now covers the operating workflow end to end: agents and durable runs with
 their event timeline and requester-scoped results, held tool calls decided by a human, tool
 contracts with their default-deny policy, and versioned knowledge sources with their access scope.
@@ -367,7 +371,8 @@ See [architecture and roadmap](docs/architecture/0001-foundation.md),
 [console design system and localisation](docs/architecture/0043-console-design-system-and-localisation.md), and
 [standard agents and the integration vault](docs/architecture/0044-standard-agents-and-integration-vault.md), and
 [customer autonomy release acceptance](docs/architecture/0045-customer-autonomy-release-acceptance.md), and
-[tenant-scoped answer cache](docs/architecture/0046-workspace-answer-cache.md).
+[tenant-scoped answer cache](docs/architecture/0046-workspace-answer-cache.md), and
+[semantic answer cache](docs/architecture/0047-semantic-answer-cache.md).
 
 ## Run locally with Docker Compose
 
