@@ -59,7 +59,7 @@ def _normalize_cache_question(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
 
 
-def _answer_cache_scope_key(context, decision) -> str:
+def _answer_cache_scope_key(context, decision, retrieval_context_hash=None) -> str:
     payload = {
         "version": 1,
         "workspace_id": str(context.workspace_id),
@@ -70,11 +70,13 @@ def _answer_cache_scope_key(context, decision) -> str:
         "model": decision.candidate.model,
         "instructions_sha256": hashlib.sha256(context.instructions.encode("utf-8")).hexdigest(),
     }
+    if retrieval_context_hash is not None:
+        payload["retrieval_context_sha256"] = retrieval_context_hash
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _answer_cache_key(context, decision) -> str:
+def _answer_cache_key(context, decision, retrieval_context_hash=None) -> str:
     # Keep the existing exact-key shape stable so cache rows written before semantic
     # matching remain reusable until their normal TTL expires.
     payload = {
@@ -88,6 +90,8 @@ def _answer_cache_key(context, decision) -> str:
         "instructions_sha256": hashlib.sha256(context.instructions.encode("utf-8")).hexdigest(),
         "question": _normalize_cache_question(context.input_text),
     }
+    if retrieval_context_hash is not None:
+        payload["retrieval_context_sha256"] = retrieval_context_hash
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -166,15 +170,14 @@ class DurableAgentExecutor:
         if len(tools) > 100 or len(advertised) > 32:
             raise TerminalExecutionError("tool_limit_exceeded")
         allowed_names = {tool.name for tool in advertised}
-        # Cached answers are deliberately conservative: no retrieval and no advertised
-        # tools. Dynamic knowledge and external systems must be read again on every run.
-        answer_cache_enabled = (
-            profile.answer_cache_ttl_seconds > 0 and self.retriever is None and not advertised
-        )
+        # External tools stay uncached. Retrieval may participate because it is always
+        # refreshed before lookup and its exact evidence hash becomes part of the cache scope.
+        answer_cache_enabled = profile.answer_cache_ttl_seconds > 0 and not advertised
         messages = [
             ProviderMessage("system", context.instructions),
             ProviderMessage("user", context.input_text),
         ]
+        retrieval_context_hash = None
         if self.retriever:
             initial_chars = sum(len(message.content) for message in messages)
             evidence = await self._retrieve(
@@ -182,6 +185,7 @@ class DurableAgentExecutor:
                 context,
                 max_evidence_chars=profile.max_context_chars - initial_chars,
             )
+            retrieval_context_hash = hashlib.sha256(evidence.encode("utf-8")).hexdigest()
             if evidence:
                 messages.append(ProviderMessage("user", evidence))
         total_tokens = 0
@@ -207,8 +211,12 @@ class DurableAgentExecutor:
                 normalized_question = None
                 semantic_embedding = None
                 if step == 0 and answer_cache_enabled:
-                    cache_key = _answer_cache_key(context, decision)
-                    cache_scope_key = _answer_cache_scope_key(context, decision)
+                    cache_key = _answer_cache_key(
+                        context, decision, retrieval_context_hash
+                    )
+                    cache_scope_key = _answer_cache_scope_key(
+                        context, decision, retrieval_context_hash
+                    )
                     normalized_question = _normalize_cache_question(context.input_text)
                     response = await self.store.restore_answer_cache(
                         context, step, decision, cache_key
