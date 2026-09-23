@@ -11,9 +11,11 @@ from nexora_api.worker_service import (
     build_mcp_adapters,
     build_provider_adapters,
     build_retriever,
+    build_semantic_answer_cache,
     build_spend_alert_notifier,
     close_mcp_adapters,
     close_retriever,
+    close_semantic_answer_cache,
     load_worker_config,
 )
 
@@ -228,6 +230,93 @@ def test_retrieval_is_opt_in_and_uses_operator_configuration(tmp_path):
     assert retriever.batch_size == 64
     assert retriever.timeout_seconds == 9
     asyncio.run(close_retriever(retriever))
+
+
+def test_semantic_answer_cache_is_opt_in_and_uses_operator_configuration(tmp_path):
+    disabled = load_runtime_config(write(tmp_path, document()))
+    assert build_semantic_answer_cache(Settings(openai_api_key=None), disabled) is None
+
+    enabled = load_runtime_config(
+        write(
+            tmp_path,
+            document(
+                answer_cache_semantic={
+                    "provider": "openai",
+                    "model": "text-embedding-3-small",
+                    "dimensions": 256,
+                    "similarity_threshold": 0.95,
+                    "timeout_seconds": 7,
+                }
+            ),
+        )
+    )
+
+    with pytest.raises(RuntimeConfigError, match="NEXORA_OPENAI_API_KEY"):
+        build_semantic_answer_cache(Settings(openai_api_key=None), enabled)
+
+    cache = build_semantic_answer_cache(
+        Settings(openai_api_key="sk-operator-test"),
+        enabled,
+    )
+    assert cache is not None
+    assert cache.config.model == "text-embedding-3-small"
+    assert cache.config.dimensions == 256
+    assert cache.config.similarity_threshold == 0.95
+    assert cache.config.timeout_seconds == 7
+    asyncio.run(close_semantic_answer_cache(cache))
+
+
+@pytest.mark.parametrize(
+    "semantic",
+    [
+        {"provider": "other", "model": "embed"},
+        {"provider": "openai", "model": "embed", "dimensions": 0},
+        {"provider": "openai", "model": "embed", "similarity_threshold": 0.79},
+        {"provider": "openai", "model": "embed", "similarity_threshold": 1.0},
+        {"provider": "openai", "model": "embed", "timeout_seconds": 0},
+    ],
+)
+def test_invalid_semantic_cache_configuration_is_refused(tmp_path, semantic):
+    with pytest.raises(RuntimeConfigError):
+        load_runtime_config(write(tmp_path, document(answer_cache_semantic=semantic)))
+
+
+def test_semantic_cache_pricing_matches_model_accounting_mode(tmp_path):
+    priced_candidate = {
+        "provider": "openai",
+        "model": "operator-model",
+        "capabilities": ["text", "tools"],
+        "input_micros_per_million_tokens": 1,
+        "output_micros_per_million_tokens": 1,
+    }
+    with pytest.raises(RuntimeConfigError, match="semantic cache embeddings"):
+        load_runtime_config(
+            write(
+                tmp_path,
+                document(
+                    model_candidates=[priced_candidate],
+                    answer_cache_semantic={
+                        "provider": "openai",
+                        "model": "text-embedding-3-small",
+                    },
+                ),
+            )
+        )
+
+    config = load_runtime_config(
+        write(
+            tmp_path,
+            document(
+                model_candidates=[priced_candidate],
+                answer_cache_semantic={
+                    "provider": "openai",
+                    "model": "text-embedding-3-small",
+                    "input_micros_per_million_tokens": 1,
+                },
+            ),
+        )
+    )
+    assert config.semantic_cache_spend() is not None
 
 
 def test_evaluation_judge_requires_pinned_structured_output_model(tmp_path):
