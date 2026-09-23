@@ -289,7 +289,7 @@ def test_semantic_cache_pricing_matches_model_accounting_mode(tmp_path):
         "input_micros_per_million_tokens": 1,
         "output_micros_per_million_tokens": 1,
     }
-    with pytest.raises(RuntimeConfigError, match="semantic cache embeddings"):
+    with pytest.raises(RuntimeConfigError, match="runtime config is invalid"):
         load_runtime_config(
             write(
                 tmp_path,
