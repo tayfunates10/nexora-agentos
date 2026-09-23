@@ -97,6 +97,7 @@ class ExecutionProfileConfig(BaseModel):
     max_total_tokens: int = Field(default=32000, ge=1, le=1_000_000)
     timeout_seconds: float = Field(default=60, ge=1, le=120)
     max_context_chars: int = Field(default=100_000, ge=1000, le=200_000)
+    answer_cache_ttl_seconds: int = Field(default=0, ge=0, le=2_592_000)
 
     @model_validator(mode="after")
     def _bounded_names(self):
@@ -122,6 +123,7 @@ class ExecutionProfileConfig(BaseModel):
             max_total_tokens=self.max_total_tokens,
             timeout_seconds=self.timeout_seconds,
             max_context_chars=self.max_context_chars,
+            answer_cache_ttl_seconds=self.answer_cache_ttl_seconds,
         )
 
 
