@@ -70,8 +70,9 @@ Check: `GET /api/v1/health/ready` returns 200; it requires PostgreSQL, pgvector 
 1. Choose the provider account and model. Only the OpenAI Responses adapter ships today; the
    worker refuses a provider it does not have an adapter for.
 2. Put the key in the worker environment only.
-3. Decide the accounting prices for **every** candidate model and, if retrieval is on, the
-   embedding model: `input_micros_per_million_tokens` and `output_micros_per_million_tokens`
+3. Decide the accounting prices for **every** candidate model and, if retrieval or semantic answer
+   caching is on, each embedding model: `input_micros_per_million_tokens` and
+   `output_micros_per_million_tokens`
    in the worker runtime file. A half-priced configuration stops the worker from starting, and an
    unpriced but routed model fails the run rather than running unmetered. These are your accounting
    rates, not an invoice from the provider — keep them updated when the provider's pricing changes.
@@ -89,9 +90,12 @@ This file is the operator's control surface; a workspace can never change it. De
   tools they may call, and the step limit. A run whose workspace is not listed fails before any
   provider call.
 - **Repeated-question cache**: set `answer_cache_ttl_seconds` per profile. `0` disables it;
-  the maximum is 30 days. Cache entries stay inside one workspace and agent and are used only for
-  tool-free, retrieval-free terminal text answers. Dynamic connector/browser/RAG answers are never
-  reused from this cache.
+  the maximum is 30 days. Cache entries stay inside one workspace and agent. External-tool runs are
+  never cached. RAG is always refreshed first, and a changed retrieval evidence hash invalidates the
+  cached answer.
+- **Semantic answer cache**: add `answer_cache_semantic` to match high-confidence paraphrases after
+  an exact miss. Choose the embedding model, dimensions, timeout, similarity threshold and price.
+  The example threshold is 0.94; lower thresholds increase false-match risk.
 - **Retrieval**: leave it out to keep retrieval off. When on, choose the embedding model,
   dimensions, strategy (`hybrid` or `vector`), result limit and embedding price. If you configure
   the `ann` block, provision the matching HNSW index first with the migration credential.
