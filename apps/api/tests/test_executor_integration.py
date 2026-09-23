@@ -219,9 +219,7 @@ def test_semantic_answer_cache_reuses_paraphrase_with_pgvector(keys, auth_settin
         assert len(provider.requests) == 1
         assert len(embedding_adapter.calls) == 2
 
-        second_result = client.get(
-            base + f"/runs/{second_run_id}/result", headers=headers()
-        ).json()
+        second_result = client.get(base + f"/runs/{second_run_id}/result", headers=headers()).json()
         assert second_result["output_text"] == "Semantic reusable answer"
         assert second_result["recorded_input_tokens"] == 0
         assert second_result["recorded_output_tokens"] == 0
